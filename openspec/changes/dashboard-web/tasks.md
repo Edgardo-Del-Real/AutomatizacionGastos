@@ -36,8 +36,8 @@ Chain strategy: pending
 
 ## Phase 2: Metrics slice
 
-- [ ] 2.1 RED: `features/metrics/useMetrics.test.tsx` — idle→loading→success, error, `retry()` refetches (renderHook + mocked api)
-- [ ] 2.2 GREEN: `features/metrics/useMetrics.ts` (AsyncState machine + retry)
+- [x] 2.1 RED: `features/metrics/useMetrics.test.tsx` — idle→loading→success, error, `retry()` refetches (renderHook + mocked api)
+- [x] 2.2 GREEN: `features/metrics/useMetrics.ts` (AsyncState machine + retry)
 - [ ] 2.3 RED: `MetricsCards`/`MetricsChart` tests — 6-month cards + recharts BarChart (count/totalAmount, month-ordered), empty state, error+retry
 - [ ] 2.4 GREEN: `MetricsCards.tsx`, `MetricsChart.tsx`, `MetricsOverview.tsx` (hooks + section states)
 

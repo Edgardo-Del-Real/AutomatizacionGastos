@@ -43,7 +43,10 @@ describe("useMetrics", () => {
     await waitFor(() => expect(result.current.status).toBe("success"));
 
     expect(statuses.at(-1)).toBe("success");
-    expect(result.current.data).toEqual(summary);
+    const state = result.current;
+    if (state.status === "success") {
+      expect(state.data).toEqual(summary);
+    }
     expect(fetchSummaryMock).toHaveBeenCalledWith("default");
   });
 
@@ -76,7 +79,10 @@ describe("useMetrics", () => {
     });
 
     await waitFor(() => expect(result.current.status).toBe("success"));
-    expect(result.current.data).toEqual(summary);
+    const state = result.current;
+    if (state.status === "success") {
+      expect(state.data).toEqual(summary);
+    }
     expect(fetchSummaryMock).toHaveBeenCalledTimes(2);
   });
 });

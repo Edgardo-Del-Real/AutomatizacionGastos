@@ -26,13 +26,13 @@ Chain strategy: pending
 
 ## Phase 1: Foundation (contracts + scaffold + infra)
 
-- [ ] 1.1 RED: `src/infra/api.test.ts` — `fetchSummary`/`fetchExpenses` validate via `expenseSummarySchema`/`listExpensesSchema`; malformed payloads (missing/wrong-typed `occurredAt`, `months`) throw `ApiError{kind:"validation"}`; fails on missing export
-- [ ] 1.2 GREEN: `packages/contracts/src/index.ts` — extract/export `expenseMonthSchema` (refactor `expenseSummarySchema` to reuse), add `listExpensesSchema = z.array(expenseSchema)` + types `ExpenseMonth`/`ListExpenses`; run `pnpm --filter @rita/contracts build`
-- [ ] 1.3 Create `apps/dashboard/package.json` — `@rita/dashboard`, scripts prefix `pnpm --filter @rita/contracts build`; react@19/react-dom@19/recharts/@rita/contracts@workspace:*; vite/@vitejs/plugin-react/vitest@4/@testing-library/jsdom
-- [ ] 1.4 Create `apps/dashboard/vite.config.ts` (plugin-react, proxy `/api`→`http://localhost:3000`) and `vitest.config.ts` (jsdom, `include:["src/**/*.test.{ts,tsx}"]`, setupFiles `./src/test/setup.ts`, fileParallelism:false)
-- [ ] 1.5 Create `apps/dashboard/tsconfig.json` (extends `../../tsconfig.base.json` + `lib:["ES2022","DOM","DOM.Iterable"]` + `jsx:"react-jsx"`), `src/vite-env.d.ts` (`vite/client` + `ImportMetaEnv.VITE_OWNER_ID?:string`), `index.html`, `src/main.tsx`, `src/test/setup.ts` (`@testing-library/jest-dom/vitest`)
-- [ ] 1.6 GREEN: `src/infra/env.ts` (`OWNER_ID = import.meta.env.VITE_OWNER_ID ?? "default"`) + `src/infra/api.ts` (fetch, ownerId query param, safeParse, ApiError network/http/validation)
-- [ ] 1.7 Append `VITE_OWNER_ID=default` to `.env.example`
+- [x] 1.1 RED: `src/infra/api.test.ts` — `fetchSummary`/`fetchExpenses` validate via `expenseSummarySchema`/`listExpensesSchema`; malformed payloads (missing/wrong-typed `occurredAt`, `months`) throw `ApiError{kind:"validation"}`; fails on missing export
+- [x] 1.2 GREEN: `packages/contracts/src/index.ts` — extract/export `expenseMonthSchema` (refactor `expenseSummarySchema` to reuse), add `listExpensesSchema = z.array(expenseSchema)` + types `ExpenseMonth`/`ListExpenses`; run `pnpm --filter @rita/contracts build`
+- [x] 1.3 Create `apps/dashboard/package.json` — `@rita/dashboard`, scripts prefix `pnpm --filter @rita/contracts build`; react@19/react-dom@19/recharts/@rita/contracts@workspace:*; vite/@vitejs/plugin-react/vitest@4/@testing-library/jsdom
+- [x] 1.4 Create `apps/dashboard/vite.config.ts` (plugin-react, proxy `/api`→`http://localhost:3000`) and `vitest.config.ts` (jsdom, `include:["src/**/*.test.{ts,tsx}"]`, setupFiles `./src/test/setup.ts`, fileParallelism:false)
+- [x] 1.5 Create `apps/dashboard/tsconfig.json` (extends `../../tsconfig.base.json` + `lib:["ES2022","DOM","DOM.Iterable"]` + `jsx:"react-jsx"`), `src/vite-env.d.ts` (`vite/client` + `ImportMetaEnv.VITE_OWNER_ID?:string`), `index.html`, `src/main.tsx`, `src/test/setup.ts` (`@testing-library/jest-dom/vitest`)
+- [x] 1.6 GREEN: `src/infra/env.ts` (`OWNER_ID = import.meta.env.VITE_OWNER_ID ?? "default"`) + `src/infra/api.ts` (fetch, ownerId query param, safeParse, ApiError network/http/validation)
+- [x] 1.7 Append `VITE_OWNER_ID=default` to `.env.example`
 
 ## Phase 2: Metrics slice
 

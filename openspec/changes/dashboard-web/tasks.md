@@ -43,14 +43,14 @@ Chain strategy: pending
 
 ## Phase 3: Expenses slice
 
-- [ ] 3.1 RED: `features/expenses/expenseFilters.test.ts` — AND of month (`YYYY-MM` from occurredAt) + category, no-match→[], reset `{}`
-- [ ] 3.2 GREEN: `features/expenses/expenseFilters.ts` (pure `filterExpenses`)
-- [ ] 3.3 RED: `features/expenses/useExpenses.test.tsx` — states + retry
-- [ ] 3.4 RED: `ExpenseList`/`ExpenseFilters` tests — table cols date/amount/currency/category/note, occurredAt desc, filters render, empty/error states
-- [ ] 3.5 GREEN: `useExpenses.ts`, `ExpenseFilters.tsx`, `ExpenseList.tsx`
+- [x] 3.1 RED: `features/expenses/filterExpenses.test.ts` — AND of month (`YYYY-MM` from occurredAt) + category, no-match→[], reset `{}` (renamed from `expenseFilters.test.ts` — Windows case-collision with `ExpenseFilters.tsx`)
+- [x] 3.2 GREEN: `features/expenses/filterExpenses.ts` (pure `filterExpenses`; renamed from `expenseFilters.ts` for the same reason)
+- [x] 3.3 RED: `features/expenses/useExpenses.test.tsx` — states + retry
+- [x] 3.4 RED: `ExpenseList`/`ExpenseFilters` tests — table cols date/amount/currency/category/note, occurredAt desc, filters render, empty/error states
+- [x] 3.5 GREEN: `useExpenses.ts`, `ExpenseFilters.tsx`, `ExpenseList.tsx`
 
 ## Phase 4: Integration + verification
 
-- [ ] 4.1 RED: `App.test.tsx` — both sections render from mocked api; filter selection updates rows
-- [ ] 4.2 GREEN: `src/App.tsx` composition (MetricsOverview + ExpenseList)
-- [ ] 4.3 Run `pnpm --filter @rita/dashboard test` + `typecheck` + `lint`; verify `pnpm --filter @rita/dashboard build`
+- [x] 4.1 RED: `App.test.tsx` — both sections render from mocked api; filter selection updates rows
+- [x] 4.2 GREEN: `src/App.tsx` composition (MetricsOverview + ExpenseList)
+- [x] 4.3 Run `pnpm --filter @rita/dashboard test` + `typecheck` + `lint`; verify `pnpm --filter @rita/dashboard build`

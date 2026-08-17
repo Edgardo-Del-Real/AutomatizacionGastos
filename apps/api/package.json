@@ -1,0 +1,32 @@
+{
+  "name": "@rita/api",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Fastify + TypeScript backend. Owns the database.",
+  "scripts": {
+    "dev": "pnpm --filter @rita/contracts build && tsx watch src/server.ts",
+    "start": "tsx src/server.ts",
+    "test": "pnpm --filter @rita/contracts build && vitest run",
+    "test:watch": "pnpm --filter @rita/contracts build && vitest",
+    "typecheck": "tsc -p tsconfig.json",
+    "build": "pnpm --filter @rita/contracts build && tsc -p tsconfig.build.json",
+    "lint": "eslint src"
+  },
+  "dependencies": {
+    "@fastify/cors": "^11.3.0",
+    "@prisma/client": "^6.0.0",
+    "@rita/contracts": "workspace:*",
+    "fastify": "^5.12.0",
+    "zod": "^3.25.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "eslint": "^9.0.0",
+    "prisma": "^6.0.0",
+    "tsx": "^4.23.0",
+    "typescript": "^5.8.0",
+    "typescript-eslint": "^8.67.0",
+    "vitest": "^4.0.0"
+  }
+}

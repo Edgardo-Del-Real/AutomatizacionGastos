@@ -1,0 +1,60 @@
+# openspec/config.yaml — SDD project config for AutomatizacionRita
+schema: spec-driven
+
+project: automatizacionrita
+version: 0.1.0
+
+context: |
+  Expense-tracking system. pnpm monorepo (pnpm@10.33.0, Node >= 20).
+  apps/api (@rita/api): Fastify 5 + TypeScript 5.8 ESM, Prisma 6 (PostgreSQL 16 via docker compose, host port 5433), zod 3.25, tsx runtime. Composition root in src/app.ts (manual DI); vertical-slice features (route + service + repository + tests together) in src/features/.
+  packages/contracts (@rita/contracts): shared zod DTOs consumed as workspace:*.
+  Data model: Expense, ProcessedMessage (prisma/schema.prisma). No auth yet; tenant via x-owner-id header / ownerId query param.
+  API endpoints: POST/GET/DELETE /expenses, GET /expenses/summary, WhatsApp Cloud webhook in src/features/webhook.
+  Tests: vitest 4, node env, src/**/*.test.ts; integration route tests need PostgreSQL on localhost:5433 and DB automatizacionrita_test (derived by appending `_test` to DATABASE_URL unless TEST_DATABASE_URL is set).
+  Style: eslint 9 flat config (typescript-eslint recommended), tsc --noEmit typecheck, .editorconfig (2-space, LF). No prettier.
+
+rules:
+  proposal:
+    - Include rollback plan for risky changes
+  specs:
+    - Use Given/When/Then for scenarios
+    - Use RFC 2119 keywords (MUST, SHALL, SHOULD, MAY)
+  design:
+    - Include sequence diagrams for complex flows
+    - Document architecture decisions with rationale
+  tasks:
+    - Group by phase, use hierarchical numbering
+    - Keep tasks completable in one session
+  apply:
+    guidelines:
+      - Follow existing vertical-slice code patterns (route/service/repository/tests per feature)
+      - Build contracts first: pnpm --filter @rita/contracts build
+    tdd: true
+    test_command: pnpm --filter @rita/api test
+  verify:
+    test_command: pnpm --filter @rita/api test
+    build_command: pnpm --filter @rita/api build
+    coverage_threshold: 0
+  archive:
+    - Warn before merging destructive deltas
+
+testing:
+  strict_tdd: true
+  detected: 2026-08-16
+  runner:
+    framework: vitest 4
+    command: pnpm --filter @rita/api test
+  layers:
+    unit: vitest (node environment)
+    integration: Fastify app.inject + Prisma against test DB (automatizacionrita_test on localhost:5433)
+    e2e: unavailable
+  coverage:
+    available: false
+    command: none (no coverage provider installed)
+  quality:
+    linter: eslint 9 flat config — pnpm lint (root) / pnpm --filter @rita/api lint
+    typechecker: tsc --noEmit — pnpm typecheck (root) / pnpm --filter @rita/api typecheck
+    formatter: none detected (only .editorconfig: 2-space, LF, utf-8)
+  prerequisites:
+    - PostgreSQL 16 running on localhost:5433 (docker compose up -d --wait)
+    - Test database automatizacionrita_test created: docker compose exec -T postgres createdb -U rita automatizacionrita_test

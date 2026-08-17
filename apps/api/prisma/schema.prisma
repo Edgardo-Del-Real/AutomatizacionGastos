@@ -1,0 +1,30 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Expense {
+  id         String   @id @default(cuid())
+  ownerId    String
+  amount     Decimal  @db.Decimal(12, 2)
+  currency   String   @default("ARS")
+  category   String?
+  note       String?
+  occurredAt DateTime
+  createdAt  DateTime @default(now())
+
+  @@index([ownerId])
+}
+
+model ProcessedMessage {
+  id          String   @id @default(cuid())
+  messageId   String   @unique
+  ownerId     String
+  processedAt DateTime @default(now())
+
+  @@index([ownerId])
+}

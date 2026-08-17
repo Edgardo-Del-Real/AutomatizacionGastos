@@ -23,14 +23,20 @@ export const expenseSchema = z.object({
 
 export type Expense = z.infer<typeof expenseSchema>;
 
+export const expenseMonthSchema = z.object({
+  month: z.string(),
+  count: z.number(),
+  totalAmount: z.number(),
+});
+
+export type ExpenseMonth = z.infer<typeof expenseMonthSchema>;
+
 export const expenseSummarySchema = z.object({
-  months: z.array(
-    z.object({
-      month: z.string(),
-      count: z.number(),
-      totalAmount: z.number(),
-    }),
-  ),
+  months: z.array(expenseMonthSchema),
 });
 
 export type ExpenseSummary = z.infer<typeof expenseSummarySchema>;
+
+export const listExpensesSchema = z.array(expenseSchema);
+
+export type ListExpenses = z.infer<typeof listExpensesSchema>;

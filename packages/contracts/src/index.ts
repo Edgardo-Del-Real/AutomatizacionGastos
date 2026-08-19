@@ -40,3 +40,77 @@ export type ExpenseSummary = z.infer<typeof expenseSummarySchema>;
 export const listExpensesSchema = z.array(expenseSchema);
 
 export type ListExpenses = z.infer<typeof listExpensesSchema>;
+
+export const movementTypeSchema = z.enum(["EXPENSE", "INCOME"]);
+
+export type MovementType = z.infer<typeof movementTypeSchema>;
+
+export const movementSchema = expenseSchema.extend({ type: movementTypeSchema });
+
+export type Movement = z.infer<typeof movementSchema>;
+
+export const listMovementsSchema = z.array(movementSchema);
+
+export type ListMovements = z.infer<typeof listMovementsSchema>;
+
+export const movementFiltersSchema = z.object({
+  ownerId: z.string().min(1),
+  type: movementTypeSchema.optional(),
+  from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  category: z.string().min(1).optional(),
+  q: z.string().min(1).optional(),
+});
+
+export type MovementFilters = z.infer<typeof movementFiltersSchema>;
+
+export const createMovementSchema = createExpenseSchema.extend({
+  type: movementTypeSchema.optional(),
+});
+
+export type CreateMovementInput = z.infer<typeof createMovementSchema>;
+
+export const movementSummarySchema = z.object({
+  kpis: z.object({
+    income: z.number(),
+    expenses: z.number(),
+    balance: z.number(),
+    avgPerMonth: z.number(),
+    avgPerMovement: z.number(),
+    maxAmount: z.number(),
+    count: z.number(),
+  }),
+  mom: z.object({
+    months: z.array(
+      z.object({
+        month: z.string(),
+        income: z.number(),
+        expenses: z.number(),
+        balance: z.number(),
+      }),
+    ),
+  }),
+  daily: z.array(
+    z.object({
+      day: z.string(),
+      income: z.number(),
+      expenses: z.number(),
+      balance: z.number(),
+    }),
+  ),
+  categories: z.array(
+    z.object({
+      name: z.string(),
+      expenseAmount: z.number(),
+      incomeAmount: z.number(),
+      expensePercent: z.number(),
+      incomePercent: z.number(),
+    }),
+  ),
+  top: z.object({
+    expenses: z.array(movementSchema),
+    income: z.array(movementSchema),
+  }),
+});
+
+export type MovementSummary = z.infer<typeof movementSummarySchema>;

@@ -47,13 +47,13 @@ Chain strategy: stacked-to-main
 
 ## Phase 4: Dashboard (F4)
 
-- [ ] 4.1 (RED) `apps/dashboard/src/infra/currency.test.ts`; (GREEN) `formatARS(n)` via `Intl.NumberFormat("es-AR", { style: "currency" })` in `infra/currency.ts`. Verify: dashboard test green.
-- [ ] 4.2 (RED, dep 4.1) Update `infra/api.test.ts`; (GREEN) `fetchMovementSummary` + `fetchMovements` (query params, contract validation) in `infra/api.ts`; drop `fetchExpenses`/`fetchSummary`. Verify: dashboard test green.
-- [ ] 4.3 (RED) `features/movements/calculations.test.ts`; (GREEN) `momPercent`, `dailyAverage` in `features/movements/calculations.ts`. Verify: dashboard test green.
-- [ ] 4.4 (RED, dep 4.2) `useMovementSummary.test.tsx`, `useMovements.test.tsx`; (GREEN) hooks in `features/movements/` refetching on filter change. Verify: dashboard test green.
-- [ ] 4.5 (RED, dep 4.3/4.4) Component tests; (GREEN) `DashboardOverview`, `KpiCards`, `MomChart`, `DailyChart`, `CategoryBreakdown`, `TopMovements`, `MovementList`, `MovementFilters` in `features/movements/` (Spanish strings, es-AR amounts, loading/error+retry/empty states, combined filters + reset). Verify: dashboard test green.
-- [ ] 4.6 (dep 4.5) Delete `apps/dashboard/src/features/{metrics,expenses}/`; rewrite `apps/dashboard/src/App.tsx` with Spanish header + section order. Verify: typecheck + lint.
-- [ ] 4.7 (RED, dep 4.6) Update `App.test.tsx`: all sections in order, Spanish, es-AR, empty/error+retry, malformed → error (no crash/partial). Verify: dashboard test green.
+- [x] 4.1 (RED) `apps/dashboard/src/infra/currency.test.ts`; (GREEN) `formatARS(n)` via `Intl.NumberFormat("es-AR", { style: "currency" })` in `infra/currency.ts`. Verify: dashboard test green.
+- [x] 4.2 (RED, dep 4.1) Update `infra/api.test.ts`; (GREEN) `fetchMovementSummary` + `fetchMovements` (query params, contract validation) in `infra/api.ts`; drop `fetchExpenses`/`fetchSummary`. Verify: dashboard test green.
+- [x] 4.3 (RED) `features/movements/calculations.test.ts`; (GREEN) `momPercent`, `dailyAverage` in `features/movements/calculations.ts`. Verify: dashboard test green.
+- [x] 4.4 (RED, dep 4.2) `useMovementSummary.test.tsx`, `useMovements.test.tsx`; (GREEN) hooks in `features/movements/` refetching on filter change. Verify: dashboard test green.
+- [x] 4.5 (RED, dep 4.3/4.4) Component tests; (GREEN) `DashboardOverview`, `KpiCards`, `MomChart`, `DailyChart`, `CategoryBreakdown`, `TopMovements`, `MovementList`, `MovementFilters` in `features/movements/` (Spanish strings, es-AR amounts, loading/error+retry/empty states, combined filters + reset). Verify: dashboard test green.
+- [x] 4.6 (dep 4.5) Delete `apps/dashboard/src/features/{metrics,expenses}/`; rewrite `apps/dashboard/src/App.tsx` with Spanish header + section order. Verify: typecheck + lint.
+- [x] 4.7 (RED, dep 4.6) Update `App.test.tsx`: all sections in order, Spanish, es-AR, empty/error+retry, malformed → error (no crash/partial). Verify: dashboard test green.
 
 ## Key Learnings
 

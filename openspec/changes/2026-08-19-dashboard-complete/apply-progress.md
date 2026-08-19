@@ -1,4 +1,4 @@
-# Apply Progress — Complete Dashboard with Income Tracking (F3 Webhook)
+# Apply Progress — Complete Dashboard with Income Tracking (F1–F4 Complete)
 
 - Change: `2026-08-19-dashboard-complete`
 - Batch: PR slice 3 — Phase 3 (F3) Webhook Income Classification (tasks 3.1, 3.2, 3.3)
@@ -87,3 +87,98 @@ Phase 4 (4.1–4.7): NOT in scope for this batch — left unchecked.
 ## Status
 
 11/18 tasks complete (F1, F2, F3 done). Ready for apply of the next batch (F4 — dashboard) once orchestrator launches it; sdd-verify remains blocked until F4 completes and a DB-backed runtime is available.
+
+---
+
+# Phase 4 (F4) — Dashboard Rebuild (this batch, tasks 4.1–4.7)
+
+## Task Progress (F4)
+
+- [x] 4.1 — `formatARS(n)` in `infra/currency.ts` via `Intl.NumberFormat("es-AR", { style: "currency" })`.
+- [x] 4.2 — `fetchMovementSummary` + `fetchMovements` (query params + contract validation) in `infra/api.ts`; dropped `fetchExpenses`/`fetchSummary`.
+- [x] 4.3 — `momPercent`, `dailyAverage` in `features/movements/calculations.ts`.
+- [x] 4.4 — `useMovementSummary` / `useMovements` hooks (refetch on filter change) + shared `AsyncState`.
+- [x] 4.5 — `DashboardOverview`, `KpiCards`, `MomChart`, `DailyChart`, `CategoryBreakdown`, `TopMovements`, `MovementList`, `MovementFilters` (Spanish, es-AR, loading/error+retry/empty, combined filters + reset).
+- [x] 4.6 — Deleted `features/{metrics,expenses}/`; rewrote `App.tsx` with Spanish header + section order.
+- [x] 4.7 — `App.test.tsx`: all sections in order, Spanish, es-AR, empty/error+retry, malformed → error (no crash/partial).
+
+## TDD Cycle Evidence (F4)
+
+| Task | Test File | Layer | Safety Net | RED | GREEN | TRIANGULATE | REFACTOR |
+|------|-----------|-------|------------|-----|-------|-------------|----------|
+| 4.1 | `infra/currency.test.ts` | Unit | N/A (new) | ✅ Written → module not found | ✅ Passed (5/5) | ✅ 5 cases | ➖ None needed |
+| 4.2 | `infra/api.test.ts` | Unit | ✅ baseline (full suite 47) | ✅ Written → 9 failed (not a function) | ✅ Passed (9/9) | ✅ 9 cases | ✅ `request()` generalized to query params |
+| 4.3 | `features/movements/calculations.test.ts` | Unit | N/A (new) | ✅ Written → module not found | ✅ Passed (8/8) | ✅ 8 cases | ➖ None needed (pure fns) |
+| 4.4 | `useMovementSummary.test.tsx`, `useMovements.test.tsx` | Integration (renderHook) | N/A (new) | ✅ Written → module not found | ✅ Passed (7/7) | ✅ 7 cases | ✅ Fixed unstable filters dep (see Issues) |
+| 4.5 | 8 component test files | Integration (RTL) | N/A (new) | ✅ Written → 8 files failed (import missing) | ✅ Passed (22/22) | ✅ 22 cases | ✅ Multiple (see Issues) |
+| 4.6 | (refactor) | — | typecheck+lint baseline green | ➖ N/A (no new behavior test) | ✅ typecheck + lint green | ➖ | ✅ Deleted obsolete features + old App.test |
+| 4.7 | `App.test.tsx` | Integration (RTL) | N/A (rewrite) | ✅ Written | ✅ Passed (4/4) | ✅ 4 scenarios | ➖ None needed |
+
+### Test Summary (F4)
+- **Total tests written this batch**: 55 (currency 5, api 9, calculations 8, hooks 7, components 22, App 4)
+- **Full dashboard suite**: `pnpm --filter @rita/dashboard test` → **15 files, 57 tests, 0 failed**
+- **Layers used**: Unit (22), Integration/RTL (35)
+- **Approval tests**: old `App.test.tsx` (approval of metrics/expenses UI) replaced by movement-dashboard acceptance
+- **Pure functions created**: 3 (`formatARS`, `momPercent`, `dailyAverage`)
+
+## Work Unit Evidence (F4)
+
+| Evidence | Required value | Result |
+|---|---|---|
+| Focused test command and exact result | Smallest command proving this unit | `pnpm --filter @rita/dashboard test` → **15 files passed, 57 tests passed, 0 failed** (full dashboard suite incl. contracts build prefix) |
+| Runtime harness command/scenario and exact result | Real integration/runtime path | **N/A for this pure-frontend slice, with reason**: no backend/runtime boundary in this batch — every data flow is mocked via `vi.mock(".../infra/api")` and the runtime harness is RTL + jsdom rendering (per tasks.md work unit 4). Real `fetch` against `:3000` is intentionally not exercised; contract validation is proven by mocked fetch + zod in `infra/api.test.ts`. |
+| Rollback boundary | Exact files/behavior reverted without unrelated work | Revert F4 commits (below) → restores `features/{metrics,expenses}/`, old `App.tsx`, old `App.test.tsx`, old `infra/{api,currency}.ts`. F4 touches only `apps/dashboard/`; no API/schema change in this slice. |
+
+## Files Changed (F4)
+
+| File | Action | What Was Done |
+|------|--------|---------------|
+| `apps/dashboard/src/infra/currency.ts` + `.test.ts` | Create | `formatARS(n)` es-AR currency formatter + tests. |
+| `apps/dashboard/src/infra/api.ts` + `.test.ts` | Modify | `request()` query-param support; `fetchMovementSummary`, `fetchMovements`; dropped `fetchExpenses`/`fetchSummary`. |
+| `apps/dashboard/src/features/movements/{calculations,asyncState,useMovementSummary,useMovements}.ts` + tests | Create | Pure calcs, shared AsyncState, data hooks (refetch on filter change). |
+| `apps/dashboard/src/features/movements/{DashboardOverview,KpiCards,MomChart,DailyChart,CategoryBreakdown,TopMovements,MovementList,MovementFilters}.tsx` + tests | Create | Full Spanish/es-AR dashboard components with loading/error+retry/empty states and combined filters + reset. |
+| `apps/dashboard/src/App.tsx` | Rewrite | Spanish header + section order (KPI → MoM → daily → categories → top → list). |
+| `apps/dashboard/src/App.test.tsx` | Rewrite | Full-dashboard acceptance: order, Spanish, es-AR, empty/error+retry, malformed → error. |
+| `apps/dashboard/src/features/{metrics,expenses}/` | Delete | Replaced by `features/movements/`. |
+| `openspec/changes/2026-08-19-dashboard-complete/tasks.md` | Modify | Marked 4.1–4.7 `[x]` (all 18 tasks now complete). |
+
+## Deviations from Design (F4)
+
+- None material. Design decision #8 followed (es-AR formatter + pure front helpers + Spanish inline JSX).
+- Supporting nuance (task 4.4 "refetch on filter change"): `useMovements` depends on a serialized `filtersKey` (`JSON.stringify(filters)`) rather than the raw `filters` object, to avoid an effect loop when a caller passes a freshly-allocated object each render. This preserves the required behavior while keeping the hook robust.
+- `avgPerMovement` semantics flag (orchestrator note): the API computes `avgPerMovement` as `(income + expenses) / count` (average transaction size). The chosen KPI label "Promedio por movimiento" is accurate — no disambiguation change needed in `KpiCards`.
+
+## Issues Found (F4)
+
+- **Real bug caught by the RED test (4.4)**: `useMovements` initially listed the raw `filters` object in the `useEffect` deps; the default-param `filters = {}` allocates a new object each render → infinite effect loop → vitest worker heap OOM (4 GB). Fixed by depending on a serialized `filtersKey`. Genuine design flaw surfaced via TDD, not an infra-only issue.
+- **jsdom date-input limitation**: `userEvent.type` cannot set `<input type="date">` in jsdom; used `fireEvent.change` with an explicit value string (documented in the test).
+- **getByText NBSP**: es-AR `Intl` emits U+00A0 (non-breaking space); `getByText` normalizes DOM NBSP to a space but does not normalize the matcher string, so tests match with a regular space. Production output verified correct.
+- **Duplicate text matches** in fixtures (e.g. Gastos == Balance amount, "Tipo" as both filter label and table column) → used `getAllByText` / `within(table)`.
+- **Infra note**: intermittent vitest worker heap OOM under environment memory pressure when running many files together; resolved by the hooks dep fix and by running focused files (full suite still green 57/57).
+
+## Remaining Tasks
+
+- None — all 18 tasks (F1–F4) complete. Ready for `sdd-verify`.
+
+## Workload / PR Boundary (F4)
+
+- Mode: chained PR slice 4 of 4 (F4 dashboard), stacked-to-main, autonomous.
+- Current work unit: F4 dashboard rebuild.
+- Boundary: starts after F3 (webhook) and ends with the complete Spanish/es-AR dashboard; touches only `apps/dashboard/`.
+- Estimated review budget impact: ~1,500 authored changed lines (tests + code + deletions), consistent with the F4 forecast in tasks.md.
+- Commits created (branch `feat/dashboard-complete-f1-model-contracts`, NOT pushed):
+  - `dcce4a3` test(dashboard): add formatARS cases
+  - `5a90159` feat(dashboard): format ARS amounts
+  - `8f9eb5c` test(dashboard): add movement api client tests
+  - `c887021` feat(dashboard): add movement api client
+  - `4d54b3c` feat(dashboard): add movement calculations and tests
+  - `6eb4bea` test(dashboard): add movement data hooks tests
+  - `d6fc179` feat(dashboard): add movement data hooks
+  - `cc20f8e` feat(dashboard): add movement summary and filter components
+  - `a67c31b` feat(dashboard): add dashboard overview and movement list components
+  - `468d65f` refactor(dashboard): replace metrics/expenses with movements features
+  - `b021155` test(dashboard): add full dashboard App integration tests
+
+## Status (F4)
+
+18/18 tasks complete (F1, F2, F3, F4 done). Full dashboard suite green (57 tests) + typecheck + lint clean. The dashboard slice has no DB dependency; `sdd-verify` can run its API regression with the DB if available (see F3 infra note for the DB infra caveat).

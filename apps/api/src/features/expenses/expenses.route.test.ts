@@ -1,6 +1,7 @@
 import { execSync } from "node:child_process";
 import type { FastifyInstance } from "fastify";
 import { PrismaClient } from "@prisma/client";
+import { expenseSummarySchema } from "@rita/contracts";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { buildApp } from "../../app";
 import { loadDotEnvFromDisk } from "../../config/load-env";
@@ -113,6 +114,31 @@ describe("expenses route", () => {
     expect(response.statusCode).toBe(200);
     const expenses = response.json();
     expect(expenses).toHaveLength(2);
+  });
+
+  it("excludes INCOME movements from the expense list", async () => {
+    await app.inject({
+      method: "POST",
+      url: "/expenses",
+      headers: { "x-owner-id": "owner-1" },
+      payload: { amount: 100, occurredAt: "2026-08-01T12:00:00.000Z" },
+    });
+    await prisma.expense.create({
+      data: {
+        ownerId: "owner-1",
+        amount: 99999,
+        currency: "ARS",
+        occurredAt: new Date("2026-08-02T12:00:00.000Z"),
+        type: "INCOME",
+      },
+    });
+
+    const response = await app.inject({ method: "GET", url: "/expenses?ownerId=owner-1" });
+
+    expect(response.statusCode).toBe(200);
+    const expenses = response.json();
+    expect(expenses).toHaveLength(1);
+    expect(expenses[0].amount).toBe(100);
   });
 
   it("gets an expense by id for the owner", async () => {
@@ -238,6 +264,29 @@ describe("expenses route", () => {
         { month: currentMonth, count: 2, totalAmount: 300 },
       ],
     });
+  });
+
+  it("summary response matches expenseSummarySchema and excludes INCOME", async () => {
+    const now = new Date();
+    const currentMonth = monthKey(now);
+
+    await seedExpense("owner-1", 100, dateInMonth(now, 0, 5));
+    await prisma.expense.create({
+      data: {
+        ownerId: "owner-1",
+        amount: 99999,
+        currency: "ARS",
+        occurredAt: new Date(dateInMonth(now, 0, 6)),
+        type: "INCOME",
+      },
+    });
+
+    const response = await app.inject({ method: "GET", url: "/expenses/summary?ownerId=owner-1" });
+
+    expect(response.statusCode).toBe(200);
+    const body = response.json();
+    expect(expenseSummarySchema.safeParse(body).success).toBe(true);
+    expect(body.months).toEqual([{ month: currentMonth, count: 1, totalAmount: 100 }]);
   });
 
   it("returns an empty months array for an owner with no expenses in the window", async () => {

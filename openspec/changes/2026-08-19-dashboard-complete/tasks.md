@@ -41,9 +41,9 @@ Chain strategy: stacked-to-main
 
 ## Phase 3: Webhook (F3)
 
-- [ ] 3.1 (RED, dep 1.3) Extend `apps/api/src/features/webhook/webhook.parser.test.ts`: keyword, `+` prefix, default EXPENSE, conservative. Verify: API test red.
-- [ ] 3.2 (GREEN, dep 3.1) Add `classifyMovementType(body)` pure function to `apps/api/src/features/webhook/webhook.parser.ts`. Verify: 3.1 green.
-- [ ] 3.3 (dep 3.2) Extend `webhook.service.test.ts` (type persisted, dedupe + signature intact); wire `type` into `createExpense` in `apps/api/src/features/webhook/webhook.service.ts`. Verify: API test green.
+- [x] 3.1 (RED, dep 1.3) Extend `apps/api/src/features/webhook/webhook.parser.test.ts`: keyword, `+` prefix, default EXPENSE, conservative. Verify: API test red.
+- [x] 3.2 (GREEN, dep 3.1) Add `classifyMovementType(body)` pure function to `apps/api/src/features/webhook/webhook.parser.ts`. Verify: 3.1 green.
+- [x] 3.3 (dep 3.2) Extend `webhook.service.test.ts` (type persisted, dedupe + signature intact); wire `type` into `createExpense` in `apps/api/src/features/webhook/webhook.service.ts`. Verify: API test green.
 
 ## Phase 4: Dashboard (F4)
 

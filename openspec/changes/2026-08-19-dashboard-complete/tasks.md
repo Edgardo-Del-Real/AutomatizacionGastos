@@ -27,10 +27,10 @@ Chain strategy: stacked-to-main
 
 ## Phase 1: Model + Contracts (F1)
 
-- [ ] 1.1 (RED) Add `packages/contracts/src/index.test.ts`: `movementSchema` accepts `type=INCOME`, rejects `SAVINGS`; expense schemas unchanged. Verify: API test red.
-- [ ] 1.2 (GREEN, dep 1.1) Add `movementTypeSchema`, `movementSchema`, `listMovementsSchema`, `movementFiltersSchema`, `movementSummarySchema`, `createMovementSchema` to `packages/contracts/src/index.ts`. Verify: `pnpm --filter @rita/contracts build` + typecheck + 1.1 green.
-- [ ] 1.3 (dep 1.2) Add `enum MovementType`, `type` field (default `EXPENSE`), `@@index([ownerId, occurredAt])` to `apps/api/prisma/schema.prisma`; run `prisma migrate dev --name add_movement_type`. Verify: `migrate deploy` on test DB, expense route tests green, existing rows preserved.
-- [ ] 1.4 (dep 1.3) Add INCOME rows to `apps/api/scripts/seed-demo.ts`. Verify: seed runs.
+- [x] 1.1 (RED) Add `packages/contracts/src/index.test.ts`: `movementSchema` accepts `type=INCOME`, rejects `SAVINGS`; expense schemas unchanged. Verify: API test red.
+- [x] 1.2 (GREEN, dep 1.1) Add `movementTypeSchema`, `movementSchema`, `listMovementsSchema`, `movementFiltersSchema`, `movementSummarySchema`, `createMovementSchema` to `packages/contracts/src/index.ts`. Verify: `pnpm --filter @rita/contracts build` + typecheck + 1.1 green.
+- [x] 1.3 (dep 1.2) Add `enum MovementType`, `type` field (default `EXPENSE`), `@@index([ownerId, occurredAt])` to `apps/api/prisma/schema.prisma`; run `prisma migrate dev --name add_movement_type`. Verify: `migrate deploy` on test DB, expense route tests green, existing rows preserved.
+- [x] 1.4 (dep 1.3) Add INCOME rows to `apps/api/scripts/seed-demo.ts`. Verify: seed runs.
 
 ## Phase 2: API `/movements` (F2)
 

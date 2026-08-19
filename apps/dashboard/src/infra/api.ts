@@ -1,5 +1,8 @@
-import { expenseSummarySchema, listExpensesSchema } from "@rita/contracts";
-import type { Expense, ExpenseSummary } from "@rita/contracts";
+import {
+  listMovementsSchema,
+  movementSummarySchema,
+} from "@rita/contracts";
+import type { Movement, MovementSummary } from "@rita/contracts";
 import { z } from "zod";
 
 export type ApiErrorKind = "network" | "http" | "validation";
@@ -33,14 +36,29 @@ export class ApiError extends Error {
   }
 }
 
+/** Client-side movement list filters, mapped onto `/movements` query params. */
+export type MovementListFilters = {
+  type?: "EXPENSE" | "INCOME";
+  from?: string;
+  to?: string;
+  category?: string;
+  q?: string;
+};
+
 async function request<T>(
   path: string,
   ownerId: string,
   schema: z.ZodType<T>,
+  params: Record<string, string> = {},
 ): Promise<T> {
+  const query = new URLSearchParams({ ownerId });
+  for (const [key, value] of Object.entries(params)) {
+    if (value !== undefined && value !== "") query.set(key, value);
+  }
+
   let response: Response;
   try {
-    response = await fetch(`${path}?ownerId=${encodeURIComponent(ownerId)}`);
+    response = await fetch(`${path}?${query.toString()}`);
   } catch {
     throw new ApiError("network");
   }
@@ -63,10 +81,19 @@ async function request<T>(
   return parsed.data;
 }
 
-export function fetchSummary(ownerId: string): Promise<ExpenseSummary> {
-  return request("/api/expenses/summary", ownerId, expenseSummarySchema);
+export function fetchMovementSummary(ownerId: string): Promise<MovementSummary> {
+  return request("/api/movements/summary", ownerId, movementSummarySchema);
 }
 
-export function fetchExpenses(ownerId: string): Promise<Expense[]> {
-  return request("/api/expenses", ownerId, listExpensesSchema);
+export function fetchMovements(
+  ownerId: string,
+  filters: MovementListFilters = {},
+): Promise<Movement[]> {
+  const params: Record<string, string> = {};
+  if (filters.type) params.type = filters.type;
+  if (filters.from) params.from = filters.from;
+  if (filters.to) params.to = filters.to;
+  if (filters.category) params.category = filters.category;
+  if (filters.q) params.q = filters.q;
+  return request("/api/movements", ownerId, listMovementsSchema, params);
 }

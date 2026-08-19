@@ -46,26 +46,29 @@ export class PrismaExpenseRepository implements ExpenseRepository {
         category: data.category ?? null,
         note: data.note ?? null,
         occurredAt: data.occurredAt,
+        type: "EXPENSE",
       },
     });
     return mapExpenseRow(row);
   }
 
   async findById(id: string, ownerId: string): Promise<Expense | null> {
-    const row = await this.prisma.expense.findFirst({ where: { id, ownerId } });
+    const row = await this.prisma.expense.findFirst({ where: { id, ownerId, type: "EXPENSE" } });
     return row ? mapExpenseRow(row) : null;
   }
 
   async listByOwner(ownerId: string): Promise<Expense[]> {
     const rows = await this.prisma.expense.findMany({
-      where: { ownerId },
+      where: { ownerId, type: "EXPENSE" },
       orderBy: { occurredAt: "desc" },
     });
     return rows.map(mapExpenseRow);
   }
 
   async deleteById(id: string, ownerId: string): Promise<boolean> {
-    const { count } = await this.prisma.expense.deleteMany({ where: { id, ownerId } });
+    const { count } = await this.prisma.expense.deleteMany({
+      where: { id, ownerId, type: "EXPENSE" },
+    });
     return count > 0;
   }
 
@@ -83,6 +86,7 @@ export class PrismaExpenseRepository implements ExpenseRepository {
       FROM "Expense"
       WHERE "ownerId" = ${ownerId}
         AND "occurredAt" >= ${from}
+        AND "type" = 'EXPENSE'::"MovementType"
       GROUP BY 1
       ORDER BY 1 ASC
     `;

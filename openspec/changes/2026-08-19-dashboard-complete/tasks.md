@@ -34,10 +34,10 @@ Chain strategy: stacked-to-main
 
 ## Phase 2: API `/movements` (F2)
 
-- [ ] 2.1 (RED, dep 1.3) Write `apps/api/src/features/movements/movements.route.test.ts`: combined filters, no matches → 200 empty, summary ARS-only, BA bucketing (`2026-08-01T02:59Z` → July), no-data zeros, MoM months. Verify: API test red.
-- [ ] 2.2 (GREEN, dep 2.1) Create `apps/api/src/features/movements/{movements.types,movements.repository,movements.service,movements.route}.ts`: repository raw-SQL (listByOwner, summaryKpis/Months/Daily/Categories, topByType; ARS-only, BA tz); service composes windows/zero-fill/%/top(5); route parses via `movementFiltersSchema`, `ValidationFailedError` on bad query; register `movementsRoute` in `apps/api/src/app.ts`. Verify: 2.1 green + typecheck.
-- [ ] 2.3 (RED, dep 2.2) Extend `apps/api/src/features/expenses/expenses.route.test.ts`: `/expenses` excludes INCOME; `/expenses/summary` matches `expenseSummarySchema` unchanged. Verify: API test red.
-- [ ] 2.4 (GREEN, dep 2.3) Scope `/expenses*` to `EXPENSE` in `apps/api/src/features/expenses/{expenses.repository,expenses.service}.ts` (type filter; mapper omits `type`). Verify: 2.3 green + retrocompat tests green.
+- [x] 2.1 (RED, dep 1.3) Write `apps/api/src/features/movements/movements.route.test.ts`: combined filters, no matches → 200 empty, summary ARS-only, BA bucketing (`2026-08-01T02:59Z` → July), no-data zeros, MoM months. Verify: API test red.
+- [x] 2.2 (GREEN, dep 2.1) Create `apps/api/src/features/movements/{movements.types,movements.repository,movements.service,movements.route}.ts`: repository raw-SQL (listByOwner, summaryKpis/Months/Daily/Categories, topByType; ARS-only, BA tz); service composes windows/zero-fill/%/top(5); route parses via `movementFiltersSchema`, `ValidationFailedError` on bad query; register `movementsRoute` in `apps/api/src/app.ts`. Verify: 2.1 green + typecheck.
+- [x] 2.3 (RED, dep 2.2) Extend `apps/api/src/features/expenses/expenses.route.test.ts`: `/expenses` excludes INCOME; `/expenses/summary` matches `expenseSummarySchema` unchanged. Verify: API test red.
+- [x] 2.4 (GREEN, dep 2.3) Scope `/expenses*` to `EXPENSE` in `apps/api/src/features/expenses/{expenses.repository,expenses.service}.ts` (type filter; mapper omits `type`). Verify: 2.3 green + retrocompat tests green.
 
 ## Phase 3: Webhook (F3)
 

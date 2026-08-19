@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { extractNote, parseAmount, parseAmountAndNote } from "./webhook.parser";
+import { classifyMovementType, extractNote, parseAmount, parseAmountAndNote } from "./webhook.parser";
 
 describe("parseAmount", () => {
   it("parses a plain integer amount", () => {
@@ -52,5 +52,31 @@ describe("parseAmountAndNote", () => {
 
   it("returns null when there is no amount", () => {
     expect(parseAmountAndNote("solo texto")).toBeNull();
+  });
+});
+
+describe("classifyMovementType", () => {
+  it("classifies a message with an income keyword as INCOME", () => {
+    expect(classifyMovementType("Recibí $50000 de sueldo")).toBe("INCOME");
+  });
+
+  it("classifies a message with an income keyword case-insensitively", () => {
+    expect(classifyMovementType("VENTA de auto 50000")).toBe("INCOME");
+  });
+
+  it("classifies a plus-prefixed amount as INCOME even without a keyword", () => {
+    expect(classifyMovementType("+5000")).toBe("INCOME");
+  });
+
+  it("defaults a plain expense message to EXPENSE", () => {
+    expect(classifyMovementType("$2000 supermercado")).toBe("EXPENSE");
+  });
+
+  it("is conservative and does not match a keyword inside another word", () => {
+    expect(classifyMovementType("compré 3000 en inventario")).toBe("EXPENSE");
+  });
+
+  it("is conservative and defaults a message with money but no income signal to EXPENSE", () => {
+    expect(classifyMovementType("transferencia 800")).toBe("EXPENSE");
   });
 });

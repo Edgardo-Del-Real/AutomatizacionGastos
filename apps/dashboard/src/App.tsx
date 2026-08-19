@@ -1,5 +1,5 @@
-import { ExpenseList } from "./features/expenses/ExpenseList";
-import { MetricsOverview } from "./features/metrics/MetricsOverview";
+import { DashboardOverview } from "./features/movements/DashboardOverview";
+import { MovementList } from "./features/movements/MovementList";
 
 export default function App() {
   return (
@@ -10,12 +10,12 @@ export default function App() {
             Rita Dashboard
           </h1>
           <p className="mt-1 text-sm text-ink-soft">
-            Monthly expense overview
+            Resumen de ingresos y gastos
           </p>
         </header>
         <div className="space-y-8">
-          <MetricsOverview />
-          <ExpenseList />
+          <DashboardOverview />
+          <MovementList />
         </div>
       </div>
     </main>

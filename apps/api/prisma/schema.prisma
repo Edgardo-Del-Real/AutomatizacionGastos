@@ -7,16 +7,23 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+enum MovementType {
+  EXPENSE
+  INCOME
+}
+
 model Expense {
-  id         String   @id @default(cuid())
+  id         String       @id @default(cuid())
   ownerId    String
-  amount     Decimal  @db.Decimal(12, 2)
-  currency   String   @default("ARS")
+  amount     Decimal      @db.Decimal(12, 2)
+  currency   String       @default("ARS")
   category   String?
   note       String?
   occurredAt DateTime
-  createdAt  DateTime @default(now())
+  createdAt  DateTime     @default(now())
+  type       MovementType @default(EXPENSE)
 
+  @@index([ownerId, occurredAt])
   @@index([ownerId])
 }
 

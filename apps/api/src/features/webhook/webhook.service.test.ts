@@ -75,6 +75,39 @@ describe("WebhookService", () => {
     );
   });
 
+  it("persists the classified INCOME type for a keyword message", async () => {
+    const { payload, rawBody, signature: valid } = incoming([textMessage("wamid_inc_1", ownerPhone, "sueldo 50000")]);
+    mockCreateExpense.mockResolvedValue(undefined);
+
+    await service.handleIncoming(payload, rawBody, valid);
+
+    expect(mockCreateExpense).toHaveBeenCalledWith(
+      expect.objectContaining({ amount: 50000, note: "sueldo", type: "INCOME" }),
+      ownerId,
+    );
+  });
+
+  it("persists the classified INCOME type for a plus-prefixed amount", async () => {
+    const { payload, rawBody, signature: valid } = incoming([textMessage("wamid_inc_2", ownerPhone, "+5000")]);
+    mockCreateExpense.mockResolvedValue(undefined);
+
+    await service.handleIncoming(payload, rawBody, valid);
+
+    expect(mockCreateExpense).toHaveBeenCalledWith(expect.objectContaining({ amount: 5000, type: "INCOME" }), ownerId);
+  });
+
+  it("persists the classified EXPENSE type for a plain expense message", async () => {
+    const { payload, rawBody, signature: valid } = incoming([textMessage("wamid_exp_1", ownerPhone, "café 2.500")]);
+    mockCreateExpense.mockResolvedValue(undefined);
+
+    await service.handleIncoming(payload, rawBody, valid);
+
+    expect(mockCreateExpense).toHaveBeenCalledWith(
+      expect.objectContaining({ amount: 2500, note: "café", type: "EXPENSE" }),
+      ownerId,
+    );
+  });
+
   it("skips a message that was already processed (unique violation) without creating an expense", async () => {
     const { payload, rawBody, signature: valid } = incoming([textMessage("wamid_1", ownerPhone, "café 2.500")]);
     mockRecord.mockRejectedValue(uniqueViolation());

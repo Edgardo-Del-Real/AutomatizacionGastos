@@ -46,7 +46,7 @@ export class PrismaExpenseRepository implements ExpenseRepository {
         category: data.category ?? null,
         note: data.note ?? null,
         occurredAt: data.occurredAt,
-        type: "EXPENSE",
+        type: data.type ?? "EXPENSE",
       },
     });
     return mapExpenseRow(row);

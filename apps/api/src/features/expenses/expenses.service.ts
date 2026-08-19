@@ -1,4 +1,4 @@
-import { createExpenseSchema, type ExpenseSummary } from "@rita/contracts";
+import { createMovementSchema, type ExpenseSummary } from "@rita/contracts";
 import { NotFoundError, ValidationFailedError } from "../../infra/errors";
 import type { ExpenseRepository } from "./expenses.repository";
 import type { Expense } from "./expenses.types";
@@ -9,7 +9,7 @@ export class ExpenseService {
   constructor(private readonly repository: ExpenseRepository) {}
 
   async createExpense(input: unknown, ownerId: string): Promise<Expense> {
-    const parsed = createExpenseSchema.safeParse(input);
+    const parsed = createMovementSchema.safeParse(input);
     if (!parsed.success) {
       throw new ValidationFailedError("Invalid expense payload", parsed.error.issues);
     }

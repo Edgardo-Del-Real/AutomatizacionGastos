@@ -1,6 +1,6 @@
 import { UnauthorizedError } from "../../infra/errors";
 import type { ExpenseService } from "../expenses/expenses.service";
-import { extractMessages, parseAmountAndNote } from "./webhook.parser";
+import { classifyMovementType, extractMessages, parseAmountAndNote } from "./webhook.parser";
 import { verifyWebhookSignature } from "./webhook.signature";
 import { isUniqueConstraintViolation, type ProcessedMessageRepository } from "./webhook.repository";
 import type { WebhookMessage } from "./webhook.types";
@@ -56,7 +56,13 @@ export class WebhookService {
 
     try {
       await this.deps.expenseService.createExpense(
-        { amount: parsed.amount, currency: "ARS", note: parsed.note, occurredAt: new Date() },
+        {
+          amount: parsed.amount,
+          currency: "ARS",
+          note: parsed.note,
+          occurredAt: new Date(),
+          type: classifyMovementType(body),
+        },
         this.deps.ownerId,
       );
     } catch (error) {

@@ -14,9 +14,11 @@
   },
   "dependencies": {
     "@rita/contracts": "workspace:*",
+    "@tailwindcss/vite": "^4.3.3",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "recharts": "^3.0.0",
+    "tailwindcss": "^4.3.3",
     "zod": "^3.25.0"
   },
   "devDependencies": {

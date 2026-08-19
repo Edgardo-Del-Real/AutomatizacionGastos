@@ -33,46 +33,62 @@ export function ExpenseFilters({
   const categories = distinctCategories(expenses);
 
   return (
-    <div>
-      <label htmlFor="month-filter">Month</label>
-      <select
-        id="month-filter"
-        aria-label="Filter by month"
-        value={value.month ?? ""}
-        onChange={(event) =>
-          onChange({
-            ...value,
-            month: event.target.value || undefined,
-          })
-        }
-      >
-        <option value="">All months</option>
-        {months.map((month) => (
-          <option key={month} value={month}>
-            {month}
-          </option>
-        ))}
-      </select>
+    <div className="flex flex-wrap items-end gap-x-6 gap-y-4 px-4 py-4 sm:px-6">
+      <div className="flex flex-col gap-1.5">
+        <label
+          htmlFor="month-filter"
+          className="text-xs font-semibold tracking-wide text-ink-faint uppercase"
+        >
+          Month
+        </label>
+        <select
+          id="month-filter"
+          aria-label="Filter by month"
+          value={value.month ?? ""}
+          onChange={(event) =>
+            onChange({
+              ...value,
+              month: event.target.value || undefined,
+            })
+          }
+          className="h-9 rounded-lg border border-border bg-surface px-3 text-sm text-ink shadow-sm transition-colors focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent-soft"
+        >
+          <option value="">All months</option>
+          {months.map((month) => (
+            <option key={month} value={month}>
+              {month}
+            </option>
+          ))}
+        </select>
+      </div>
 
-      <label htmlFor="category-filter">Category</label>
-      <select
-        id="category-filter"
-        aria-label="Filter by category"
-        value={value.category ?? ""}
-        onChange={(event) =>
-          onChange({
-            ...value,
-            category: event.target.value || undefined,
-          })
-        }
-      >
-        <option value="">All categories</option>
-        {categories.map((category) => (
-          <option key={category} value={category}>
-            {category}
-          </option>
-        ))}
-      </select>
+      <div className="flex flex-col gap-1.5">
+        <label
+          htmlFor="category-filter"
+          className="text-xs font-semibold tracking-wide text-ink-faint uppercase"
+        >
+          Category
+        </label>
+        <select
+          id="category-filter"
+          aria-label="Filter by category"
+          value={value.category ?? ""}
+          onChange={(event) =>
+            onChange({
+              ...value,
+              category: event.target.value || undefined,
+            })
+          }
+          className="h-9 rounded-lg border border-border bg-surface px-3 text-sm text-ink shadow-sm transition-colors focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent-soft"
+        >
+          <option value="">All categories</option>
+          {categories.map((category) => (
+            <option key={category} value={category}>
+              {category}
+            </option>
+          ))}
+        </select>
+      </div>
     </div>
   );
 }

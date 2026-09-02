@@ -1,6 +1,7 @@
 import { UnauthorizedError } from "../../infra/errors";
 import type { ExpenseService } from "../expenses/expenses.service";
-import { classifyMovementType, extractMessages, parseAmountAndNote } from "./webhook.parser";
+import { classifyMovementType, parseAmountAndNote } from "../messages/message.parser";
+import { extractMessages } from "./webhook.parser";
 import { verifyWebhookSignature } from "./webhook.signature";
 import { isUniqueConstraintViolation, type ProcessedMessageRepository } from "./webhook.repository";
 import type { WebhookMessage } from "./webhook.types";

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { classifyMovementType, extractNote, parseAmount, parseAmountAndNote } from "./webhook.parser";
+import { classifyMovementType, extractNote, parseAmount, parseAmountAndNote } from "./message.parser";
 
 describe("parseAmount", () => {
   it("parses a plain integer amount", () => {

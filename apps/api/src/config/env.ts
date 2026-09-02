@@ -9,9 +9,6 @@ const envSchema = z.object({
   PORT: z.coerce.number().int().positive().default(3000),
   TELEGRAM_BOT_TOKEN: z.string().min(1, "TELEGRAM_BOT_TOKEN is required"),
   TELEGRAM_OWNER_CHAT_ID: z.coerce.number().int().positive(),
-  WHATSAPP_VERIFY_TOKEN: z.string().min(1).default("test-verify-token"),
-  WHATSAPP_APP_SECRET: z.string().min(1).default("test-app-secret"),
-  WHATSAPP_OWNER_PHONE: z.string().min(1),
   OWNER_ID: z.string().min(1).default("default"),
 });
 

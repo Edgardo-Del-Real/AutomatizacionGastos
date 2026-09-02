@@ -6,7 +6,6 @@ const base = {
   DATABASE_URL: "postgresql://rita:rita@localhost:5433/automatizacionrita_test",
   TELEGRAM_BOT_TOKEN: "123456:TEST_TOKEN",
   TELEGRAM_OWNER_CHAT_ID: "123456789",
-  WHATSAPP_OWNER_PHONE: "+5491100000000",
   OWNER_ID: "default",
 };
 
@@ -56,6 +55,16 @@ describe("env schema", () => {
     if (!result.success) {
       const issue = result.error.issues.find((i) => i.path.join(".") === "TELEGRAM_OWNER_CHAT_ID");
       expect(issue).toBeDefined();
+    }
+  });
+
+  it("exposes no WHATSAPP_* keys after telegram cutover", () => {
+    const result = envSchema.safeParse(base);
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      const keys = Object.keys(result.data);
+      expect(keys.some((key) => key.startsWith("WHATSAPP_"))).toBe(false);
     }
   });
 });

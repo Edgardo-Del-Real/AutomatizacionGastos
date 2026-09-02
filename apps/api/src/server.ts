@@ -1,13 +1,11 @@
 import { buildApp } from "./app";
 import { env } from "./config/env";
-import { createTelegramBot, redactToken } from "./features/telegram/telegram.bot";
+import { createTelegramBot, redactToken, registerGracefulStop } from "./features/telegram/telegram.bot";
 
 const app = buildApp({ logger: true });
 const bot = createTelegramBot(env.TELEGRAM_BOT_TOKEN, app.telegramService);
 
-app.addHook("onClose", async () => {
-  await bot.stop();
-});
+registerGracefulStop(app, bot);
 
 process.on("SIGINT", () => {
   void app.close();

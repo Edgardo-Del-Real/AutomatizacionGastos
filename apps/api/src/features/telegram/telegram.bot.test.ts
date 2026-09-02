@@ -1,9 +1,10 @@
 import { Bot, BotError } from "grammy";
 import type { Update } from "grammy/types";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { buildApp } from "../../app";
 import type { ExpenseService } from "../expenses/expenses.service";
 import type { ProcessedMessageRepository } from "../messages/message.repository";
-import { createTelegramBot, redactToken } from "./telegram.bot";
+import { createTelegramBot, redactToken, registerGracefulStop } from "./telegram.bot";
 import { TelegramService } from "./telegram.service";
 
 const TOKEN = "123456:TEST_TOKEN";
@@ -163,5 +164,20 @@ describe("createTelegramBot", () => {
     expect(logged).not.toContain(TOKEN);
     expect(logged).not.toContain(`api.telegram.org/bot${TOKEN}`);
     errorSpy.mockRestore();
+  });
+});
+
+describe("graceful stop on shutdown", () => {
+  it("stops the bot when the Fastify app closes via the onClose hook", async () => {
+    const app = buildApp({ logger: false });
+    const bot = buildOfflineBot(app.telegramService);
+    registerGracefulStop(app, bot);
+    const stopSpy = vi.spyOn(bot, "stop");
+
+    await app.ready();
+    await app.close();
+
+    expect(stopSpy).toHaveBeenCalled();
+    expect(bot.isRunning()).toBe(false);
   });
 });

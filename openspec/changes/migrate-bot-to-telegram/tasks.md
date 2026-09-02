@@ -40,12 +40,14 @@ Chain strategy: stacked-to-main
 
 | ID | PR | TDD steps (RED→GREEN) | Verify | Rollback |
 |----|----|------------------------|--------|----------|
-| 2.1 | F2 | RED `telegram.parser.test.ts`: text→`TelegramMessage`; photo/edited/group/non-message/missing-`from`→`null`; GREEN `telegram.parser.ts` `normalizeTelegramMessage` | parser test green | revert parser files |
-| 2.2 | F2 | RED `telegram.service.test.ts`: P2002 skip, owner filter, no-amount, keyword/`+`/EXPENSE, failure tolerated, ignores skip repo, same-id-diff-chat; GREEN `telegram.service.ts` | service test green | revert service files |
-| 2.3 | F2 | RED `telegram.bot.test.ts`: `handleUpdate` offline (stub `botInfo`, throwing transformer), `redactToken` strips `bot<token>`; GREEN `telegram.bot.ts` + `telegram.types.ts`; add `grammy ^1.46.0` | bot test green | revert bot + dep |
-| 2.4 | F2 | RED `telegram.service.integration.test.ts`: composite rows + dup skip on 5433; GREEN via 2.2 | integration green | revert test |
-| 2.5 | F2 | RED `env.test.ts`: token required/no default, owner id positive-int; GREEN `env.ts` `TELEGRAM_*` + export `envSchema`; `vitest.config.ts`; `.env.example` block | env test green | revert env adds |
-| 2.6 | F2 | GREEN (dep 2.2–2.5): `app.ts` decorate `telegramService`; `server.ts` `bot.start()` + `onClose` stop + SIGINT/SIGTERM | suite + typecheck green | revert server/app |
+| [x] 2.1 | F2 | RED `telegram.parser.test.ts`: text→`TelegramMessage`; photo/edited/group/non-message/missing-`from`→`null`; GREEN `telegram.parser.ts` `normalizeTelegramMessage` | parser test green | revert parser files |
+| [x] 2.2 | F2 | RED `telegram.service.test.ts`: P2002 skip, owner filter, no-amount, keyword/`+`/EXPENSE, failure tolerated, ignores skip repo, same-id-diff-chat; GREEN `telegram.service.ts` | service test green | revert service files |
+| [x] 2.3 | F2 | RED `telegram.bot.test.ts`: `handleUpdate` offline (stub `botInfo`, throwing transformer), `redactToken` strips `bot<token>`; GREEN `telegram.bot.ts` + `telegram.types.ts`; add `grammy ^1.46.0` | bot test green | revert bot + dep |
+| [x] 2.4 | F2 | RED `telegram.service.integration.test.ts`: composite rows + dup skip on 5433; GREEN via 2.2 | integration green | revert test |
+| [x] 2.5 | F2 | RED `env.test.ts`: token required/no default, owner id positive-int; GREEN `env.ts` `TELEGRAM_*` + export `envSchema`; `vitest.config.ts`; `.env.example` block | env test green | revert env adds |
+| [x] 2.6 | F2 | GREEN (dep 2.2–2.5): `app.ts` decorate `telegramService`; `server.ts` `bot.start()` + `onClose` stop + SIGINT/SIGTERM | suite + typecheck green | revert server/app |
+
+> **Apply note (F2):** All F2 code landed with Strict TDD (RED → GREEN per task). Suite: 141/141 passing (99 F1 baseline + 42 new: parser 10, service 12, bot 9, integration 5 on real Postgres 5433, env 6). Typecheck and lint clean. Offline guarantee per design D8: `bot.botInfo` stub + throwing API transformer, `bot.init()` never runs in tests. Token secrecy per D9: `redactToken` covers `bot<token>` URLs; `bot.start()` rejection exits with redacted log. 4 commits: `normalize telegram updates` · `process owner messages into movements` · `offline bot glue with token redaction` · `wire long polling into server lifecycle`. F1's PENDING note is resolved — F1 verified 99/99 with Postgres up (Engram #231).
 
 ## Phase 3: Cutover — Delete Webhook + Env Swap (F3)
 

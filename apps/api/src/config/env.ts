@@ -7,6 +7,8 @@ const envSchema = z.object({
   NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
   DATABASE_URL: z.string().min(1, "DATABASE_URL is required"),
   PORT: z.coerce.number().int().positive().default(3000),
+  TELEGRAM_BOT_TOKEN: z.string().min(1, "TELEGRAM_BOT_TOKEN is required"),
+  TELEGRAM_OWNER_CHAT_ID: z.coerce.number().int().positive(),
   WHATSAPP_VERIFY_TOKEN: z.string().min(1).default("test-verify-token"),
   WHATSAPP_APP_SECRET: z.string().min(1).default("test-app-secret"),
   WHATSAPP_OWNER_PHONE: z.string().min(1),
@@ -14,5 +16,7 @@ const envSchema = z.object({
 });
 
 export type Env = z.infer<typeof envSchema>;
+
+export { envSchema };
 
 export const env: Env = envSchema.parse(process.env);

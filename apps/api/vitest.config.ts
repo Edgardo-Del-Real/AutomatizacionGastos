@@ -7,6 +7,8 @@ export default defineConfig({
     fileParallelism: false,
     env: {
       WHATSAPP_OWNER_PHONE: "+5491100000000",
+      TELEGRAM_BOT_TOKEN: "123456:TEST_TOKEN",
+      TELEGRAM_OWNER_CHAT_ID: "123456789",
     },
   },
 });

@@ -11,6 +11,7 @@ import { PrismaMovementRepository } from "./features/movements/movements.reposit
 import { MovementService } from "./features/movements/movements.service";
 import { movementsRoute } from "./features/movements/movements.route";
 import { PrismaProcessedMessageRepository } from "./features/messages/message.repository";
+import { TelegramService } from "./features/telegram/telegram.service";
 import { WebhookService } from "./features/webhook/webhook.service";
 import { webhookRoute } from "./features/webhook/webhook.route";
 
@@ -34,6 +35,13 @@ export function buildApp(options: AppOptions = {}): FastifyInstance {
     ownerId: env.OWNER_ID,
     logger: (message: string) => console.log(message),
   });
+  const telegramService = new TelegramService({
+    messageRepository,
+    expenseService,
+    ownerChatId: env.TELEGRAM_OWNER_CHAT_ID,
+    ownerId: env.OWNER_ID,
+    logger: (message: string) => console.log(message),
+  });
 
   const app = Fastify({ logger: options.logger ?? false });
 
@@ -45,6 +53,7 @@ export function buildApp(options: AppOptions = {}): FastifyInstance {
     webhookService,
     verifyToken: env.WHATSAPP_VERIFY_TOKEN,
   });
+  app.decorate("telegramService", telegramService);
 
   return app;
 }

@@ -2,7 +2,7 @@
 
 ## Purpose
 
-Full-stack money-movement tracking (expenses AND income). Extends the existing `Expense` model with a `type` discriminator, classifies webhook messages as income or expense, and exposes `/movements` + `/movements/summary` endpoints with ARS-only, Buenos-Aires-timezone aggregation, while keeping `/expenses*` backward compatible.
+Full-stack money-movement tracking (expenses AND income). Extends the existing `Expense` model with a `type` discriminator, classifies inbound messages as income or expense, and exposes `/movements` + `/movements/summary` endpoints with ARS-only, Buenos-Aires-timezone aggregation, while keeping `/expenses*` backward compatible.
 
 ## Requirements
 
@@ -39,32 +39,33 @@ The system MUST store a `type` field on every movement (enum `EXPENSE` | `INCOME
 - WHEN contracts rebuild
 - THEN its shape is unchanged
 
-### Requirement: Webhook Income Detection
+### Requirement: Message Income Detection
 
-The webhook MUST classify a message as `INCOME` when its normalized note matches any keyword (`ingreso|cobro|sueldo|venta|recibí|depósito`, case-insensitive) OR the amount is prefixed with `+`; otherwise it MUST classify as `EXPENSE`.
+The system MUST classify an inbound message as `INCOME` when its normalized note matches any keyword (`ingreso|cobro|sueldo|venta|recibí|depósito`, case-insensitive) OR the amount is prefixed with `+`; otherwise it MUST classify as `EXPENSE`.
+(Previously: "Webhook Income Detection" — wording was "The webhook MUST classify a message"; scenario triggers referenced the webhook transport.)
 
 #### Scenario: Keyword match
 
 - GIVEN message "Recibí $50000 de sueldo"
-- WHEN the webhook processes it
+- WHEN the system processes the message
 - THEN the movement type is `INCOME`
 
 #### Scenario: Plus-prefixed amount
 
 - GIVEN message "+5000" with no keyword
-- WHEN the webhook processes it
+- WHEN the system processes the message
 - THEN the movement type is `INCOME`
 
 #### Scenario: No signal defaults to expense
 
 - GIVEN message "$2000 supermercado"
-- WHEN the webhook processes it
+- WHEN the system processes the message
 - THEN the movement type is `EXPENSE`
 
 #### Scenario: Ambiguous message is conservative
 
 - GIVEN a message with money amounts but no income signal
-- WHEN the webhook processes it
+- WHEN the system processes the message
 - THEN the movement type is `EXPENSE` (no false income)
 
 ### Requirement: Movement List Endpoint

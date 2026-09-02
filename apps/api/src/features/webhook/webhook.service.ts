@@ -1,9 +1,9 @@
 import { UnauthorizedError } from "../../infra/errors";
 import type { ExpenseService } from "../expenses/expenses.service";
 import { classifyMovementType, parseAmountAndNote } from "../messages/message.parser";
+import { isUniqueConstraintViolation, type ProcessedMessageRepository } from "../messages/message.repository";
 import { extractMessages } from "./webhook.parser";
 import { verifyWebhookSignature } from "./webhook.signature";
-import { isUniqueConstraintViolation, type ProcessedMessageRepository } from "./webhook.repository";
 import type { WebhookMessage } from "./webhook.types";
 
 export type WebhookServiceDeps = {
@@ -31,7 +31,7 @@ export class WebhookService {
 
   private async processMessage(message: WebhookMessage): Promise<void> {
     try {
-      await this.deps.messageRepository.recordProcessed(message.id, this.deps.ownerId);
+      await this.deps.messageRepository.recordProcessed(message.from, message.id, this.deps.ownerId);
     } catch (error) {
       if (isUniqueConstraintViolation(error)) {
         this.deps.logger?.(`Webhook: message ${message.id} already processed, skipping`);

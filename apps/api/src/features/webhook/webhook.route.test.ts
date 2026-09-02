@@ -108,7 +108,9 @@ describe("whatsapp webhook route", () => {
       const response = await post(rawBody, { "x-hub-signature-256": sign(rawBody, env.WHATSAPP_APP_SECRET) });
 
       expect(response.statusCode).toBe(200);
-      const processed = await prisma.processedMessage.findUnique({ where: { messageId: "wamid_valid_1" } });
+      const processed = await prisma.processedMessage.findUnique({
+        where: { chatId_messageId: { chatId: env.WHATSAPP_OWNER_PHONE, messageId: "wamid_valid_1" } },
+      });
       expect(processed).not.toBeNull();
       expect(processed?.ownerId).toBe(env.OWNER_ID);
       const expenses = await prisma.expense.findMany({ where: { ownerId: env.OWNER_ID } });
@@ -128,6 +130,21 @@ describe("whatsapp webhook route", () => {
       expect(first.statusCode).toBe(200);
       expect(second.statusCode).toBe(200);
       expect(await prisma.processedMessage.count()).toBe(1);
+      expect(await prisma.expense.count()).toBe(1);
+    });
+
+    it("records two ProcessedMessage rows when the same message id arrives from different senders", async () => {
+      const first = textWebhook("wamid_same_id", env.WHATSAPP_OWNER_PHONE, "café 2.500");
+      const second = textWebhook("wamid_same_id", "+5491199999999", "café 2.500");
+      const firstHeaders = { "x-hub-signature-256": sign(first, env.WHATSAPP_APP_SECRET) };
+      const secondHeaders = { "x-hub-signature-256": sign(second, env.WHATSAPP_APP_SECRET) };
+
+      const firstResponse = await post(first, firstHeaders);
+      const secondResponse = await post(second, secondHeaders);
+
+      expect(firstResponse.statusCode).toBe(200);
+      expect(secondResponse.statusCode).toBe(200);
+      expect(await prisma.processedMessage.count()).toBe(2);
       expect(await prisma.expense.count()).toBe(1);
     });
 

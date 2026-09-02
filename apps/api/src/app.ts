@@ -10,7 +10,7 @@ import { expensesRoute } from "./features/expenses/expenses.route";
 import { PrismaMovementRepository } from "./features/movements/movements.repository";
 import { MovementService } from "./features/movements/movements.service";
 import { movementsRoute } from "./features/movements/movements.route";
-import { PrismaProcessedMessageRepository } from "./features/webhook/webhook.repository";
+import { PrismaProcessedMessageRepository } from "./features/messages/message.repository";
 import { WebhookService } from "./features/webhook/webhook.service";
 import { webhookRoute } from "./features/webhook/webhook.route";
 

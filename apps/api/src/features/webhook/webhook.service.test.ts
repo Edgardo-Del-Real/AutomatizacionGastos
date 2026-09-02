@@ -3,7 +3,7 @@ import { Prisma } from "@prisma/client";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { UnauthorizedError } from "../../infra/errors";
 import type { ExpenseService } from "../expenses/expenses.service";
-import type { ProcessedMessageRepository } from "./webhook.repository";
+import type { ProcessedMessageRepository } from "../messages/message.repository";
 import { WebhookService } from "./webhook.service";
 
 const secret = "test-app-secret";
@@ -12,8 +12,8 @@ const ownerId = "default";
 
 function uniqueViolation(): Prisma.PrismaClientKnownRequestError {
   return new Prisma.PrismaClientKnownRequestError(
-    "Unique constraint failed on the fields: (`messageId`)",
-    { code: "P2002", clientVersion: "6.0.0", meta: { target: ["messageId"] } },
+    "Unique constraint failed on the fields: (`chatId`,`messageId`)",
+    { code: "P2002", clientVersion: "6.0.0", meta: { target: ["chatId_messageId"] } },
   );
 }
 
@@ -67,7 +67,7 @@ describe("WebhookService", () => {
 
     await service.handleIncoming(payload, rawBody, valid);
 
-    expect(mockRecord).toHaveBeenCalledWith("wamid_1", ownerId);
+    expect(mockRecord).toHaveBeenCalledWith(ownerPhone, "wamid_1", ownerId);
     expect(mockCreateExpense).toHaveBeenCalledTimes(1);
     expect(mockCreateExpense).toHaveBeenCalledWith(
       expect.objectContaining({ amount: 2500, currency: "ARS", note: "café" }),
@@ -122,7 +122,7 @@ describe("WebhookService", () => {
 
     await service.handleIncoming(payload, rawBody, valid);
 
-    expect(mockRecord).toHaveBeenCalledWith("wamid_1", ownerId);
+    expect(mockRecord).toHaveBeenCalledWith(ownerPhone, "wamid_1", ownerId);
     expect(mockCreateExpense).not.toHaveBeenCalled();
   });
 
@@ -133,7 +133,7 @@ describe("WebhookService", () => {
 
     await service.handleIncoming(payload, rawBody, valid);
 
-    expect(mockRecord).toHaveBeenCalledWith("wamid_1", ownerId);
+    expect(mockRecord).toHaveBeenCalledWith("+5491199999999", "wamid_1", ownerId);
     expect(mockCreateExpense).not.toHaveBeenCalled();
   });
 
@@ -143,7 +143,7 @@ describe("WebhookService", () => {
 
     await service.handleIncoming(payload, rawBody, valid);
 
-    expect(mockRecord).toHaveBeenCalledWith("wamid_2", ownerId);
+    expect(mockRecord).toHaveBeenCalledWith(ownerPhone, "wamid_2", ownerId);
     expect(mockCreateExpense).not.toHaveBeenCalled();
   });
 

@@ -29,9 +29,11 @@ model Expense {
 
 model ProcessedMessage {
   id          String   @id @default(cuid())
-  messageId   String   @unique
+  chatId      String
+  messageId   String
   ownerId     String
   processedAt DateTime @default(now())
 
+  @@unique([chatId, messageId])
   @@index([ownerId])
 }

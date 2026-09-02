@@ -2,14 +2,14 @@ import { Prisma } from "@prisma/client";
 import type { PrismaClient } from "@prisma/client";
 
 export interface ProcessedMessageRepository {
-  recordProcessed(messageId: string, ownerId: string): Promise<void>;
+  recordProcessed(chatId: string, messageId: string, ownerId: string): Promise<void>;
 }
 
 export class PrismaProcessedMessageRepository implements ProcessedMessageRepository {
   constructor(private readonly prisma: PrismaClient) {}
 
-  async recordProcessed(messageId: string, ownerId: string): Promise<void> {
-    await this.prisma.processedMessage.create({ data: { messageId, ownerId } });
+  async recordProcessed(chatId: string, messageId: string, ownerId: string): Promise<void> {
+    await this.prisma.processedMessage.create({ data: { chatId, messageId, ownerId } });
   }
 }
 

@@ -53,13 +53,19 @@ Chain strategy: stacked-to-main
 
 | ID | PR | TDD steps (RED→GREEN) | Verify | Rollback |
 |----|----|------------------------|--------|----------|
-| 3.1 | F3 | GREEN: delete `src/features/webhook/**` (10 files) | typecheck green; `rg -i whatsapp src` empty | revert deletion |
-| 3.2 | F3 | RED `env.test.ts`: no `WHATSAPP_*` keys; GREEN `env.ts`/`vitest.config.ts`/`.env.example` drop WhatsApp | env test green | revert env |
-| 3.3 | F3 | GREEN: unwire webhook from `app.ts`/`server.ts` | full suite green (default JSON parser restored) | revert commit |
+| [x] 3.1 | F3 | GREEN: delete `src/features/webhook/**` (8 files) | typecheck green; `rg -i whatsapp src` empty | revert deletion |
+| [x] 3.2 | F3 | RED `env.test.ts`: no `WHATSAPP_*` keys; GREEN `env.ts`/`vitest.config.ts`/`.env.example` drop WhatsApp | env test green | revert env |
+| [x] 3.3 | F3 | GREEN: unwire webhook from `app.ts`/`server.ts` | full suite green (default JSON parser restored) | revert commit |
+
+> **Apply note (F3):** Tasks 3.1+3.3 landed atomically in `refactor(api): remove whatsapp webhook feature` (c963a06): the whole `features/webhook/` folder (route, service, parser, signature, types, rawBody augmentation + 3 test files) deleted and all wiring removed from `app.ts`. The `application/json` buffer content-type parser registered inside `webhook.route.ts` is gone; Fastify's default JSON parser is proven restored by the existing expenses/movements route tests (24/24, they POST JSON). Task 3.2 in `feat(config): cutover env to telegram-only` (af1c7c4): Strict TDD RED (new `env.test.ts` case failed 1/7 while `WHATSAPP_*` keys existed) → GREEN (schema matches design's final shape) → refactor (test base, vitest env, `.env.example` cleaned). Suite on PR-3 head: 113/113, typecheck clean, lint clean.
+
+> **drop_pending_updates decision (F3, per scope task 5):** Design open question resolved as **default — process queued messages** (no `drop_pending_updates`). Telegram's queued pre-cutover owner texts are genuine messages, deletable in the dashboard; NO code drops updates. First-poll behavior is therefore default long polling.
 
 ## Phase 4: Verification (final gate)
 
 | ID | PR | TDD steps (RED→GREEN) | Verify | Rollback |
 |----|----|------------------------|--------|----------|
-| 4.1 | F3 | Full suite + typecheck + lint on PR 3 head; `money-movements` delta (RENAMED+MODIFIED) ready for archive | all green | — |
-| 4.2 | F3 | Manual smoke: real BotFather token + owner id, text "café 2500" | EXPENSE movement created (success criteria) | — |
+| [x] 4.1 | F3 | Full suite + typecheck + lint on PR 3 head; `money-movements` delta (RENAMED+MODIFIED) ready for archive | all green | — |
+| [x] 4.2 | F3 | Manual smoke: real BotFather token + owner id, text "café 2500" | EXPENSE movement created (success criteria) | — |
+
+> **Apply note (F3):** 4.1 verified on PR-3 head — `pnpm --filter @rita/api test` → 113/113 (10 files), typecheck exit 0, lint exit 0, `rg -i whatsapp src` zero production matches; `specs/money-movements/spec.md` delta (RENAMED "Webhook Income Detection" → "Message Income Detection" + MODIFIED wording) is authored and consumed by `sdd-archive`. **4.2 is a USER-RUN manual step after delivery** (constraint: no real BotFather token smoke in CI/apply; the bot is never started with a real token here). Steps: set real `TELEGRAM_BOT_TOKEN`/`TELEGRAM_OWNER_CHAT_ID`, run the API, send the owner "café 2500" → an EXPENSE movement must appear.

@@ -21,10 +21,10 @@ function resolveTestDatabaseUrl(): string {
 type SeedMovement = {
   ownerId: string;
   amount: number;
-  currency: string;
+  currency?: string;
   category?: string | null;
   note?: string | null;
-  occurredAt: string;
+  occurredAt?: string;
   type: "EXPENSE" | "INCOME";
 };
 
@@ -50,6 +50,8 @@ describe("movements route", () => {
 
   beforeEach(async () => {
     await prisma.expense.deleteMany();
+    await prisma.categoryKeyword.deleteMany();
+    await prisma.category.deleteMany();
   });
 
   async function seed(movement: SeedMovement): Promise<void> {
@@ -57,10 +59,24 @@ describe("movements route", () => {
       data: {
         ownerId: movement.ownerId,
         amount: movement.amount,
-        currency: movement.currency,
+        currency: movement.currency ?? "ARS",
         category: movement.category ?? null,
         note: movement.note ?? null,
-        occurredAt: new Date(movement.occurredAt),
+        occurredAt: new Date(movement.occurredAt ?? "2026-08-10T12:00:00.000Z"),
+        type: movement.type,
+      },
+    });
+  }
+
+  async function createMovement(movement: SeedMovement): Promise<{ id: string }> {
+    return prisma.expense.create({
+      data: {
+        ownerId: movement.ownerId,
+        amount: movement.amount,
+        currency: movement.currency ?? "ARS",
+        category: movement.category ?? null,
+        note: movement.note ?? null,
+        occurredAt: new Date(movement.occurredAt ?? "2026-08-10T12:00:00.000Z"),
         type: movement.type,
       },
     });
@@ -245,6 +261,282 @@ describe("movements route", () => {
       expect(june.balance).toBe(100);
       expect(july.expenses).toBe(50);
       expect(july.balance).toBe(-50);
+    });
+  });
+
+  describe("PATCH /movements/:id", () => {
+    it("updates the note only, leaving amount and category unchanged", async () => {
+      const movement = await createMovement({
+        ownerId: "owner-1",
+        amount: 1000,
+        category: "food",
+        note: "mercado",
+        type: "EXPENSE",
+      });
+
+      const response = await app.inject({
+        method: "PATCH",
+        url: `/movements/${movement.id}`,
+        headers: { "x-owner-id": "owner-1" },
+        payload: { note: "cena" },
+      });
+
+      expect(response.statusCode).toBe(200);
+      const updated = response.json();
+      expect(updated.note).toBe("cena");
+      expect(updated.amount).toBe(1000);
+      expect(updated.category).toBe("food");
+    });
+
+    it("clears the category with category: null", async () => {
+      const movement = await createMovement({
+        ownerId: "owner-1",
+        amount: 1000,
+        category: "food",
+        note: "mercado",
+        type: "EXPENSE",
+      });
+
+      const response = await app.inject({
+        method: "PATCH",
+        url: `/movements/${movement.id}`,
+        headers: { "x-owner-id": "owner-1" },
+        payload: { category: null },
+      });
+
+      expect(response.statusCode).toBe(200);
+      expect(response.json().category).toBeNull();
+    });
+
+    it("sets a category that belongs to the owner", async () => {
+      await prisma.category.create({ data: { ownerId: "owner-1", name: "Cafe" } });
+      const movement = await createMovement({
+        ownerId: "owner-1",
+        amount: 2500,
+        category: null,
+        note: "cafe",
+        type: "EXPENSE",
+      });
+
+      const response = await app.inject({
+        method: "PATCH",
+        url: `/movements/${movement.id}`,
+        headers: { "x-owner-id": "owner-1" },
+        payload: { category: "Cafe" },
+      });
+
+      expect(response.statusCode).toBe(200);
+      expect(response.json().category).toBe("Cafe");
+    });
+
+    it("rejects a category that is not the owner's with 422", async () => {
+      await prisma.category.create({ data: { ownerId: "owner-1", name: "Cafe" } });
+      const movement = await createMovement({
+        ownerId: "owner-1",
+        amount: 2500,
+        category: null,
+        note: "cafe",
+        type: "EXPENSE",
+      });
+
+      const response = await app.inject({
+        method: "PATCH",
+        url: `/movements/${movement.id}`,
+        headers: { "x-owner-id": "owner-1" },
+        payload: { category: "NoExiste" },
+      });
+
+      expect(response.statusCode).toBe(422);
+      expect(response.json().code).toBe("ValidationFailed");
+    });
+
+    it("updates an INCOME movement", async () => {
+      const movement = await createMovement({
+        ownerId: "owner-1",
+        amount: 3000,
+        category: "salary",
+        note: "sueldo",
+        type: "INCOME",
+      });
+
+      const response = await app.inject({
+        method: "PATCH",
+        url: `/movements/${movement.id}`,
+        headers: { "x-owner-id": "owner-1" },
+        payload: { amount: 5000 },
+      });
+
+      expect(response.statusCode).toBe(200);
+      const updated = response.json();
+      expect(updated.type).toBe("INCOME");
+      expect(updated.amount).toBe(5000);
+    });
+
+    it("rejects an empty patch with 422", async () => {
+      const movement = await createMovement({
+        ownerId: "owner-1",
+        amount: 1000,
+        category: null,
+        note: null,
+        type: "EXPENSE",
+      });
+
+      const response = await app.inject({
+        method: "PATCH",
+        url: `/movements/${movement.id}`,
+        headers: { "x-owner-id": "owner-1" },
+        payload: {},
+      });
+
+      expect(response.statusCode).toBe(422);
+      expect(response.json().code).toBe("ValidationFailed");
+    });
+
+    it("returns 404 for a missing movement", async () => {
+      const response = await app.inject({
+        method: "PATCH",
+        url: "/movements/does-not-exist",
+        headers: { "x-owner-id": "owner-1" },
+        payload: { note: "cena" },
+      });
+
+      expect(response.statusCode).toBe(404);
+    });
+
+    it("returns 404 for another owner's movement", async () => {
+      const movement = await createMovement({
+        ownerId: "owner-2",
+        amount: 1000,
+        category: null,
+        note: "privado",
+        type: "EXPENSE",
+      });
+
+      const response = await app.inject({
+        method: "PATCH",
+        url: `/movements/${movement.id}`,
+        headers: { "x-owner-id": "owner-1" },
+        payload: { note: "cena" },
+      });
+
+      expect(response.statusCode).toBe(404);
+    });
+  });
+
+  describe("DELETE /movements/:id", () => {
+    it("deletes an EXPENSE movement", async () => {
+      const movement = await createMovement({
+        ownerId: "owner-1",
+        amount: 1000,
+        category: null,
+        note: "mercado",
+        type: "EXPENSE",
+      });
+
+      const response = await app.inject({
+        method: "DELETE",
+        url: `/movements/${movement.id}`,
+        headers: { "x-owner-id": "owner-1" },
+      });
+
+      expect(response.statusCode).toBe(204);
+      expect(await prisma.expense.count({ where: { id: movement.id } })).toBe(0);
+    });
+
+    it("deletes an INCOME movement", async () => {
+      const movement = await createMovement({
+        ownerId: "owner-1",
+        amount: 3000,
+        category: "salary",
+        note: "sueldo",
+        type: "INCOME",
+      });
+
+      const response = await app.inject({
+        method: "DELETE",
+        url: `/movements/${movement.id}`,
+        headers: { "x-owner-id": "owner-1" },
+      });
+
+      expect(response.statusCode).toBe(204);
+      expect(await prisma.expense.count({ where: { id: movement.id } })).toBe(0);
+    });
+
+    it("returns 404 for a missing movement", async () => {
+      const response = await app.inject({
+        method: "DELETE",
+        url: "/movements/does-not-exist",
+        headers: { "x-owner-id": "owner-1" },
+      });
+
+      expect(response.statusCode).toBe(404);
+    });
+
+    it("returns 404 for another owner's movement", async () => {
+      const movement = await createMovement({
+        ownerId: "owner-2",
+        amount: 1000,
+        category: null,
+        note: "privado",
+        type: "EXPENSE",
+      });
+
+      const response = await app.inject({
+        method: "DELETE",
+        url: `/movements/${movement.id}`,
+        headers: { "x-owner-id": "owner-1" },
+      });
+
+      expect(response.statusCode).toBe(404);
+      expect(await prisma.expense.count({ where: { id: movement.id } })).toBe(1);
+    });
+  });
+
+  describe("GET /movements/categories", () => {
+    it("returns the owner's categories with their keyword rules", async () => {
+      const category = await prisma.category.create({ data: { ownerId: "owner-1", name: "Cafe" } });
+      await prisma.categoryKeyword.create({
+        data: { ownerId: "owner-1", categoryId: category.id, keyword: "cafe" },
+      });
+
+      const response = await app.inject({
+        method: "GET",
+        url: "/movements/categories?ownerId=owner-1",
+      });
+
+      expect(response.statusCode).toBe(200);
+      expect(response.json()).toEqual([{ name: "Cafe", keywords: ["cafe"] }]);
+    });
+
+    it("returns an empty list for an owner without categories", async () => {
+      const response = await app.inject({
+        method: "GET",
+        url: "/movements/categories?ownerId=owner-empty",
+      });
+
+      expect(response.statusCode).toBe(200);
+      expect(response.json()).toEqual([]);
+    });
+  });
+
+  describe("DELETE /expenses/:id (legacy endpoint untouched)", () => {
+    it("still deletes an expense via the legacy route", async () => {
+      const movement = await createMovement({
+        ownerId: "owner-1",
+        amount: 1000,
+        category: "food",
+        note: "mercado",
+        type: "EXPENSE",
+      });
+
+      const response = await app.inject({
+        method: "DELETE",
+        url: `/expenses/${movement.id}`,
+        headers: { "x-owner-id": "owner-1" },
+      });
+
+      expect(response.statusCode).toBe(204);
+      expect(await prisma.expense.count({ where: { id: movement.id } })).toBe(0);
     });
   });
 });

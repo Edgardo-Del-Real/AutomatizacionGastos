@@ -39,6 +39,13 @@ export class MovementService {
     return updated;
   }
 
+  async deleteMovement(ownerId: string, id: string): Promise<void> {
+    const deleted = await this.repository.deleteById(id, ownerId);
+    if (!deleted) {
+      throw new NotFoundError(`Movement ${id} not found`);
+    }
+  }
+
   async getSummary(ownerId: string, from?: string, to?: string): Promise<MovementSummary> {
     const period: SummaryPeriod = { from, to };
     const [kpis, months, daily, categories, topExpenses, topIncome] = await Promise.all([

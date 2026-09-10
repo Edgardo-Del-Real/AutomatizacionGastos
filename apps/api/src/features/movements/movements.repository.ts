@@ -70,6 +70,7 @@ export interface MovementRepository {
     ownerId: string,
     patch: { amount?: number; note?: string | null; category?: string | null },
   ): Promise<Movement | null>;
+  deleteById(id: string, ownerId: string): Promise<boolean>;
 }
 
 export type UpdateMovementPatch = {
@@ -259,5 +260,10 @@ export class PrismaMovementRepository implements MovementRepository {
     }
     const row = await this.prisma.expense.findFirst({ where: { id, ownerId } });
     return row === null ? null : mapMovementRow(row);
+  }
+
+  async deleteById(id: string, ownerId: string): Promise<boolean> {
+    const deleted = await this.prisma.expense.deleteMany({ where: { id, ownerId } });
+    return deleted.count > 0;
   }
 }

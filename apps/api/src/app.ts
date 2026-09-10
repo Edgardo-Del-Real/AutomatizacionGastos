@@ -11,6 +11,9 @@ import { PrismaMovementRepository } from "./features/movements/movements.reposit
 import { MovementService } from "./features/movements/movements.service";
 import { movementsRoute } from "./features/movements/movements.route";
 import { PrismaProcessedMessageRepository } from "./features/messages/message.repository";
+import { PrismaCategoryRepository } from "./features/categories/categories.repository";
+import { CategoryService } from "./features/categories/categories.service";
+import { PrismaBotStateRepository } from "./features/telegram/bot-state.repository";
 import { TelegramService } from "./features/telegram/telegram.service";
 
 export type AppOptions = {
@@ -23,11 +26,17 @@ export function buildApp(options: AppOptions = {}): FastifyInstance {
   const expenseRepository = new PrismaExpenseRepository(prisma);
   const expenseService = new ExpenseService(expenseRepository);
   const movementRepository = new PrismaMovementRepository(prisma);
-  const movementService = new MovementService(movementRepository);
+  const categoryRepository = new PrismaCategoryRepository(prisma);
+  const categoryService = new CategoryService(categoryRepository);
+  const movementService = new MovementService(movementRepository, categoryService);
   const messageRepository = new PrismaProcessedMessageRepository(prisma);
+  const botStateRepository = new PrismaBotStateRepository(prisma);
   const telegramService = new TelegramService({
     messageRepository,
     expenseService,
+    movementService,
+    categoryService,
+    botStateRepository,
     ownerChatId: env.TELEGRAM_OWNER_CHAT_ID,
     ownerId: env.OWNER_ID,
     logger: (message: string) => console.log(message),

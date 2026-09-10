@@ -1,4 +1,6 @@
-import type { Movement, MovementSummary } from "@rita/contracts";
+import { updateMovementSchema, type Movement, type MovementSummary } from "@rita/contracts";
+import { NotFoundError, ValidationFailedError } from "../../infra/errors";
+import type { CategoryService } from "../categories/categories.service";
 import type { MovementRepository } from "./movements.repository";
 import type { MovementListFilters, SummaryPeriod } from "./movements.types";
 
@@ -8,10 +10,33 @@ const DAYS_WINDOW = 30;
 const TOP_LIMIT = 5;
 
 export class MovementService {
-  constructor(private readonly repository: MovementRepository) {}
+  constructor(
+    private readonly repository: MovementRepository,
+    private readonly categoryService: CategoryService,
+  ) {}
 
   async listMovements(ownerId: string, filters: MovementListFilters): Promise<Movement[]> {
     return this.repository.listByOwner(ownerId, filters);
+  }
+
+  /**
+   * PATCH semantics (D12): only the present fields are written; null clears;
+   * absent leaves unchanged; a string category must belong to the owner (422);
+   * `type`/`occurredAt` are excluded by the shared contract.
+   */
+  async updateMovement(ownerId: string, id: string, patch: unknown): Promise<Movement> {
+    const parsed = updateMovementSchema.safeParse(patch);
+    if (!parsed.success) {
+      throw new ValidationFailedError("Invalid movement patch", parsed.error.issues);
+    }
+    if (parsed.data.category !== undefined && parsed.data.category !== null) {
+      await this.categoryService.assertOwnerCategory(ownerId, parsed.data.category);
+    }
+    const updated = await this.repository.updateById(id, ownerId, parsed.data);
+    if (updated === null) {
+      throw new NotFoundError(`Movement ${id} not found`);
+    }
+    return updated;
   }
 
   async getSummary(ownerId: string, from?: string, to?: string): Promise<MovementSummary> {

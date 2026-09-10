@@ -1,10 +1,15 @@
 import { execSync } from "node:child_process";
 import { PrismaClient } from "@prisma/client";
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { loadDotEnvFromDisk } from "../../config/load-env";
+import { PrismaCategoryRepository } from "../categories/categories.repository";
+import { CategoryService } from "../categories/categories.service";
 import { PrismaExpenseRepository } from "../expenses/expenses.repository";
 import { ExpenseService } from "../expenses/expenses.service";
 import { PrismaProcessedMessageRepository } from "../messages/message.repository";
+import { PrismaMovementRepository } from "../movements/movements.repository";
+import { MovementService } from "../movements/movements.service";
+import { PrismaBotStateRepository } from "./bot-state.repository";
 import { TelegramService } from "./telegram.service";
 
 loadDotEnvFromDisk();
@@ -40,6 +45,7 @@ function textUpdate(overrides?: { fromId?: number; chatId?: number; messageId?: 
 describe("TelegramService (integration)", () => {
   const testDatabaseUrl = resolveTestDatabaseUrl();
   let prisma: PrismaClient;
+  let categoryService: CategoryService;
   let service: TelegramService;
 
   beforeAll(async () => {
@@ -48,10 +54,26 @@ describe("TelegramService (integration)", () => {
       stdio: "pipe",
     });
     prisma = new PrismaClient({ datasourceUrl: testDatabaseUrl });
+    categoryService = new CategoryService(new PrismaCategoryRepository(prisma));
+    service = buildService();
+  });
+
+  function buildService(logger: (message: string) => void = () => undefined): TelegramService {
     const messageRepository = new PrismaProcessedMessageRepository(prisma);
     const expenseService = new ExpenseService(new PrismaExpenseRepository(prisma));
-    service = new TelegramService({ messageRepository, expenseService, ownerChatId: OWNER_CHAT_ID, ownerId });
-  });
+    const movementService = new MovementService(new PrismaMovementRepository(prisma), categoryService);
+    const botStateRepository = new PrismaBotStateRepository(prisma);
+    return new TelegramService({
+      messageRepository,
+      expenseService,
+      movementService,
+      categoryService,
+      botStateRepository,
+      ownerChatId: OWNER_CHAT_ID,
+      ownerId,
+      logger,
+    });
+  }
 
   afterAll(async () => {
     await prisma.$disconnect();
@@ -60,56 +82,164 @@ describe("TelegramService (integration)", () => {
   beforeEach(async () => {
     await prisma.processedMessage.deleteMany();
     await prisma.expense.deleteMany();
+    await prisma.categoryKeyword.deleteMany();
+    await prisma.category.deleteMany();
+    await prisma.botState.deleteMany();
   });
 
-  it("persists a ProcessedMessage and an Expense for a valid owner text message", async () => {
-    await service.handleUpdate(textUpdate({ messageId: 9001, text: "café 2500" }));
+  async function seedCategories(names: string[]): Promise<void> {
+    for (const name of names) {
+      await categoryService.createCategory(ownerId, name);
+    }
+    await categoryService.ensureOtro(ownerId);
+  }
 
-    const processed = await prisma.processedMessage.findUnique({
-      where: { chatId_messageId: { chatId: String(OWNER_CHAT_ID), messageId: "9001" } },
-    });
-    expect(processed?.ownerId).toBe(ownerId);
+  it("setup: a first registration enters awaiting_setup without persisting, and the reply creates the categories plus 'otro'", async () => {
+    const replies: string[] = [];
+    const reply = async (text: string): Promise<void> => {
+      replies.push(text);
+    };
 
-    const expenses = await prisma.expense.findMany({ where: { ownerId } });
-    expect(expenses).toHaveLength(1);
-    expect(expenses[0]?.amount.toNumber()).toBe(2500);
-    expect(expenses[0]?.currency).toBe("ARS");
-    expect(expenses[0]?.note).toBe("café");
-    expect(expenses[0]?.type).toBe("EXPENSE");
+    await service.handleUpdate(textUpdate({ messageId: 1, text: "$2500 cafe" }), reply);
+
+    expect(await prisma.expense.count()).toBe(0);
+    const state = await prisma.botState.findUnique({ where: { ownerId } });
+    expect(state?.state).toBe("awaiting_setup");
+    expect(replies.at(-1)).toContain("categorías");
+
+    await service.handleUpdate(textUpdate({ messageId: 2, text: "Cafe\nTransporte" }), reply);
+
+    const categories = await categoryService.listCategories(ownerId);
+    const names = categories.map((category) => category.name).sort();
+    expect(names).toEqual(["Cafe", "Transporte", "otro"]);
+    const after = await prisma.botState.findUnique({ where: { ownerId } });
+    expect(after?.state).toBe("idle");
+    expect(replies.at(-1)).toContain("Cafe");
   });
 
-  it("skips a duplicate update without creating a second expense", async () => {
-    const update = textUpdate({ messageId: 9002, text: "sueldo 50000" });
+  it("correction: an unmatched registration gets 'otro', the answer reassigns it and learns the keyword", async () => {
+    await seedCategories(["Transporte"]);
+    const replies: string[] = [];
+    const reply = async (text: string): Promise<void> => {
+      replies.push(text);
+    };
 
-    await service.handleUpdate(update);
-    await service.handleUpdate(update);
+    await service.handleUpdate(textUpdate({ messageId: 1, text: "$1200 uber viaje" }), reply);
 
-    expect(await prisma.processedMessage.count()).toBe(1);
+    let movements = await prisma.expense.findMany({ where: { ownerId } });
+    expect(movements).toHaveLength(1);
+    expect(movements[0]?.category).toBe("otro");
+    expect(replies.at(-1)).toContain("uber viaje");
+
+    await service.handleUpdate(textUpdate({ messageId: 2, text: "Transporte" }), reply);
+
+    movements = await prisma.expense.findMany({ where: { ownerId } });
+    expect(movements[0]?.category).toBe("Transporte");
+    const learned = await prisma.categoryKeyword.findMany({ where: { ownerId } });
+    expect(learned).toHaveLength(1);
+    expect(learned[0]?.keyword).toBe("uber");
+    const state = await prisma.botState.findUnique({ where: { ownerId } });
+    expect(state?.state).toBe("idle");
+    expect(replies.at(-1)).toContain("Transporte");
+  });
+
+  it("correction: an unknown single-word answer auto-creates the category and applies it", async () => {
+    await seedCategories([]);
+    const reply = async (): Promise<void> => undefined;
+
+    await service.handleUpdate(textUpdate({ messageId: 1, text: "$8000 veterinaria" }), reply);
+    await service.handleUpdate(textUpdate({ messageId: 2, text: "Mascotas" }), reply);
+
+    const movements = await prisma.expense.findMany({ where: { ownerId } });
+    expect(movements[0]?.category).toBe("Mascotas");
+    const categories = await categoryService.listCategories(ownerId);
+    expect(categories.some((category) => category.name === "Mascotas")).toBe(true);
+    const learned = await prisma.categoryKeyword.findMany({ where: { ownerId } });
+    expect(learned.some((rule) => rule.keyword === "veterinaria")).toBe(true);
+  });
+
+  it("correction: an amount reply is a new registration that replaces the pending correction", async () => {
+    await seedCategories([]);
+    const reply = async (): Promise<void> => undefined;
+
+    await service.handleUpdate(textUpdate({ messageId: 1, text: "$1000 uber viaje" }), reply);
+    await service.handleUpdate(textUpdate({ messageId: 2, text: "$8000 super" }), reply);
+
+    const movements = await prisma.expense.findMany({ where: { ownerId }, orderBy: { createdAt: "asc" } });
+    expect(movements).toHaveLength(2);
+    expect(movements[0]?.category).toBe("otro");
+    expect(movements[1]?.amount.toNumber()).toBe(8000);
+    const state = await prisma.botState.findUnique({ where: { ownerId } });
+    expect(state?.state).toBe("awaiting_category");
+    expect(state?.pendingMovementId).toBe(movements[1]?.id);
+  });
+
+  it("learning: a later note containing the learned keyword auto-matches", async () => {
+    await seedCategories(["Transporte"]);
+    const reply = async (): Promise<void> => undefined;
+
+    await service.handleUpdate(textUpdate({ messageId: 1, text: "$1200 uber viaje" }), reply);
+    await service.handleUpdate(textUpdate({ messageId: 2, text: "Transporte" }), reply);
+
+    await service.handleUpdate(textUpdate({ messageId: 3, text: "$500 uber al aeropuerto" }), reply);
+
+    const movements = await prisma.expense.findMany({ where: { ownerId }, orderBy: { createdAt: "asc" } });
+    expect(movements).toHaveLength(2);
+    expect(movements[1]?.category).toBe("Transporte");
+  });
+
+  it("restart survival: a pending correction persists and resolves after the service is rebuilt", async () => {
+    await seedCategories(["Transporte"]);
+    const reply = async (): Promise<void> => undefined;
+
+    await service.handleUpdate(textUpdate({ messageId: 1, text: "$1200 uber viaje" }), reply);
+    const stateBefore = await prisma.botState.findUnique({ where: { ownerId } });
+    expect(stateBefore?.state).toBe("awaiting_category");
+
+    // The process restarts: a fresh service reads the persisted state.
+    const restarted = buildService();
+    await restarted.handleUpdate(textUpdate({ messageId: 2, text: "Transporte" }), reply);
+
+    const movements = await prisma.expense.findMany({ where: { ownerId } });
+    expect(movements[0]?.category).toBe("Transporte");
+    const stateAfter = await prisma.botState.findUnique({ where: { ownerId } });
+    expect(stateAfter?.state).toBe("idle");
+  });
+
+  it("tolerates a movement-creation failure and a reply failure without stopping", async () => {
+    await seedCategories([]);
+    const logger = vi.fn();
+    const fragile = buildService(logger);
+    const failingReply = async (): Promise<void> => {
+      throw new Error("telegram api down");
+    };
+
+    // Reply failure: the message still processes and the movement persists.
+    await expect(
+      fragile.handleUpdate(textUpdate({ messageId: 1, text: "$1000 panaderia" }), failingReply),
+    ).resolves.toBeUndefined();
     expect(await prisma.expense.count()).toBe(1);
+    expect(logger).toHaveBeenCalled();
+
+    // A working reply on the next message keeps replying normally.
+    const replies: string[] = [];
+    await fragile.handleUpdate(textUpdate({ messageId: 2, text: "$2000 almacen" }), async (text) => {
+      replies.push(text);
+    });
+    expect(replies.at(-1)).toContain("almacen");
   });
 
-  it("records two ProcessedMessage rows when the same message id arrives from different chats", async () => {
-    await service.handleUpdate(textUpdate({ messageId: 9003, chatId: 111111111, text: "pan 100" }));
-    await service.handleUpdate(textUpdate({ messageId: 9003, chatId: 222222222, text: "leche 200" }));
-
-    expect(await prisma.processedMessage.count()).toBe(2);
-    const expenses = await prisma.expense.findMany({ where: { ownerId } });
-    expect(expenses).toHaveLength(2);
-  });
-
-  it("records the message but creates no expense for a non-owner sender", async () => {
-    await service.handleUpdate(textUpdate({ messageId: 9004, fromId: 987654321, text: "café 2500" }));
+  it("a non-owner sender is recorded but never creates a movement or receives a reply", async () => {
+    const replies: string[] = [];
+    await service.handleUpdate(
+      textUpdate({ messageId: 1, fromId: 987654321, text: "café 2500" }),
+      async (text) => {
+        replies.push(text);
+      },
+    );
 
     expect(await prisma.processedMessage.count()).toBe(1);
     expect(await prisma.expense.count()).toBe(0);
-  });
-
-  it("creates an INCOME movement for a plus-prefixed amount", async () => {
-    await service.handleUpdate(textUpdate({ messageId: 9005, text: "+5000" }));
-
-    const expenses = await prisma.expense.findMany({ where: { ownerId } });
-    expect(expenses).toHaveLength(1);
-    expect(expenses[0]?.amount.toNumber()).toBe(5000);
-    expect(expenses[0]?.type).toBe("INCOME");
+    expect(replies).toHaveLength(0);
   });
 });

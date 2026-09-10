@@ -65,7 +65,18 @@ export interface MovementRepository {
   summaryDaily(ownerId: string): Promise<DayBucket[]>;
   summaryCategories(ownerId: string, period: SummaryPeriod): Promise<CategoryBucket[]>;
   topByType(ownerId: string, type: MovementType, limit: number, period: SummaryPeriod): Promise<Movement[]>;
+  updateById(
+    id: string,
+    ownerId: string,
+    patch: { amount?: number; note?: string | null; category?: string | null },
+  ): Promise<Movement | null>;
 }
+
+export type UpdateMovementPatch = {
+  amount?: number;
+  note?: string | null;
+  category?: string | null;
+};
 
 export class PrismaMovementRepository implements MovementRepository {
   constructor(private readonly prisma: PrismaClient) {}
@@ -235,5 +246,18 @@ export class PrismaMovementRepository implements MovementRepository {
       LIMIT ${limit}
     `;
     return rows.map(mapMovementRow);
+  }
+
+  async updateById(
+    id: string,
+    ownerId: string,
+    patch: UpdateMovementPatch,
+  ): Promise<Movement | null> {
+    const updated = await this.prisma.expense.updateMany({ where: { id, ownerId }, data: patch });
+    if (updated.count === 0) {
+      return null;
+    }
+    const row = await this.prisma.expense.findFirst({ where: { id, ownerId } });
+    return row === null ? null : mapMovementRow(row);
   }
 }

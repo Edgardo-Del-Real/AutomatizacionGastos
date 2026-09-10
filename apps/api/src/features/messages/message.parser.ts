@@ -9,7 +9,8 @@ const NUMBER_TOKEN_REGEX = /\d[\d.,]*/g;
 
 const INCOME_KEYWORDS = ["ingreso", "cobro", "sueldo", "venta", "recibí", "depósito"];
 // Latin-1 letter range so accented words (recibí, depósito) participate in boundary checks.
-const LETTER = "[A-Za-zÀ-ÿ]";
+// Bare range without brackets: it is interpolated inside character classes ([^...], (?![...])).
+const LETTER = "A-Za-zÀ-ÿ";
 const INCOME_KEYWORD_REGEX = new RegExp(`(?:^|[^${LETTER}])(${INCOME_KEYWORDS.join("|")})(?![${LETTER}])`, "i");
 const PLUS_PREFIXED_AMOUNT_REGEX = /\+\s*\d/;
 

@@ -70,6 +70,29 @@ export const createMovementSchema = createExpenseSchema.extend({
 
 export type CreateMovementInput = z.infer<typeof createMovementSchema>;
 
+export const updateMovementSchema = z
+  .object({
+    amount: z.number().positive().optional(),
+    note: z.string().min(1).nullable().optional(),
+    category: z.string().min(1).nullable().optional(),
+  })
+  .refine((data) => Object.values(data).some((value) => value !== undefined), {
+    message: "at least one field is required",
+  });
+
+export type UpdateMovementInput = z.infer<typeof updateMovementSchema>;
+
+export const ownerCategorySchema = z.object({
+  name: z.string(),
+  keywords: z.array(z.string()),
+});
+
+export type OwnerCategory = z.infer<typeof ownerCategorySchema>;
+
+export const categoryListSchema = z.array(ownerCategorySchema);
+
+export type CategoryList = z.infer<typeof categoryListSchema>;
+
 export const movementSummarySchema = z.object({
   kpis: z.object({
     income: z.number(),

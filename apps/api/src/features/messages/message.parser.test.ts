@@ -79,4 +79,16 @@ describe("classifyMovementType", () => {
   it("is conservative and defaults a message with money but no income signal to EXPENSE", () => {
     expect(classifyMovementType("transferencia 800")).toBe("EXPENSE");
   });
+
+  it("classifies an income keyword that appears after a space as INCOME", () => {
+    expect(classifyMovementType("Recibi 5000 de sueldo")).toBe("INCOME");
+  });
+
+  it("classifies an income keyword in the middle of the message as INCOME", () => {
+    expect(classifyMovementType("ayer cobro 8000")).toBe("INCOME");
+  });
+
+  it("does not match a keyword that is a prefix of another word", () => {
+    expect(classifyMovementType("sueldos 5000")).toBe("EXPENSE");
+  });
 });

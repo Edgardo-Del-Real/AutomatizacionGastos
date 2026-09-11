@@ -55,8 +55,8 @@ Delivery strategy: single-pr
 
 ## Phase 5: Dashboard (F4)
 
-- [ ] 5.1 RED: api client — request(method,body,headers), 204 short-circuit, 3 fns
-- [ ] 5.2 RED: edit form (dropdown, diff-only patch, clear→null, invalid blocked), ConfirmDialog, refreshKey refetch
-- [ ] 5.3 GREEN: infra/api.ts, useMovementMutations.ts, useCategories.ts
-- [ ] 5.4 GREEN: MovementEditForm, ConfirmDialog, MovementList row actions, App refreshKey (D11), refreshToken deps
-- [ ] 5.5 Full suite green: pnpm --filter @rita/api test && pnpm --filter @rita/dashboard test
+- [x] 5.1 RED: api client — request(method,body,headers), 204 short-circuit, 3 fns
+- [x] 5.2 RED: edit form (dropdown, diff-only patch, clear→null, invalid blocked), ConfirmDialog, refreshKey refetch
+- [x] 5.3 GREEN: infra/api.ts, useMovementMutations.ts, useCategories.ts
+- [x] 5.4 GREEN: MovementEditForm, ConfirmDialog, MovementList row actions, App refreshKey (D11), refreshToken deps
+- [x] 5.5 Full suite green: pnpm --filter @rita/api test && pnpm --filter @rita/dashboard test

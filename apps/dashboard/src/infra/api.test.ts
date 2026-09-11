@@ -1,8 +1,19 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { Movement, MovementSummary } from "@rita/contracts";
+import type {
+  Movement,
+  MovementSummary,
+  OwnerCategory,
+} from "@rita/contracts";
 
-import { ApiError, fetchMovements, fetchMovementSummary } from "./api";
+import {
+  ApiError,
+  deleteMovement,
+  fetchCategories,
+  fetchMovements,
+  fetchMovementSummary,
+  patchMovement,
+} from "./api";
 
 const validSummary: MovementSummary = {
   kpis: {
@@ -196,6 +207,101 @@ describe("fetchMovements", () => {
 
     await expect(fetchMovements("default")).rejects.toMatchObject({
       kind: "validation",
+    });
+  });
+});
+
+describe("fetchCategories", () => {
+  it("resolves the owner categories from GET /movements/categories", async () => {
+    const categories: OwnerCategory[] = [
+      { name: "comida", keywords: ["comida", "restaurante"] },
+      { name: "sueldo", keywords: [] },
+    ];
+    fetchMock.mockResolvedValue(jsonResponse(categories));
+
+    const result = await fetchCategories("default");
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/movements/categories?ownerId=default",
+    );
+    expect(result).toHaveLength(2);
+    expect(result[0]).toEqual({
+      name: "comida",
+      keywords: ["comida", "restaurante"],
+    });
+    expect(result[1]).toEqual({ name: "sueldo", keywords: [] });
+  });
+
+  it("throws ApiError validation when a category is malformed", async () => {
+    fetchMock.mockResolvedValue(jsonResponse([{ keywords: [] }]));
+
+    await expect(fetchCategories("default")).rejects.toMatchObject({
+      kind: "validation",
+    });
+  });
+
+  it("throws ApiError http with status when the response is not ok", async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ error: "boom" }, 500));
+
+    await expect(fetchCategories("default")).rejects.toMatchObject({
+      kind: "http",
+      status: 500,
+    });
+  });
+});
+
+describe("patchMovement", () => {
+  it("PATCHes /movements/:id with the owner header and JSON body, resolving the updated movement", async () => {
+    const updated: Movement = { ...validMovements[0]!, note: "cena" };
+    fetchMock.mockResolvedValue(jsonResponse(updated));
+
+    const result = await patchMovement("m1", "default", { note: "cena" });
+
+    expect(fetchMock).toHaveBeenCalledWith("/api/movements/m1", {
+      method: "PATCH",
+      headers: { "x-owner-id": "default", "Content-Type": "application/json" },
+      body: JSON.stringify({ note: "cena" }),
+    });
+    expect(result.id).toBe("m1");
+    expect(result.note).toBe("cena");
+    expect(result.amount).toBe(500);
+  });
+
+  it("throws ApiError http with 422 when the category is invalid", async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ message: "invalid category" }, 422));
+
+    await expect(
+      patchMovement("m1", "default", { category: "no-existe" }),
+    ).rejects.toMatchObject({ kind: "http", status: 422 });
+  });
+
+  it("throws ApiError network when fetch rejects", async () => {
+    fetchMock.mockRejectedValue(new TypeError("Network request failed"));
+
+    await expect(
+      patchMovement("m1", "default", { amount: 10 }),
+    ).rejects.toMatchObject({ kind: "network" });
+  });
+});
+
+describe("deleteMovement", () => {
+  it("DELETEs /movements/:id with the owner header and short-circuits a 204 response", async () => {
+    fetchMock.mockResolvedValue(new Response(null, { status: 204 }));
+
+    await expect(deleteMovement("m1", "default")).resolves.toBeUndefined();
+
+    expect(fetchMock).toHaveBeenCalledWith("/api/movements/m1", {
+      method: "DELETE",
+      headers: { "x-owner-id": "default" },
+    });
+  });
+
+  it("throws ApiError http with 404 when the movement does not exist", async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ error: "not found" }, 404));
+
+    await expect(deleteMovement("m1", "default")).rejects.toMatchObject({
+      kind: "http",
+      status: 404,
     });
   });
 });

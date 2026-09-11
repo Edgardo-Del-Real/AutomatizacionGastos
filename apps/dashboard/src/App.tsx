@@ -1,11 +1,11 @@
 import { useCallback, useState } from "react";
 
 import { OWNER_ID } from "./infra/env";
+import { BalanceTrendChart } from "./features/movements/BalanceTrendChart";
 import { CategoryBreakdown } from "./features/movements/CategoryBreakdown";
 import { CategoryCards } from "./features/movements/CategoryCards";
-import { DailyChart } from "./features/movements/DailyChart";
+import { CategoryPieChart } from "./features/movements/CategoryPieChart";
 import { KpiCards } from "./features/movements/KpiCards";
-import { MomChart } from "./features/movements/MomChart";
 import { MovementList } from "./features/movements/MovementList";
 import { SummarySection } from "./features/movements/SummarySection";
 import { TopMovements } from "./features/movements/TopMovements";
@@ -116,8 +116,8 @@ export default function App() {
           <SummarySection state={summaryState}>
             {(data) => (
               <div className="space-y-6">
-                <MomChart months={data.mom.months} />
-                <DailyChart daily={data.daily} />
+                <CategoryPieChart kpis={data.kpis} categories={data.categories} />
+                <BalanceTrendChart daily={data.daily} />
               </div>
             )}
           </SummarySection>

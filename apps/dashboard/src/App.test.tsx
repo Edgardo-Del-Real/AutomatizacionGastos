@@ -170,10 +170,12 @@ describe("App", () => {
     await user.click(screen.getByRole("button", { name: "Gráficos" }));
 
     expect(
-      screen.getByRole("heading", { name: "Comparación mes a mes" }),
+      screen.getByRole("heading", { name: "¿Dónde está tu dinero?" }),
     ).toBeInTheDocument();
     expect(
-      screen.getByRole("heading", { name: "Actividad diaria" }),
+      screen.getByRole("heading", {
+        name: "Evolución del saldo acumulado",
+      }),
     ).toBeInTheDocument();
     expect(screen.queryByRole("heading", { name: "Ingresos" })).toBeNull();
     expect(screen.queryByRole("table")).toBeNull();
@@ -237,7 +239,7 @@ describe("App", () => {
       expect(screen.getByText("No hay movimientos aún.")).toBeInTheDocument(),
     );
     // No partial charts and the list section is not mounted.
-    expect(screen.queryByText("Comparación mes a mes")).toBeNull();
+    expect(screen.queryByText("¿Dónde está tu dinero?")).toBeNull();
     expect(screen.queryByRole("table")).toBeNull();
   });
 
@@ -277,7 +279,7 @@ describe("App", () => {
 
     // No partial KPI cards / charts render from the malformed payload.
     expect(screen.queryByRole("heading", { name: "Ingresos" })).toBeNull();
-    expect(screen.queryByText("Comparación mes a mes")).toBeNull();
+    expect(screen.queryByText("¿Dónde está tu dinero?")).toBeNull();
     expect(screen.queryByText("$ 1.500,00")).toBeNull();
     expect(screen.queryByRole("table")).toBeNull();
 

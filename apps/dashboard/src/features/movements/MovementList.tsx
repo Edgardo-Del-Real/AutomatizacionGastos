@@ -17,7 +17,7 @@ const TYPE_LABELS: Record<MovementType, string> = {
 };
 
 const ACTION_CLASS =
-  "rounded-lg border border-border bg-surface px-2.5 py-1 text-xs font-semibold text-ink transition-colors hover:bg-canvas focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent";
+  "rounded-control border border-border bg-surface px-2.5 py-1 text-xs font-semibold text-ink transition-colors hover:bg-surface-raised focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-soft";
 
 function sortByOccurredAtDesc(a: Date, b: Date): number {
   return b.getTime() - a.getTime();
@@ -47,7 +47,7 @@ export function MovementList({ refreshToken, onMutated }: MovementListProps) {
         <button
           type="button"
           onClick={state.retry}
-          className="mt-4 inline-flex items-center rounded-lg bg-accent px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-accent-strong focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
+          className="mt-4 inline-flex items-center rounded-control bg-accent px-4 py-2 text-sm font-semibold text-on-accent transition-colors hover:bg-accent-strong focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-soft"
         >
           Reintentar
         </button>
@@ -94,70 +94,76 @@ export function MovementList({ refreshToken, onMutated }: MovementListProps) {
           </p>
         </div>
         <MovementFilters value={filters} onChange={setFilters} />
-        <div className="overflow-x-auto">
-          <table className="w-full min-w-full text-left text-sm">
-            <thead>
-              <tr className="border-b border-border text-xs tracking-wide text-ink-faint uppercase">
-                <th className="px-4 py-3 font-medium sm:px-6">Fecha</th>
-                <th className="px-4 py-3 font-medium sm:px-6">Tipo</th>
-                <th className="px-4 py-3 text-right font-medium sm:px-6">
-                  Monto
-                </th>
-                <th className="px-4 py-3 font-medium sm:px-6">Moneda</th>
-                <th className="px-4 py-3 font-medium sm:px-6">Categoría</th>
-                <th className="px-4 py-3 font-medium sm:px-6">Nota</th>
-                <th className="px-4 py-3 font-medium sm:px-6">Acciones</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-border">
-              {visible.map((movement) =>
-                movement.id === editingId ? (
-                  <tr key={movement.id} className="bg-canvas">
-                    <td colSpan={7} className="px-4 py-4 sm:px-6">
-                      <MovementEditForm
-                        movement={movement}
-                        refreshToken={refreshToken}
-                        onSaved={() => {
-                          setEditingId(null);
-                          onMutated?.();
-                        }}
-                        onCancel={() => setEditingId(null)}
-                      />
-                    </td>
-                  </tr>
-                ) : (
-                  <tr
-                    key={movement.id}
-                    className="transition-colors hover:bg-canvas"
-                  >
-                    <td className="px-4 py-3 whitespace-nowrap tabular-nums sm:px-6">
-                      {movement.occurredAt.toISOString().slice(0, 10)}
-                    </td>
-                    <td className="px-4 py-3 whitespace-nowrap sm:px-6">
-                      <span
-                        className={
+<div className="overflow-x-auto">
+            <table className="w-full min-w-full text-left text-sm">
+              <thead>
+                <tr className="border-b border-border text-xs tracking-wide text-ink-faint uppercase">
+                  <th className="px-4 py-3 font-medium sm:px-6">Fecha</th>
+                  <th className="px-4 py-3 font-medium sm:px-6">Tipo</th>
+                  <th className="px-4 py-3 text-right font-medium sm:px-6">
+                    Monto
+                  </th>
+                  <th className="px-4 py-3 font-medium sm:px-6">Moneda</th>
+                  <th className="px-4 py-3 font-medium sm:px-6">Categoría</th>
+                  <th className="px-4 py-3 font-medium sm:px-6">Nota</th>
+                  <th className="px-4 py-3 font-medium sm:px-6">Acciones</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-border">
+                {visible.map((movement) =>
+                  movement.id === editingId ? (
+                    <tr key={movement.id} className="bg-surface-raised">
+                      <td colSpan={7} className="px-0 py-0">
+                        <MovementEditForm
+                          movement={movement}
+                          refreshToken={refreshToken}
+                          onSaved={() => {
+                            setEditingId(null);
+                            onMutated?.();
+                          }}
+                          onCancel={() => setEditingId(null)}
+                        />
+                      </td>
+                    </tr>
+                  ) : (
+                    <tr
+                      key={movement.id}
+                      className="transition-colors even:bg-white/[0.02] hover:bg-white/5"
+                    >
+                      <td className="px-4 py-3 whitespace-nowrap tabular-nums sm:px-6">
+                        {movement.occurredAt.toISOString().slice(0, 10)}
+                      </td>
+                      <td className="px-4 py-3 whitespace-nowrap sm:px-6">
+                        <span
+                          className={
+                            movement.type === "INCOME"
+                              ? "inline-flex items-center rounded-full bg-income-soft px-2 py-0.5 text-xs font-medium text-income"
+                              : "inline-flex items-center rounded-full bg-expense-soft px-2 py-0.5 text-xs font-medium text-expense"
+                          }
+                        >
+                          {TYPE_LABELS[movement.type]}
+                        </span>
+                      </td>
+                      <td
+                        className={`px-4 py-3 text-right whitespace-nowrap sm:px-6 ${
                           movement.type === "INCOME"
-                            ? "inline-flex items-center rounded-full bg-accent-soft px-2 py-0.5 text-xs font-medium text-accent-strong"
-                            : "inline-flex items-center rounded-full bg-canvas px-2 py-0.5 text-xs font-medium text-ink-soft"
-                        }
+                            ? "font-mono font-semibold text-income tabular-nums"
+                            : "font-mono font-semibold text-expense tabular-nums"
+                        }`}
                       >
-                        {TYPE_LABELS[movement.type]}
-                      </span>
-                    </td>
-                    <td className="px-4 py-3 text-right font-semibold whitespace-nowrap tabular-nums sm:px-6">
-                      {formatARS(movement.amount)}
-                    </td>
-                    <td className="px-4 py-3 whitespace-nowrap text-ink-soft sm:px-6">
-                      {movement.currency}
-                    </td>
-                    <td className="px-4 py-3 sm:px-6">
-                      <span className="inline-flex items-center rounded-full bg-accent-soft px-2 py-0.5 text-xs font-medium text-accent-strong">
-                        {movement.category ?? "—"}
-                      </span>
-                    </td>
-                    <td className="px-4 py-3 text-ink-soft sm:px-6">
-                      {movement.note ?? "—"}
-                    </td>
+                        {formatARS(movement.amount)}
+                      </td>
+                      <td className="px-4 py-3 whitespace-nowrap text-ink-soft sm:px-6">
+                        {movement.currency}
+                      </td>
+                      <td className="px-4 py-3 sm:px-6">
+                        <span className="inline-flex items-center rounded-full bg-accent-soft px-2 py-0.5 text-xs font-medium text-accent">
+                          {movement.category ?? "—"}
+                        </span>
+                      </td>
+                      <td className="px-4 py-3 text-ink-soft sm:px-6">
+                        {movement.note ?? "—"}
+                      </td>
                     <td className="px-4 py-3 whitespace-nowrap sm:px-6">
                       <div className="flex items-center gap-2">
                         <button

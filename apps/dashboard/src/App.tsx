@@ -2,7 +2,6 @@ import { useCallback, useState } from "react";
 
 import { OWNER_ID } from "./infra/env";
 import { BalanceTrendChart } from "./features/movements/BalanceTrendChart";
-import { CategoryBreakdown } from "./features/movements/CategoryBreakdown";
 import { CategoryCards } from "./features/movements/CategoryCards";
 import { CategoryPieChart } from "./features/movements/CategoryPieChart";
 import { KpiCards } from "./features/movements/KpiCards";
@@ -11,12 +10,11 @@ import { SummarySection } from "./features/movements/SummarySection";
 import { TopMovements } from "./features/movements/TopMovements";
 import { useMovementSummary } from "./features/movements/useMovementSummary";
 
-type DashboardSection = "kpis" | "charts" | "categories" | "movements";
+type DashboardSection = "kpis" | "charts" | "movements";
 
 const SECTIONS: ReadonlyArray<{ id: DashboardSection; label: string }> = [
   { id: "kpis", label: "KPIs" },
   { id: "charts", label: "Gráficos" },
-  { id: "categories", label: "Categorías" },
   { id: "movements", label: "Movimientos" },
 ];
 
@@ -108,6 +106,7 @@ export default function App() {
                   categories={data.categories}
                   refreshToken={refreshKey}
                 />
+                <TopMovements top={data.top} />
               </div>
             )}
           </SummarySection>
@@ -118,16 +117,6 @@ export default function App() {
               <div className="space-y-6">
                 <CategoryPieChart kpis={data.kpis} categories={data.categories} />
                 <BalanceTrendChart daily={data.daily} />
-              </div>
-            )}
-          </SummarySection>
-        )}
-        {activeSection === "categories" && (
-          <SummarySection state={summaryState}>
-            {(data) => (
-              <div className="space-y-6">
-                <CategoryBreakdown categories={data.categories} />
-                <TopMovements top={data.top} />
               </div>
             )}
           </SummarySection>

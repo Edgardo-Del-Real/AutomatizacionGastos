@@ -143,7 +143,6 @@ describe("App", () => {
     expect(buttons.map((button) => button.textContent)).toEqual([
       "KPIs",
       "Gráficos",
-      "Categorías",
       "Movimientos",
     ]);
     expect(screen.getByRole("button", { name: "KPIs" })).toHaveAttribute(
@@ -154,6 +153,9 @@ describe("App", () => {
     await waitFor(() =>
       expect(screen.getByRole("heading", { name: "Ingresos" })).toBeInTheDocument(),
     );
+    expect(
+      screen.getByRole("heading", { name: "Principales movimientos" }),
+    ).toBeInTheDocument();
     expect(screen.queryByRole("table")).toBeNull();
   });
 
@@ -183,28 +185,6 @@ describe("App", () => {
       "aria-current",
       "page",
     );
-  });
-
-  it("shows only the categories section when Categorías is selected", async () => {
-    const user = userEvent.setup();
-    fetchMovementSummaryMock.mockResolvedValue(summary);
-    fetchCategoriesMock.mockResolvedValue([]);
-
-    render(<App />);
-    await waitFor(() =>
-      expect(screen.getByRole("heading", { name: "Ingresos" })).toBeInTheDocument(),
-    );
-
-    await user.click(screen.getByRole("button", { name: "Categorías" }));
-
-    expect(
-      screen.getByRole("heading", { name: "Desglose por categoría" }),
-    ).toBeInTheDocument();
-    expect(
-      screen.getByRole("heading", { name: "Principales movimientos" }),
-    ).toBeInTheDocument();
-    expect(screen.queryByRole("heading", { name: "Ingresos" })).toBeNull();
-    expect(screen.queryByRole("table")).toBeNull();
   });
 
   it("shows the movement list (with its own fetch) when Movimientos is selected", async () => {

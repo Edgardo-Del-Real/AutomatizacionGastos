@@ -122,13 +122,10 @@ afterEach(() => {
 });
 
 describe("App", () => {
-  it("renders every section in order with Spanish labels and es-AR amounts", async () => {
+  it("renders a section navigation with four buttons and shows KPIs by default", async () => {
     fetchMovementSummaryMock.mockResolvedValue(summary);
-    fetchMovementsMock.mockResolvedValue(movements);
 
     render(<App />);
-
-    await waitFor(() => expect(screen.getByRole("table")).toBeInTheDocument());
 
     // Spanish header.
     expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent(
@@ -136,29 +133,95 @@ describe("App", () => {
     );
     expect(screen.getByText("Resumen de ingresos y gastos")).toBeInTheDocument();
 
-    const headings = screen
-      .getAllByRole("heading")
-      .map((h) => h.textContent ?? "");
-    const kpi = headings.indexOf("Ingresos");
-    const mom = headings.indexOf("Comparación mes a mes");
-    const daily = headings.indexOf("Actividad diaria");
-    const category = headings.indexOf("Desglose por categoría");
-    const top = headings.indexOf("Principales movimientos");
-    const list = headings.indexOf("Movimientos");
+    const nav = screen.getByRole("navigation", {
+      name: "Secciones del dashboard",
+    });
+    const buttons = within(nav).getAllByRole("button");
+    expect(buttons.map((button) => button.textContent)).toEqual([
+      "KPIs",
+      "Gráficos",
+      "Categorías",
+      "Movimientos",
+    ]);
+    expect(screen.getByRole("button", { name: "KPIs" })).toHaveAttribute(
+      "aria-current",
+      "page",
+    );
 
-    expect(kpi).toBeGreaterThanOrEqual(0);
-    expect(mom).toBeGreaterThan(kpi);
-    expect(daily).toBeGreaterThan(mom);
-    expect(category).toBeGreaterThan(daily);
-    expect(top).toBeGreaterThan(category);
-    expect(list).toBeGreaterThan(top);
-
-    // es-AR amounts render.
-    expect(screen.getAllByText("$ 1.500,00").length).toBeGreaterThan(0);
-    expect(screen.getAllByText("$ 3.000,00").length).toBeGreaterThan(0);
+    await waitFor(() =>
+      expect(screen.getByRole("heading", { name: "Ingresos" })).toBeInTheDocument(),
+    );
+    expect(screen.queryByRole("table")).toBeNull();
   });
 
-  it("shows a Spanish empty state for an empty summary while the list still renders", async () => {
+  it("shows only the charts section when Gráficos is selected", async () => {
+    const user = userEvent.setup();
+    fetchMovementSummaryMock.mockResolvedValue(summary);
+
+    render(<App />);
+    await waitFor(() =>
+      expect(screen.getByRole("heading", { name: "Ingresos" })).toBeInTheDocument(),
+    );
+
+    await user.click(screen.getByRole("button", { name: "Gráficos" }));
+
+    expect(
+      screen.getByRole("heading", { name: "Comparación mes a mes" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("heading", { name: "Actividad diaria" }),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Ingresos" })).toBeNull();
+    expect(screen.queryByRole("table")).toBeNull();
+    expect(screen.getByRole("button", { name: "Gráficos" })).toHaveAttribute(
+      "aria-current",
+      "page",
+    );
+  });
+
+  it("shows only the categories section when Categorías is selected", async () => {
+    const user = userEvent.setup();
+    fetchMovementSummaryMock.mockResolvedValue(summary);
+
+    render(<App />);
+    await waitFor(() =>
+      expect(screen.getByRole("heading", { name: "Ingresos" })).toBeInTheDocument(),
+    );
+
+    await user.click(screen.getByRole("button", { name: "Categorías" }));
+
+    expect(
+      screen.getByRole("heading", { name: "Desglose por categoría" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("heading", { name: "Principales movimientos" }),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Ingresos" })).toBeNull();
+    expect(screen.queryByRole("table")).toBeNull();
+  });
+
+  it("shows the movement list (with its own fetch) when Movimientos is selected", async () => {
+    const user = userEvent.setup();
+    fetchMovementSummaryMock.mockResolvedValue(summary);
+    fetchMovementsMock.mockResolvedValue(movements);
+
+    render(<App />);
+    expect(fetchMovementSummaryMock).toHaveBeenCalledTimes(1);
+    expect(fetchMovementsMock).not.toHaveBeenCalled();
+
+    await user.click(screen.getByRole("button", { name: "Movimientos" }));
+
+    await waitFor(() => expect(screen.getByRole("table")).toBeInTheDocument());
+    expect(fetchMovementsMock).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole("heading", { name: "Movimientos" })).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Ingresos" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Movimientos" })).toHaveAttribute(
+      "aria-current",
+      "page",
+    );
+  });
+
+  it("shows a Spanish empty state for an empty summary in the default section", async () => {
     fetchMovementSummaryMock.mockResolvedValue(emptySummary);
     fetchMovementsMock.mockResolvedValue(movements);
 
@@ -167,9 +230,9 @@ describe("App", () => {
     await waitFor(() =>
       expect(screen.getByText("No hay movimientos aún.")).toBeInTheDocument(),
     );
-    // No partial charts, but the separate list section still renders.
+    // No partial charts and the list section is not mounted.
     expect(screen.queryByText("Comparación mes a mes")).toBeNull();
-    expect(await screen.findByRole("table")).toBeInTheDocument();
+    expect(screen.queryByRole("table")).toBeNull();
   });
 
   it("shows a Spanish error with retry for the summary and recovers", async () => {
@@ -187,12 +250,13 @@ describe("App", () => {
     await user.click(screen.getByRole("button", { name: /reintentar/i }));
 
     await waitFor(() =>
-      expect(screen.getByText("Comparación mes a mes")).toBeInTheDocument(),
+      expect(screen.getByRole("heading", { name: "Ingresos" })).toBeInTheDocument(),
     );
     expect(fetchMovementSummaryMock).toHaveBeenCalledTimes(2);
   });
 
-  it("surfaces an error state for a malformed summary without crashing or rendering partial data", async () => {
+  it("surfaces an error state for a malformed summary without rendering partial data", async () => {
+    const user = userEvent.setup();
     // A contract mismatch surfaces as a validation ApiError, not partial data.
     fetchMovementSummaryMock.mockRejectedValue(
       new ApiError("validation", { issues: [] }),
@@ -205,10 +269,13 @@ describe("App", () => {
     expect(alert).toHaveTextContent(/no se pudieron cargar los indicadores/i);
 
     // No partial KPI cards / charts render from the malformed payload.
+    expect(screen.queryByRole("heading", { name: "Ingresos" })).toBeNull();
     expect(screen.queryByText("Comparación mes a mes")).toBeNull();
     expect(screen.queryByText("$ 1.500,00")).toBeNull();
+    expect(screen.queryByRole("table")).toBeNull();
 
-    // The independent movement list section still renders.
+    // The independent movement list section is still reachable via navigation.
+    await user.click(screen.getByRole("button", { name: "Movimientos" }));
     expect(await screen.findByRole("table")).toBeInTheDocument();
   });
 
@@ -220,6 +287,7 @@ describe("App", () => {
     deleteMovementMock.mockResolvedValue(undefined);
 
     render(<App />);
+    await user.click(screen.getByRole("button", { name: "Movimientos" }));
     await waitFor(() => expect(screen.getByRole("table")).toBeInTheDocument());
     expect(fetchMovementsMock).toHaveBeenCalledTimes(1);
     expect(fetchMovementSummaryMock).toHaveBeenCalledTimes(1);
@@ -250,6 +318,7 @@ describe("App", () => {
     patchMovementMock.mockResolvedValue(movements[0]!);
 
     render(<App />);
+    await user.click(screen.getByRole("button", { name: "Movimientos" }));
     await waitFor(() => expect(screen.getByRole("table")).toBeInTheDocument());
 
     const firstRow = within(screen.getAllByRole("row")[1]!);

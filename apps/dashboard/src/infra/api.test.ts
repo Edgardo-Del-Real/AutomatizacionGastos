@@ -24,6 +24,7 @@ const validSummary: MovementSummary = {
     avgPerMovement: 500,
     maxAmount: 1000,
     count: 3,
+    countThisMonth: 1,
   },
   mom: {
     months: [

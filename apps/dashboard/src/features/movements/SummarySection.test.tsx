@@ -18,6 +18,7 @@ const summary: MovementSummary = {
     avgPerMovement: 500,
     maxAmount: 1200,
     count: 6,
+    countThisMonth: 2,
   },
   mom: {
     months: [
@@ -65,6 +66,7 @@ const emptySummary: MovementSummary = {
     avgPerMovement: 0,
     maxAmount: 0,
     count: 0,
+    countThisMonth: 0,
   },
   mom: { months: [] },
   daily: [],

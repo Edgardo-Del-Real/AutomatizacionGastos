@@ -2,6 +2,7 @@ import { useCallback, useState } from "react";
 
 import { OWNER_ID } from "./infra/env";
 import { CategoryBreakdown } from "./features/movements/CategoryBreakdown";
+import { CategoryCards } from "./features/movements/CategoryCards";
 import { DailyChart } from "./features/movements/DailyChart";
 import { KpiCards } from "./features/movements/KpiCards";
 import { MomChart } from "./features/movements/MomChart";
@@ -100,7 +101,15 @@ export default function App() {
       <div className="mx-auto w-full max-w-6xl px-4 py-8 sm:px-6 lg:px-8">
         {activeSection === "kpis" && (
           <SummarySection state={summaryState}>
-            {(data) => <KpiCards kpis={data.kpis} />}
+            {(data) => (
+              <div className="space-y-6">
+                <KpiCards kpis={data.kpis} />
+                <CategoryCards
+                  categories={data.categories}
+                  refreshToken={refreshKey}
+                />
+              </div>
+            )}
           </SummarySection>
         )}
         {activeSection === "charts" && (

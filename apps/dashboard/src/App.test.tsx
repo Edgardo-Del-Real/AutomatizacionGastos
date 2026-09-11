@@ -32,6 +32,7 @@ const summary: MovementSummary = {
     avgPerMovement: 500,
     maxAmount: 1200,
     count: 6,
+    countThisMonth: 2,
   },
   mom: {
     months: [
@@ -79,6 +80,7 @@ const emptySummary: MovementSummary = {
     avgPerMovement: 0,
     maxAmount: 0,
     count: 0,
+    countThisMonth: 0,
   },
   mom: { months: [] },
   daily: [],
@@ -124,6 +126,7 @@ afterEach(() => {
 describe("App", () => {
   it("renders a section navigation with four buttons and shows KPIs by default", async () => {
     fetchMovementSummaryMock.mockResolvedValue(summary);
+    fetchCategoriesMock.mockResolvedValue([]);
 
     render(<App />);
 
@@ -157,6 +160,7 @@ describe("App", () => {
   it("shows only the charts section when Gráficos is selected", async () => {
     const user = userEvent.setup();
     fetchMovementSummaryMock.mockResolvedValue(summary);
+    fetchCategoriesMock.mockResolvedValue([]);
 
     render(<App />);
     await waitFor(() =>
@@ -182,6 +186,7 @@ describe("App", () => {
   it("shows only the categories section when Categorías is selected", async () => {
     const user = userEvent.setup();
     fetchMovementSummaryMock.mockResolvedValue(summary);
+    fetchCategoriesMock.mockResolvedValue([]);
 
     render(<App />);
     await waitFor(() =>
@@ -204,6 +209,7 @@ describe("App", () => {
     const user = userEvent.setup();
     fetchMovementSummaryMock.mockResolvedValue(summary);
     fetchMovementsMock.mockResolvedValue(movements);
+    fetchCategoriesMock.mockResolvedValue([]);
 
     render(<App />);
     expect(fetchMovementSummaryMock).toHaveBeenCalledTimes(1);
@@ -241,6 +247,7 @@ describe("App", () => {
       .mockRejectedValueOnce(new ApiError("network"))
       .mockResolvedValueOnce(summary);
     fetchMovementsMock.mockResolvedValue(movements);
+    fetchCategoriesMock.mockResolvedValue([]);
 
     render(<App />);
 

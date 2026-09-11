@@ -102,6 +102,7 @@ export const movementSummarySchema = z.object({
     avgPerMovement: z.number(),
     maxAmount: z.number(),
     count: z.number(),
+    countThisMonth: z.number(),
   }),
   mom: z.object({
     months: z.array(

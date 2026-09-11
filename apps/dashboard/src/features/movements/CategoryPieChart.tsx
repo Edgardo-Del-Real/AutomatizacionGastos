@@ -1,4 +1,12 @@
-import { Cell, Pie, PieChart, ResponsiveContainer, Tooltip } from "recharts";
+import {
+  Cell,
+  Pie,
+  PieChart,
+  ResponsiveContainer,
+  Sector,
+  Tooltip,
+  type PieSectorDataItem,
+} from "recharts";
 
 import type { MovementSummary } from "@rita/contracts";
 
@@ -39,6 +47,31 @@ function PieTooltip({ active, payload }: PieTooltipProps) {
   );
 }
 
+/** Active sector: renders the hovered slice slightly larger (no animation). */
+function renderActiveShape(props: PieSectorDataItem) {
+  const {
+    cx = 0,
+    cy = 0,
+    innerRadius = 0,
+    outerRadius = 0,
+    startAngle = 0,
+    endAngle = 0,
+    fill = "var(--color-accent)",
+  } = props;
+
+  return (
+    <Sector
+      cx={cx}
+      cy={cy}
+      innerRadius={innerRadius}
+      outerRadius={outerRadius + 5}
+      startAngle={startAngle}
+      endAngle={endAngle}
+      fill={fill}
+    />
+  );
+}
+
 export function CategoryPieChart({
   kpis,
   categories,
@@ -61,53 +94,10 @@ export function CategoryPieChart({
           Sin datos.
         </p>
       ) : (
-        <>
-          <div className="relative mt-4">
-            <ResponsiveContainer
-              width="100%"
-              height={260}
-              initialDimension={{ width: 600, height: 260 }}
-              role="img"
-              aria-label="Gráfico de torta por categorías"
-            >
-              <PieChart>
-                <Pie
-                  data={slices}
-                  dataKey="value"
-                  nameKey="name"
-                  innerRadius="62%"
-                  outerRadius="88%"
-                  paddingAngle={2}
-                  stroke="var(--color-surface)"
-                  isAnimationActive={false}
-                >
-                  {slices.map((slice) => (
-                    <Cell key={slice.id} fill={slice.color} />
-                  ))}
-                </Pie>
-                <Tooltip
-                  cursor={{ fill: "var(--color-accent-soft)" }}
-                  content={<PieTooltip />}
-                />
-              </PieChart>
-            </ResponsiveContainer>
-            <div
-              aria-hidden="true"
-              className="pointer-events-none absolute inset-0 flex items-center justify-center"
-            >
-              <div className="text-center">
-                <p className="text-xs font-medium tracking-wide text-ink-faint uppercase">
-                  Total
-                </p>
-                <p className="mt-0.5 font-mono text-lg font-bold tabular-nums text-ink">
-                  {formatARS(kpis.income)}
-                </p>
-              </div>
-            </div>
-          </div>
+        <div className="mt-4 grid items-center gap-6 lg:grid-cols-[minmax(0,340px)_1fr]">
           <ul
             aria-label="Leyenda de categorías"
-            className="mt-4 grid grid-cols-1 gap-2 sm:grid-cols-2"
+            className="grid gap-2"
           >
             {slices.map((slice) => (
               <li
@@ -134,7 +124,57 @@ export function CategoryPieChart({
               </li>
             ))}
           </ul>
-        </>
+          <div className="relative">
+            <ResponsiveContainer
+              width="100%"
+              height={260}
+              initialDimension={{ width: 600, height: 260 }}
+              role="img"
+              aria-label="Gráfico de torta por categorías"
+            >
+              <PieChart>
+                <Pie
+                  data={slices}
+                  dataKey="value"
+                  nameKey="name"
+                  innerRadius="62%"
+                  outerRadius="88%"
+                  paddingAngle={2}
+                  stroke="var(--color-surface)"
+                  isAnimationActive={false}
+                  className="cursor-pointer"
+                  activeShape={renderActiveShape}
+                >
+                  {slices.map((slice) => (
+                    <Cell
+                      key={slice.id}
+                      fill={slice.color}
+                      style={{ cursor: "pointer" }}
+                    />
+                  ))}
+                </Pie>
+                <Tooltip
+                  cursor={{ fill: "var(--color-accent-soft)" }}
+                  content={<PieTooltip />}
+                  isAnimationActive={false}
+                />
+              </PieChart>
+            </ResponsiveContainer>
+            <div
+              aria-hidden="true"
+              className="pointer-events-none absolute inset-0 flex items-center justify-center"
+            >
+              <div className="text-center">
+                <p className="text-xs font-medium tracking-wide text-ink-faint uppercase">
+                  Total
+                </p>
+                <p className="mt-0.5 font-mono text-lg font-bold tabular-nums text-ink">
+                  {formatARS(kpis.income)}
+                </p>
+              </div>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

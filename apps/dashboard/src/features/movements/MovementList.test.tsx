@@ -4,12 +4,21 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { Movement } from "@rita/contracts";
 
-import { ApiError, fetchMovements } from "../../infra/api";
+import {
+  ApiError,
+  deleteMovement,
+  fetchCategories,
+  fetchMovements,
+  patchMovement,
+} from "../../infra/api";
 import { MovementList } from "./MovementList";
 
 vi.mock("../../infra/api", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../infra/api")>()),
   fetchMovements: vi.fn(),
+  fetchCategories: vi.fn(),
+  patchMovement: vi.fn(),
+  deleteMovement: vi.fn(),
 }));
 
 const movements: Movement[] = [
@@ -38,6 +47,9 @@ const movements: Movement[] = [
 ];
 
 const fetchMovementsMock = vi.mocked(fetchMovements);
+const fetchCategoriesMock = vi.mocked(fetchCategories);
+const patchMovementMock = vi.mocked(patchMovement);
+const deleteMovementMock = vi.mocked(deleteMovement);
 
 afterEach(() => {
   vi.clearAllMocks();
@@ -125,5 +137,130 @@ describe("MovementList", () => {
     await waitFor(() =>
       expect(fetchMovementsMock).toHaveBeenLastCalledWith("default", {}),
     );
+  });
+
+  it("exposes edit and delete actions on every movement row", async () => {
+    fetchMovementsMock.mockResolvedValue(movements);
+    fetchCategoriesMock.mockResolvedValue([]);
+
+    render(<MovementList />);
+    await waitFor(() => expect(screen.getByRole("table")).toBeInTheDocument());
+
+    const rows = screen.getAllByRole("row");
+    expect(rows).toHaveLength(3); // header + 2 movement rows
+    expect(
+      within(rows[1]!).getByRole("button", { name: /editar/i }),
+    ).toBeInTheDocument();
+    expect(
+      within(rows[1]!).getByRole("button", { name: /eliminar/i }),
+    ).toBeInTheDocument();
+    expect(
+      within(rows[2]!).getByRole("button", { name: /editar/i }),
+    ).toBeInTheDocument();
+    expect(
+      within(rows[2]!).getByRole("button", { name: /eliminar/i }),
+    ).toBeInTheDocument();
+  });
+
+  it("edits a movement from the row and bumps refresh on success", async () => {
+    const user = userEvent.setup();
+    fetchMovementsMock.mockResolvedValue(movements);
+    fetchCategoriesMock.mockResolvedValue([
+      { name: "sueldo", keywords: [] },
+      { name: "alquiler", keywords: [] },
+    ]);
+    patchMovementMock.mockResolvedValue(movements[0]!);
+    const onMutated = vi.fn();
+
+    render(<MovementList onMutated={onMutated} refreshToken={0} />);
+    await waitFor(() => expect(screen.getByRole("table")).toBeInTheDocument());
+
+    const firstRow = within(screen.getAllByRole("row")[1]!);
+    await user.click(firstRow.getByRole("button", { name: /editar/i }));
+
+    const form = await screen.findByRole("form", { name: "Editar movimiento" });
+    await user.clear(within(form).getByLabelText("Nota"));
+    await user.type(within(form).getByLabelText("Nota"), "sueldo agosto");
+
+    await user.click(screen.getByRole("button", { name: /guardar/i }));
+
+    await waitFor(() =>
+      expect(patchMovementMock).toHaveBeenCalledWith("i1", "default", {
+        note: "sueldo agosto",
+      }),
+    );
+    expect(onMutated).toHaveBeenCalledTimes(1);
+  });
+
+  it("confirms deletion through a dialog, calls deleteMovement, and bumps refresh", async () => {
+    const user = userEvent.setup();
+    fetchMovementsMock.mockResolvedValue(movements);
+    deleteMovementMock.mockResolvedValue(undefined);
+    const onMutated = vi.fn();
+
+    render(<MovementList onMutated={onMutated} refreshToken={0} />);
+    await waitFor(() => expect(screen.getByRole("table")).toBeInTheDocument());
+
+    const firstRow = within(screen.getAllByRole("row")[1]!);
+    await user.click(firstRow.getByRole("button", { name: /eliminar/i }));
+
+    const dialog = screen.getByRole("dialog");
+    expect(dialog).toHaveAttribute("aria-modal", "true");
+    await user.click(
+      within(dialog).getByRole("button", { name: /eliminar/i }),
+    );
+
+    await waitFor(() =>
+      expect(deleteMovementMock).toHaveBeenCalledWith("i1", "default"),
+    );
+    await waitFor(() => expect(onMutated).toHaveBeenCalledTimes(1));
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("cancelling the delete dialog does nothing", async () => {
+    const user = userEvent.setup();
+    fetchMovementsMock.mockResolvedValue(movements);
+    const onMutated = vi.fn();
+
+    render(<MovementList onMutated={onMutated} />);
+    await waitFor(() => expect(screen.getByRole("table")).toBeInTheDocument());
+
+    const firstRow = within(screen.getAllByRole("row")[1]!);
+    await user.click(firstRow.getByRole("button", { name: /eliminar/i }));
+    await user.click(
+      within(screen.getByRole("dialog")).getByRole("button", {
+        name: /cancelar/i,
+      }),
+    );
+
+    expect(deleteMovementMock).not.toHaveBeenCalled();
+    expect(onMutated).not.toHaveBeenCalled();
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(screen.getAllByRole("row")).toHaveLength(3);
+  });
+
+  it("shows a Spanish error and keeps the row when deletion fails", async () => {
+    const user = userEvent.setup();
+    fetchMovementsMock.mockResolvedValue(movements);
+    deleteMovementMock.mockRejectedValue(new ApiError("http", { status: 500 }));
+    const onMutated = vi.fn();
+
+    render(<MovementList onMutated={onMutated} />);
+    await waitFor(() => expect(screen.getByRole("table")).toBeInTheDocument());
+
+    const firstRow = within(screen.getAllByRole("row")[1]!);
+    await user.click(firstRow.getByRole("button", { name: /eliminar/i }));
+    await user.click(
+      within(screen.getByRole("dialog")).getByRole("button", {
+        name: /eliminar/i,
+      }),
+    );
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      /no se pudo eliminar/i,
+    );
+    expect(onMutated).not.toHaveBeenCalled();
+    expect(screen.getAllByRole("row")).toHaveLength(3);
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
   });
 });

@@ -117,4 +117,21 @@ describe("useMovements", () => {
     await waitFor(() => expect(result.current.status).toBe("success"));
     expect(fetchMovementsMock).toHaveBeenCalledTimes(2);
   });
+
+  it("refetches when the refreshToken changes", async () => {
+    fetchMovementsMock.mockResolvedValue(movements);
+
+    const { result, rerender } = renderHook(
+      ({ token }) => useMovements("default", {}, token),
+      { initialProps: { token: 0 } },
+    );
+
+    await waitFor(() => expect(result.current.status).toBe("success"));
+    expect(fetchMovementsMock).toHaveBeenCalledTimes(1);
+
+    rerender({ token: 1 });
+
+    await waitFor(() => expect(fetchMovementsMock).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(result.current.status).toBe("success"));
+  });
 });

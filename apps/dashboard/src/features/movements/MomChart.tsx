@@ -1,10 +1,26 @@
-import { Bar, BarChart, ResponsiveContainer, XAxis, YAxis } from "recharts";
+import {
+  Bar,
+  BarChart,
+  CartesianGrid,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis,
+} from "recharts";
 
 import type { MovementSummary } from "@rita/contracts";
 
 import { momPercent } from "./calculations";
+import { formatARS } from "../../infra/currency";
 
 type Months = MovementSummary["mom"]["months"];
+
+const TOOLTIP_STYLE = {
+  backgroundColor: "var(--color-surface-raised)",
+  border: "1px solid var(--color-border)",
+  borderRadius: 8,
+  color: "var(--color-ink)",
+} as const;
 
 export function MomChart({ months }: { months: Months }) {
   const data = months.map((month, index) => {
@@ -21,17 +37,6 @@ export function MomChart({ months }: { months: Months }) {
       <p className="mt-0.5 text-sm text-ink-soft">
         Variación del balance entre meses consecutivos
       </p>
-      <ul aria-label="Variación mes a mes" className="mt-4 space-y-1">
-        {data.slice(1).map((point) => (
-          <li key={point.month} className="text-sm text-ink-soft">
-            {point.month}:{" "}
-            <span className="font-semibold text-ink tabular-nums">
-              {point.pct !== null && point.pct > 0 ? "+" : ""}
-              {point.pct?.toFixed(1)}%
-            </span>
-          </li>
-        ))}
-      </ul>
       <ResponsiveContainer
         width="100%"
         height={240}
@@ -41,6 +46,11 @@ export function MomChart({ months }: { months: Months }) {
         className="mt-4"
       >
         <BarChart data={data} barCategoryGap="18%">
+          <CartesianGrid
+            stroke="var(--color-border)"
+            strokeDasharray="3 3"
+            vertical={false}
+          />
           <XAxis
             dataKey="month"
             interval={0}
@@ -53,6 +63,22 @@ export function MomChart({ months }: { months: Months }) {
             tickLine={false}
             tick={{ fill: "var(--color-ink-faint)", fontSize: 12 }}
             width={52}
+          />
+          <Tooltip
+            cursor={{ fill: "var(--color-accent-soft)" }}
+            contentStyle={TOOLTIP_STYLE}
+            labelFormatter={(_, payload) => {
+              const entry = Array.isArray(payload) ? payload[0] : undefined;
+              const datum = entry?.payload as
+                | { month?: string; pct?: number | null }
+                | undefined;
+              const pctText =
+                datum?.pct == null
+                  ? "—"
+                  : `${datum.pct > 0 ? "+" : ""}${datum.pct.toFixed(1)}%`;
+              return `${datum?.month ?? ""} · ${pctText}`;
+            }}
+            formatter={(value) => [formatARS(Number(value)), "Balance"]}
           />
           <Bar
             dataKey="balance"

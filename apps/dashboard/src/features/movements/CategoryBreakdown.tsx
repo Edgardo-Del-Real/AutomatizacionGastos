@@ -14,21 +14,35 @@ export function CategoryBreakdown({ categories }: { categories: Categories }) {
       {categories.length === 0 ? (
         <p className="mt-4 text-sm text-ink-soft">Sin categorías.</p>
       ) : (
-        <ul aria-label="Categorías" className="mt-4 space-y-2">
-          {categories.map((category) => (
-            <li
-              key={category.name}
-              className="flex items-center justify-between gap-4 text-sm"
-            >
-              <span className="font-medium text-ink">{category.name}</span>
-              <span className="text-ink-soft tabular-nums">
-                <span>Gastos {Math.round(category.expensePercent)}%</span>
-                <span className="ml-2">
-                  Ingresos {Math.round(category.incomePercent)}%
-                </span>
-              </span>
-            </li>
-          ))}
+        <ul aria-label="Categorías" className="mt-4 space-y-3">
+          {categories.map((category) => {
+            const expensePct = Math.round(category.expensePercent);
+            const incomePct = Math.round(category.incomePercent);
+            const barPct = Math.max(expensePct, incomePct);
+            const barClass = expensePct > 0 ? "bg-accent" : "bg-income";
+            return (
+              <li key={category.name} className="text-sm">
+                <div className="flex items-center justify-between gap-4">
+                  <span className="font-medium text-ink">{category.name}</span>
+                  <span className="text-ink-soft tabular-nums">
+                    <span>Gastos {expensePct}%</span>
+                    <span className="ml-2">
+                      Ingresos {incomePct}%
+                    </span>
+                  </span>
+                </div>
+                <div
+                  aria-hidden="true"
+                  className="mt-1.5 h-1.5 overflow-hidden rounded-full bg-white/5"
+                >
+                  <div
+                    className={`h-full rounded-full ${barClass} transition-[width] duration-300`}
+                    style={{ width: `${barPct}%` }}
+                  />
+                </div>
+              </li>
+            );
+          })}
         </ul>
       )}
     </div>

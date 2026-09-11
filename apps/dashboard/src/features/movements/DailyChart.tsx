@@ -1,4 +1,12 @@
-import { Area, AreaChart, ResponsiveContainer, XAxis, YAxis } from "recharts";
+import {
+  Area,
+  AreaChart,
+  CartesianGrid,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis,
+} from "recharts";
 
 import type { MovementSummary } from "@rita/contracts";
 
@@ -6,6 +14,13 @@ import { dailyAverage } from "./calculations";
 import { formatARS } from "../../infra/currency";
 
 type Daily = MovementSummary["daily"];
+
+const TOOLTIP_STYLE = {
+  backgroundColor: "var(--color-surface-raised)",
+  border: "1px solid var(--color-border)",
+  borderRadius: 8,
+  color: "var(--color-ink)",
+} as const;
 
 export function DailyChart({ daily }: { daily: Daily }) {
   const average = dailyAverage(daily);
@@ -28,6 +43,25 @@ export function DailyChart({ daily }: { daily: Daily }) {
         className="mt-4"
       >
         <AreaChart data={daily}>
+          <defs>
+            <linearGradient id="dailyBalanceFill" x1="0" y1="0" x2="0" y2="1">
+              <stop
+                offset="5%"
+                stopColor="rgba(45, 212, 191, 0.25)"
+                stopOpacity={1}
+              />
+              <stop
+                offset="95%"
+                stopColor="rgba(45, 212, 191, 0)"
+                stopOpacity={0}
+              />
+            </linearGradient>
+          </defs>
+          <CartesianGrid
+            stroke="var(--color-border)"
+            strokeDasharray="3 3"
+            vertical={false}
+          />
           <XAxis
             dataKey="day"
             interval="preserveStartEnd"
@@ -41,12 +75,18 @@ export function DailyChart({ daily }: { daily: Daily }) {
             tick={{ fill: "var(--color-ink-faint)", fontSize: 12 }}
             width={52}
           />
+          <Tooltip
+            cursor={{ stroke: "var(--color-border-strong)", strokeDasharray: "4 4" }}
+            contentStyle={TOOLTIP_STYLE}
+            formatter={(value) => [formatARS(Number(value)), "Balance"]}
+          />
           <Area
             type="monotone"
             dataKey="balance"
             name="Balance"
             stroke="var(--color-accent)"
-            fill="var(--color-accent-soft)"
+            strokeWidth={2}
+            fill="url(#dailyBalanceFill)"
             isAnimationActive={false}
           />
         </AreaChart>

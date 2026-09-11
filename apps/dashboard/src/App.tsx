@@ -11,15 +11,39 @@ export default function App() {
 
   return (
     <main className="min-h-screen bg-canvas text-ink antialiased">
-      <div className="mx-auto w-full max-w-6xl px-4 py-10 sm:px-6 lg:px-8">
-        <header className="mb-8">
-          <h1 className="text-2xl font-bold tracking-tight text-ink sm:text-3xl">
-            Rita Dashboard
-          </h1>
-          <p className="mt-1 text-sm text-ink-soft">
-            Resumen de ingresos y gastos
-          </p>
-        </header>
+      <header className="sticky top-0 z-40 border-b border-border bg-canvas/80 backdrop-blur-md">
+        <div className="mx-auto w-full max-w-6xl px-4 py-4 sm:px-6 lg:px-8">
+          <div className="flex items-center gap-3">
+            <div
+              aria-hidden="true"
+              className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-gradient-to-br from-accent to-accent-strong shadow-card"
+            >
+              <svg
+                viewBox="0 0 24 24"
+                fill="none"
+                className="h-5 w-5 text-on-accent"
+              >
+                <path
+                  d="M5 13l4 4L19 7"
+                  stroke="currentColor"
+                  strokeWidth={3}
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
+              </svg>
+            </div>
+            <div>
+              <h1 className="text-lg font-bold tracking-tight text-ink sm:text-xl">
+                Rita Dashboard
+              </h1>
+              <p className="text-xs text-ink-soft sm:text-sm">
+                Resumen de ingresos y gastos
+              </p>
+            </div>
+          </div>
+        </div>
+      </header>
+      <div className="mx-auto w-full max-w-6xl px-4 py-8 sm:px-6 lg:px-8">
         <div className="space-y-8">
           <DashboardOverview refreshToken={refreshKey} />
           <MovementList refreshToken={refreshKey} onMutated={bumpRefresh} />

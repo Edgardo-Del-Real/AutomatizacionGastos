@@ -37,3 +37,34 @@ model ProcessedMessage {
   @@unique([chatId, messageId])
   @@index([ownerId])
 }
+
+model Category {
+  id        String             @id @default(cuid())
+  ownerId   String
+  name      String
+  createdAt DateTime           @default(now())
+  keywords  CategoryKeyword[]
+
+  @@unique([ownerId, name])
+  @@index([ownerId])
+}
+
+model CategoryKeyword {
+  id         String   @id @default(cuid())
+  categoryId String
+  keyword    String
+  ownerId    String
+  createdAt  DateTime @default(now())
+  category   Category @relation(fields: [categoryId], references: [id])
+
+  @@unique([ownerId, keyword])
+  @@index([ownerId])
+}
+
+model BotState {
+  ownerId           String   @id
+  state             String
+  pendingMovementId String?
+  pendingNote       String?
+  updatedAt         DateTime @updatedAt
+}

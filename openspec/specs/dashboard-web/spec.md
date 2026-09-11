@@ -27,8 +27,8 @@ The dashboard MUST fetch `GET /movements/summary` for the configured owner and M
 
 ### Requirement: Movement List
 
-The dashboard MUST fetch `GET /movements` for the owner and MUST render a table ordered by `occurredAt` descending with columns for date, type, amount (es-AR), currency, category, and note.
-(Previously: fetched the full `/expenses` list without a type column.)
+The dashboard MUST fetch `GET /movements` for the owner and MUST render a table ordered by `occurredAt` descending with columns for date, type, amount (es-AR), currency, category, and note. Each row MUST expose edit and delete actions.
+(Previously: the list was read-only with no row actions.)
 
 #### Scenario: Render movements
 
@@ -41,6 +41,12 @@ The dashboard MUST fetch `GET /movements` for the owner and MUST render a table 
 - GIVEN no movements
 - WHEN the list loads
 - THEN a Spanish empty state shows and no rows render
+
+#### Scenario: Row actions present
+
+- GIVEN a rendered movement row
+- WHEN the row is inspected
+- THEN edit and delete actions are available
 
 ### Requirement: Movement Filters
 
@@ -119,3 +125,75 @@ The dashboard MUST validate every API response against the shared movement contr
 - GIVEN a payload with missing or wrong-typed fields
 - WHEN the dashboard processes it
 - THEN the affected section shows the error state with retry, with no crash and no partial render
+
+### Requirement: Movement Edit Form
+
+The dashboard MUST provide an edit form for a movement that allows changing amount, note, and category. The category input MUST be a dropdown populated from `GET /movements/categories` for the owner. Submitting MUST call `PATCH /movements/:id` with only changed fields, and MUST clear the category when the dropdown selection is cleared (sends `null`). Invalid input MUST show a Spanish error and MUST NOT call the API.
+
+#### Scenario: Edit amount and note
+
+- GIVEN a movement row
+- WHEN the owner edits amount and note and submits
+- THEN `PATCH /movements/:id` is called with the changed fields
+
+#### Scenario: Category dropdown from owner categories
+
+- GIVEN the owner has categories
+- WHEN the edit form opens
+- THEN the dropdown lists the owner's categories from `GET /movements/categories`
+
+#### Scenario: Clear category sends null
+
+- GIVEN a movement with a category
+- WHEN the owner clears the dropdown and submits
+- THEN `PATCH /movements/:id` is called with `category: null`
+
+#### Scenario: Invalid amount blocked
+
+- GIVEN an invalid (non-positive) amount in the form
+- WHEN the owner submits
+- THEN a Spanish error shows and no API call is made
+
+### Requirement: Movement Delete with Confirmation
+
+The dashboard MUST confirm before deleting a movement. Confirming MUST call `DELETE /movements/:id` and, on success, remove the row and refresh the affected data. Cancelling MUST do nothing. A failed delete MUST show a Spanish error and keep the row.
+
+#### Scenario: Confirmed delete
+
+- GIVEN a movement row
+- WHEN the owner confirms deletion
+- THEN `DELETE /movements/:id` is called and the row is removed after success
+
+#### Scenario: Cancelled delete
+
+- GIVEN a movement row
+- WHEN the owner cancels the confirm dialog
+- THEN no API call is made and the row remains
+
+#### Scenario: Failed delete
+
+- GIVEN a movement whose delete fails
+- WHEN the owner confirms deletion
+- THEN a Spanish error shows and the row remains
+
+### Requirement: Auto-Refresh After Mutations
+
+After any successful mutation (create/edit/delete), the dashboard MUST refresh both the movement list and the summary (KPIs, categories, top lists) so they stay coherent. The dashboard MUST use a single App-level refresh token that, when bumped, triggers both the list and summary hooks to re-fetch. The refresh MUST happen without a full page reload.
+
+#### Scenario: Delete refreshes list and summary
+
+- GIVEN a successful delete
+- WHEN the refresh token bumps
+- THEN both the list and the summary re-fetch
+
+#### Scenario: Edit refreshes list and summary
+
+- GIVEN a successful edit
+- WHEN the refresh token bumps
+- THEN both the list and the summary re-fetch
+
+#### Scenario: Refresh without reload
+
+- GIVEN a successful mutation
+- WHEN the data refreshes
+- THEN it happens in place without a full page reload

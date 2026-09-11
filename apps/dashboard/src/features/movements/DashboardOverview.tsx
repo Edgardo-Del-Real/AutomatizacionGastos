@@ -6,8 +6,12 @@ import { MomChart } from "./MomChart";
 import { TopMovements } from "./TopMovements";
 import { useMovementSummary } from "./useMovementSummary";
 
-export function DashboardOverview() {
-  const state = useMovementSummary(OWNER_ID);
+type DashboardOverviewProps = {
+  refreshToken?: number;
+};
+
+export function DashboardOverview({ refreshToken }: DashboardOverviewProps) {
+  const state = useMovementSummary(OWNER_ID, refreshToken);
 
   if (state.status === "error") {
     return (

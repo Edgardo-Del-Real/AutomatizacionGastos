@@ -92,4 +92,23 @@ describe("useMovementSummary", () => {
     await waitFor(() => expect(result.current.status).toBe("success"));
     expect(fetchMovementSummaryMock).toHaveBeenCalledTimes(2);
   });
+
+  it("refetches when the refreshToken changes", async () => {
+    fetchMovementSummaryMock.mockResolvedValue(summary);
+
+    const { result, rerender } = renderHook(
+      ({ token }) => useMovementSummary("default", token),
+      { initialProps: { token: 0 } },
+    );
+
+    await waitFor(() => expect(result.current.status).toBe("success"));
+    expect(fetchMovementSummaryMock).toHaveBeenCalledTimes(1);
+
+    rerender({ token: 1 });
+
+    await waitFor(() =>
+      expect(fetchMovementSummaryMock).toHaveBeenCalledTimes(2),
+    );
+    await waitFor(() => expect(result.current.status).toBe("success"));
+  });
 });

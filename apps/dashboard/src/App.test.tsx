@@ -1,16 +1,26 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { Movement, MovementSummary } from "@rita/contracts";
 
-import { ApiError, fetchMovementSummary, fetchMovements } from "./infra/api";
+import {
+  ApiError,
+  deleteMovement,
+  fetchCategories,
+  fetchMovementSummary,
+  fetchMovements,
+  patchMovement,
+} from "./infra/api";
 import App from "./App";
 
 vi.mock("./infra/api", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./infra/api")>()),
   fetchMovementSummary: vi.fn(),
   fetchMovements: vi.fn(),
+  fetchCategories: vi.fn(),
+  patchMovement: vi.fn(),
+  deleteMovement: vi.fn(),
 }));
 
 const summary: MovementSummary = {
@@ -103,6 +113,9 @@ const movements: Movement[] = [
 
 const fetchMovementSummaryMock = vi.mocked(fetchMovementSummary);
 const fetchMovementsMock = vi.mocked(fetchMovements);
+const fetchCategoriesMock = vi.mocked(fetchCategories);
+const patchMovementMock = vi.mocked(patchMovement);
+const deleteMovementMock = vi.mocked(deleteMovement);
 
 afterEach(() => {
   vi.clearAllMocks();
@@ -197,5 +210,63 @@ describe("App", () => {
 
     // The independent movement list section still renders.
     expect(await screen.findByRole("table")).toBeInTheDocument();
+  });
+
+  it("refreshes the list and the summary in place after a confirmed delete", async () => {
+    const user = userEvent.setup();
+    fetchMovementSummaryMock.mockResolvedValue(summary);
+    fetchMovementsMock.mockResolvedValue(movements);
+    fetchCategoriesMock.mockResolvedValue([]);
+    deleteMovementMock.mockResolvedValue(undefined);
+
+    render(<App />);
+    await waitFor(() => expect(screen.getByRole("table")).toBeInTheDocument());
+    expect(fetchMovementsMock).toHaveBeenCalledTimes(1);
+    expect(fetchMovementSummaryMock).toHaveBeenCalledTimes(1);
+
+    const firstRow = within(screen.getAllByRole("row")[1]!);
+    await user.click(firstRow.getByRole("button", { name: /eliminar/i }));
+    await user.click(
+      within(screen.getByRole("dialog")).getByRole("button", {
+        name: /eliminar/i,
+      }),
+    );
+
+    await waitFor(() =>
+      expect(deleteMovementMock).toHaveBeenCalledWith("i1", "default"),
+    );
+    await waitFor(() => expect(fetchMovementsMock).toHaveBeenCalledTimes(2));
+    await waitFor(() =>
+      expect(fetchMovementSummaryMock).toHaveBeenCalledTimes(2),
+    );
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("refreshes the list and the summary after an edit is saved", async () => {
+    const user = userEvent.setup();
+    fetchMovementSummaryMock.mockResolvedValue(summary);
+    fetchMovementsMock.mockResolvedValue(movements);
+    fetchCategoriesMock.mockResolvedValue([{ name: "sueldo", keywords: [] }]);
+    patchMovementMock.mockResolvedValue(movements[0]!);
+
+    render(<App />);
+    await waitFor(() => expect(screen.getByRole("table")).toBeInTheDocument());
+
+    const firstRow = within(screen.getAllByRole("row")[1]!);
+    await user.click(firstRow.getByRole("button", { name: /editar/i }));
+    const form = await screen.findByRole("form", { name: "Editar movimiento" });
+    await user.clear(within(form).getByLabelText("Nota"));
+    await user.type(within(form).getByLabelText("Nota"), "sueldo agosto");
+    await user.click(screen.getByRole("button", { name: /guardar/i }));
+
+    await waitFor(() =>
+      expect(patchMovementMock).toHaveBeenCalledWith("i1", "default", {
+        note: "sueldo agosto",
+      }),
+    );
+    await waitFor(() => expect(fetchMovementsMock).toHaveBeenCalledTimes(2));
+    await waitFor(() =>
+      expect(fetchMovementSummaryMock).toHaveBeenCalledTimes(2),
+    );
   });
 });

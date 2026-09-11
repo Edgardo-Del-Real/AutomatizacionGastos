@@ -1,8 +1,14 @@
 import {
+  categoryListSchema,
   listMovementsSchema,
+  movementSchema,
   movementSummarySchema,
 } from "@rita/contracts";
-import type { Movement, MovementSummary } from "@rita/contracts";
+import type {
+  Movement,
+  MovementSummary,
+  OwnerCategory,
+} from "@rita/contracts";
 import { z } from "zod";
 
 export type ApiErrorKind = "network" | "http" | "validation";
@@ -45,20 +51,54 @@ export type MovementListFilters = {
   q?: string;
 };
 
+/** Fields that may be updated on a movement via `PATCH /movements/:id`. */
+export type MovementPatch = {
+  amount?: number;
+  note?: string | null;
+  category?: string | null;
+};
+
+/**
+ * Core request helper. GET requests with no headers go out as a plain
+ * `fetch(path)`; mutations send `method`, `headers`, and a JSON `body`.
+ * A `204` response short-circuits before any JSON parsing (no schema needed).
+ */
 async function request<T>(
+  method: string,
   path: string,
-  ownerId: string,
+  body: unknown,
+  headers: Record<string, string>,
   schema: z.ZodType<T>,
-  params: Record<string, string> = {},
-): Promise<T> {
-  const query = new URLSearchParams({ ownerId });
-  for (const [key, value] of Object.entries(params)) {
-    if (value !== undefined && value !== "") query.set(key, value);
+): Promise<T>;
+async function request(
+  method: string,
+  path: string,
+  body: unknown,
+  headers: Record<string, string>,
+): Promise<void>;
+async function request<T>(
+  method: string,
+  path: string,
+  body: unknown,
+  headers: Record<string, string>,
+  schema?: z.ZodType<T>,
+): Promise<T | void> {
+  const hasHeaders = Object.keys(headers).length > 0;
+  const init: RequestInit = { method };
+  if (hasHeaders) init.headers = headers;
+  if (body !== undefined) {
+    init.headers = {
+      ...(init.headers as Record<string, string>),
+      "Content-Type": "application/json",
+    };
+    init.body = JSON.stringify(body);
   }
 
   let response: Response;
   try {
-    response = await fetch(`${path}?${query.toString()}`);
+    response = await (method === "GET" && !hasHeaders && body === undefined
+      ? fetch(path)
+      : fetch(path, init));
   } catch {
     throw new ApiError("network");
   }
@@ -67,11 +107,19 @@ async function request<T>(
     throw new ApiError("http", { status: response.status });
   }
 
+  if (response.status === 204) {
+    return undefined;
+  }
+
   let json: unknown;
   try {
     json = await response.json();
   } catch {
     throw new ApiError("validation", { issues: [] });
+  }
+
+  if (!schema) {
+    return undefined;
   }
 
   const parsed = schema.safeParse(json);
@@ -82,7 +130,13 @@ async function request<T>(
 }
 
 export function fetchMovementSummary(ownerId: string): Promise<MovementSummary> {
-  return request("/api/movements/summary", ownerId, movementSummarySchema);
+  return request(
+    "GET",
+    `/api/movements/summary?${new URLSearchParams({ ownerId })}`,
+    undefined,
+    {},
+    movementSummarySchema,
+  );
 }
 
 export function fetchMovements(
@@ -95,5 +149,41 @@ export function fetchMovements(
   if (filters.to) params.to = filters.to;
   if (filters.category) params.category = filters.category;
   if (filters.q) params.q = filters.q;
-  return request("/api/movements", ownerId, listMovementsSchema, params);
+  return request(
+    "GET",
+    `/api/movements?${new URLSearchParams({ ownerId, ...params })}`,
+    undefined,
+    {},
+    listMovementsSchema,
+  );
+}
+
+export function fetchCategories(ownerId: string): Promise<OwnerCategory[]> {
+  return request(
+    "GET",
+    `/api/movements/categories?${new URLSearchParams({ ownerId })}`,
+    undefined,
+    {},
+    categoryListSchema,
+  );
+}
+
+export function patchMovement(
+  id: string,
+  ownerId: string,
+  patch: MovementPatch,
+): Promise<Movement> {
+  return request(
+    "PATCH",
+    `/api/movements/${id}`,
+    patch,
+    { "x-owner-id": ownerId },
+    movementSchema,
+  );
+}
+
+export function deleteMovement(id: string, ownerId: string): Promise<void> {
+  return request("DELETE", `/api/movements/${id}`, undefined, {
+    "x-owner-id": ownerId,
+  });
 }

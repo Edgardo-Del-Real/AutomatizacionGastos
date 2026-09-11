@@ -9,7 +9,10 @@ export type MovementSummaryState = AsyncState<MovementSummary> & {
   retry: () => void;
 };
 
-export function useMovementSummary(ownerId: string): MovementSummaryState {
+export function useMovementSummary(
+  ownerId: string,
+  refreshToken?: number,
+): MovementSummaryState {
   const [state, setState] = useState<AsyncState<MovementSummary>>({
     status: "idle",
   });
@@ -33,7 +36,7 @@ export function useMovementSummary(ownerId: string): MovementSummaryState {
     return () => {
       cancelled = true;
     };
-  }, [ownerId, attempt]);
+  }, [ownerId, attempt, refreshToken]);
 
   const retry = useCallback(() => setAttempt((n) => n + 1), []);
 

@@ -11,6 +11,7 @@ export type MovementsState = AsyncState<Movement[]> & { retry: () => void };
 export function useMovements(
   ownerId: string,
   filters: MovementListFilters = {},
+  refreshToken?: number,
 ): MovementsState {
   const [state, setState] = useState<AsyncState<Movement[]>>({ status: "idle" });
   const [attempt, setAttempt] = useState(0);
@@ -37,7 +38,7 @@ export function useMovements(
     return () => {
       cancelled = true;
     };
-  }, [ownerId, attempt, filtersKey]);
+  }, [ownerId, attempt, filtersKey, refreshToken]);
 
   const retry = useCallback(() => setAttempt((n) => n + 1), []);
 

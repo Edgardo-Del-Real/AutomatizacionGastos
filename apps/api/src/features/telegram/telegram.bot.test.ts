@@ -2,9 +2,18 @@ import { Bot, BotError } from "grammy";
 import type { Update } from "grammy/types";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { buildApp } from "../../app";
+import type { CategoryService } from "../categories/categories.service";
 import type { ExpenseService } from "../expenses/expenses.service";
 import type { ProcessedMessageRepository } from "../messages/message.repository";
-import { createTelegramBot, redactToken, registerGracefulStop } from "./telegram.bot";
+import type { MovementService } from "../movements/movements.service";
+import type { BotStateRepository } from "./bot-state.repository";
+import {
+  createTelegramBot,
+  recordApiCalls,
+  redactToken,
+  registerGracefulStop,
+  type RecordedApiCall,
+} from "./telegram.bot";
 import { TelegramService } from "./telegram.service";
 
 const TOKEN = "123456:TEST_TOKEN";
@@ -25,7 +34,7 @@ function textUpdate(overrides?: { fromId?: number; chatId?: number; messageId?: 
   };
 }
 
-function buildOfflineBot(service: TelegramService): Bot {
+function buildOfflineBot(service: TelegramService, recorded: RecordedApiCall[]): Bot {
   const bot = createTelegramBot(TOKEN, service);
   bot.botInfo = {
     id: 987654,
@@ -42,10 +51,93 @@ function buildOfflineBot(service: TelegramService): Bot {
     can_manage_bots: false,
     supports_join_request_queries: false,
   };
-  bot.api.config.use(() => {
-    throw new Error("network call in offline test");
-  });
+  bot.api.config.use(recordApiCalls(recorded));
   return bot;
+}
+
+type BotHarness = {
+  service: TelegramService;
+  bot: Bot;
+  recorded: RecordedApiCall[];
+  mockRecord: ReturnType<typeof vi.fn>;
+  mockCreateExpense: ReturnType<typeof vi.fn>;
+};
+
+function makeBotHarness(): BotHarness {
+  const recorded: RecordedApiCall[] = [];
+  const messageRepository = { recordProcessed: vi.fn() } as unknown as ProcessedMessageRepository;
+  const expenseService = {
+    createExpense: vi.fn(async () => ({
+      id: "mov-1",
+      ownerId,
+      amount: 100,
+      currency: "ARS",
+      category: "otro",
+      note: null,
+      occurredAt: new Date(),
+      createdAt: new Date(),
+      type: "EXPENSE",
+    })),
+  } as unknown as ExpenseService;
+  const movementService = {
+    updateMovement: vi.fn(async (_owner: string, id: string) => ({
+      id,
+      ownerId,
+      amount: 100,
+      currency: "ARS",
+      category: "otro",
+      note: null,
+      occurredAt: new Date(),
+      createdAt: new Date(),
+      type: "EXPENSE",
+    })),
+  } as unknown as MovementService;
+  const categoryService = {
+    listCategories: vi.fn(async () => [
+      { id: "c1", ownerId, name: "otro", createdAt: new Date(), keywords: [] },
+    ]),
+    matchNote: vi.fn(async () => null),
+    createCategory: vi.fn(async (_owner: string, name: string) => ({
+      id: `cat-${name}`,
+      ownerId,
+      name,
+      createdAt: new Date(),
+    })),
+    associateKeyword: vi.fn(async () => undefined),
+    renameCategory: vi.fn(async () => null),
+    ensureOtro: vi.fn(async () => ({
+      id: "otro-id",
+      ownerId,
+      name: "otro",
+      createdAt: new Date(),
+    })),
+    assertOwnerCategory: vi.fn(async () => undefined),
+  } as unknown as CategoryService;
+  const botStateRepository = {
+    get: vi.fn(async () => null),
+    set: vi.fn(async () => undefined),
+    clear: vi.fn(async () => undefined),
+  } as unknown as BotStateRepository;
+
+  const service = new TelegramService({
+    messageRepository,
+    expenseService,
+    movementService,
+    categoryService,
+    botStateRepository,
+    ownerChatId: OWNER_CHAT_ID,
+    ownerId,
+    logger: () => undefined,
+  });
+  const bot = buildOfflineBot(service, recorded);
+
+  return {
+    service,
+    bot,
+    recorded,
+    mockRecord: vi.mocked(messageRepository.recordProcessed),
+    mockCreateExpense: vi.mocked(expenseService.createExpense),
+  };
 }
 
 describe("redactToken", () => {
@@ -69,40 +161,48 @@ describe("redactToken", () => {
   });
 });
 
-describe("createTelegramBot", () => {
-  let messageRepository: ProcessedMessageRepository;
-  let expenseService: ExpenseService;
-  let mockRecord: ReturnType<typeof vi.fn>;
-  let mockCreateExpense: ReturnType<typeof vi.fn>;
-  let service: TelegramService;
-  let bot: Bot;
+describe("createTelegramBot (offline reply recording)", () => {
+  let h: BotHarness;
 
   beforeEach(() => {
-    messageRepository = { recordProcessed: vi.fn() } as unknown as ProcessedMessageRepository;
-    expenseService = { createExpense: vi.fn() } as unknown as ExpenseService;
-    mockRecord = vi.mocked(messageRepository.recordProcessed);
-    mockCreateExpense = vi.mocked(expenseService.createExpense);
-    mockCreateExpense.mockResolvedValue(undefined);
-    service = new TelegramService({ messageRepository, expenseService, ownerChatId: OWNER_CHAT_ID, ownerId });
-    bot = buildOfflineBot(service);
+    h = makeBotHarness();
+  });
+
+  it("records the reply payload offline instead of throwing (D9 bundle)", async () => {
+    // "hola" has no amount -> help reply flows through ctx.reply -> bot.api.sendMessage.
+    await expect(h.bot.handleUpdate(textUpdate({ text: "hola" }))).resolves.toBeUndefined();
+
+    expect(h.recorded.some((call) => call.method === "sendMessage")).toBe(true);
+    const sendMessage = h.recorded.find((call) => call.method === "sendMessage");
+    expect(String(sendMessage?.payload?.chat_id)).toBe(String(OWNER_CHAT_ID));
+    expect(String(sendMessage?.payload?.text)).toContain("No entendí");
+  });
+
+  it("records the correction question when a movement falls back to 'otro'", async () => {
+    await expect(h.bot.handleUpdate(textUpdate({ text: "$2000 supermercado" }))).resolves.toBeUndefined();
+
+    expect(h.mockCreateExpense).toHaveBeenCalledTimes(1);
+    const sendMessage = h.recorded.find((call) => call.method === "sendMessage");
+    expect(sendMessage).toBeDefined();
+    expect(String(sendMessage?.payload?.text)).toContain("supermercado");
   });
 
   it("processes an owner text update with zero network calls", async () => {
-    await expect(bot.handleUpdate(textUpdate())).resolves.toBeUndefined();
+    await expect(h.bot.handleUpdate(textUpdate())).resolves.toBeUndefined();
 
-    expect(mockRecord).toHaveBeenCalledWith("123456789", "42", ownerId);
-    expect(mockCreateExpense).toHaveBeenCalledTimes(1);
-    expect(mockCreateExpense).toHaveBeenCalledWith(
-      expect.objectContaining({ amount: 2500, currency: "ARS", note: "café" }),
+    expect(h.mockRecord).toHaveBeenCalledWith("123456789", "42", ownerId);
+    expect(h.mockCreateExpense).toHaveBeenCalledTimes(1);
+    expect(h.mockCreateExpense).toHaveBeenCalledWith(
+      expect.objectContaining({ amount: 2500, currency: "ARS", note: "café", category: "otro" }),
       ownerId,
     );
   });
 
   it("processes the same update with a different chat id as a distinct message", async () => {
-    await bot.handleUpdate(textUpdate({ messageId: 777, chatId: 111111111, text: "pan 100" }));
-    await bot.handleUpdate(textUpdate({ messageId: 777, chatId: 222222222, text: "leche 200" }));
+    await h.bot.handleUpdate(textUpdate({ messageId: 777, chatId: 111111111, text: "pan 100" }));
+    await h.bot.handleUpdate(textUpdate({ messageId: 777, chatId: 222222222, text: "leche 200" }));
 
-    expect(mockCreateExpense).toHaveBeenCalledTimes(2);
+    expect(h.mockCreateExpense).toHaveBeenCalledTimes(2);
   });
 
   it("does nothing for an edited_message update", async () => {
@@ -118,10 +218,11 @@ describe("createTelegramBot", () => {
       },
     };
 
-    await expect(bot.handleUpdate(edited)).resolves.toBeUndefined();
+    await expect(h.bot.handleUpdate(edited)).resolves.toBeUndefined();
 
-    expect(mockRecord).not.toHaveBeenCalled();
-    expect(mockCreateExpense).not.toHaveBeenCalled();
+    expect(h.mockRecord).not.toHaveBeenCalled();
+    expect(h.mockCreateExpense).not.toHaveBeenCalled();
+    expect(h.recorded).toHaveLength(0);
   });
 
   it("does nothing for a non-text message", async () => {
@@ -136,28 +237,27 @@ describe("createTelegramBot", () => {
       },
     };
 
-    await expect(bot.handleUpdate(photo)).resolves.toBeUndefined();
+    await expect(h.bot.handleUpdate(photo)).resolves.toBeUndefined();
 
-    expect(mockRecord).not.toHaveBeenCalled();
-    expect(mockCreateExpense).not.toHaveBeenCalled();
+    expect(h.mockRecord).not.toHaveBeenCalled();
+    expect(h.mockCreateExpense).not.toHaveBeenCalled();
+    expect(h.recorded).toHaveLength(0);
   });
 
   it("stops cleanly when the polling loop is not running", async () => {
-    await expect(bot.stop()).resolves.toBeUndefined();
-    expect(bot.isRunning()).toBe(false);
+    await expect(h.bot.stop()).resolves.toBeUndefined();
+    expect(h.bot.isRunning()).toBe(false);
   });
 
   it("logs a redacted error from the error handler without leaking the token", async () => {
     const boom = new Error(`Telegram API 401: https://api.telegram.org/bot${TOKEN}/getUpdates`);
-    mockRecord.mockRejectedValue(boom);
+    h.mockRecord.mockRejectedValue(boom);
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
 
-    // Middleware errors propagate as BotError (grammY handleUpdate rethrows)
-    const botError = await bot.handleUpdate(textUpdate()).catch((err: unknown) => err);
+    const botError = await h.bot.handleUpdate(textUpdate()).catch((err: unknown) => err);
     expect(botError).toBeInstanceOf(BotError);
 
-    // The long-polling loop routes that BotError to the registered catch handler
-    await bot.errorHandler(botError as BotError);
+    await h.bot.errorHandler(botError as BotError);
 
     const logged = errorSpy.mock.calls.map((call) => String(call[0])).join("\n");
     expect(logged).toContain("[REDACTED]");
@@ -170,7 +270,8 @@ describe("createTelegramBot", () => {
 describe("graceful stop on shutdown", () => {
   it("stops the bot when the Fastify app closes via the onClose hook", async () => {
     const app = buildApp({ logger: false });
-    const bot = buildOfflineBot(app.telegramService);
+    const recorded: RecordedApiCall[] = [];
+    const bot = buildOfflineBot(app.telegramService, recorded);
     registerGracefulStop(app, bot);
     const stopSpy = vi.spyOn(bot, "stop");
 

@@ -136,11 +136,11 @@ describe("TelegramService (integration)", () => {
     movements = await prisma.expense.findMany({ where: { ownerId } });
     expect(movements[0]?.category).toBe("Transporte");
     const learned = await prisma.categoryKeyword.findMany({ where: { ownerId } });
-    expect(learned).toHaveLength(1);
-    expect(learned[0]?.keyword).toBe("uber");
+    expect(learned.map((rule) => rule.keyword)).toEqual(expect.arrayContaining(["uber", "viaje"]));
     const state = await prisma.botState.findUnique({ where: { ownerId } });
     expect(state?.state).toBe("idle");
     expect(replies.at(-1)).toContain("Transporte");
+    expect(replies.at(-1)).toContain("Aprendí");
   });
 
   it("correction: an unknown single-word answer auto-creates the category and applies it", async () => {
@@ -172,6 +172,22 @@ describe("TelegramService (integration)", () => {
     const state = await prisma.botState.findUnique({ where: { ownerId } });
     expect(state?.state).toBe("awaiting_category");
     expect(state?.pendingMovementId).toBe(movements[1]?.id);
+  });
+
+  it("correction: learns up to three significant keywords and a later note auto-matches", async () => {
+    await seedCategories(["Cafe"]);
+    const reply = async (): Promise<void> => undefined;
+
+    await service.handleUpdate(textUpdate({ messageId: 1, text: "$2500 compre un cafe en el kiosco" }), reply);
+    await service.handleUpdate(textUpdate({ messageId: 2, text: "Cafe" }), reply);
+
+    const learned = await prisma.categoryKeyword.findMany({ where: { ownerId } });
+    expect(learned.map((rule) => rule.keyword).sort()).toEqual(["cafe", "kiosco"]);
+
+    await service.handleUpdate(textUpdate({ messageId: 3, text: "$300 cafe con leche" }), reply);
+    const movements = await prisma.expense.findMany({ where: { ownerId }, orderBy: { createdAt: "asc" } });
+    expect(movements).toHaveLength(2);
+    expect(movements[1]?.category).toBe("Cafe");
   });
 
   it("learning: a later note containing the learned keyword auto-matches", async () => {

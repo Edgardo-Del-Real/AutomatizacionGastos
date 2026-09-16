@@ -52,8 +52,13 @@ export function correctionQuestionReply(note: string | null): string {
   return `¿A qué categoría corresponde ${part}?`;
 }
 
-export function correctionDoneReply(category: string): string {
-  return `Listo, el movimiento quedó en "${category}".`;
+export function correctionDoneReply(category: string, keywords: string[] = []): string {
+  const base = `Listo, el movimiento quedó en "${category}".`;
+  if (keywords.length === 0) {
+    return base;
+  }
+  const learned = keywords.map((keyword) => `"${keyword}"`).join(", ");
+  return `${base} Aprendí: ${learned}.`;
 }
 
 export function categoryCreatedReply(name: string): string {

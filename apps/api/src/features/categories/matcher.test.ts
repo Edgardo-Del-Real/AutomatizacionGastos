@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { firstSignificantWord, matchCategory, normalizeForMatch } from "./matcher";
+import { matchCategory, normalizeForMatch, significantKeywords } from "./matcher";
 
 const createdAt = (iso: string): Date => new Date(iso);
 
@@ -60,20 +60,27 @@ describe("matchCategory", () => {
   });
 });
 
-describe("firstSignificantWord", () => {
-  it("returns the first token containing a letter, skipping amount tokens", () => {
-    expect(firstSignificantWord("$8000 super")).toBe("super");
+describe("significantKeywords", () => {
+  it("prefers the LAST significant words, skipping stopwords and short tokens", () => {
+    expect(significantKeywords("compre un cafe en el kiosco")).toEqual(["cafe", "kiosco"]);
   });
 
-  it("returns null when no token contains a letter", () => {
-    expect(firstSignificantWord("8000")).toBeNull();
+  it("normalizes and dedupes keywords, keeping the last occurrence", () => {
+    expect(significantKeywords("compré Café")).toEqual(["cafe"]);
+    expect(significantKeywords("cafe transporte cafe")).toEqual(["transporte", "cafe"]);
   });
 
-  it("returns the token itself when it mixes letters and digits", () => {
-    expect(firstSignificantWord("pague en cafe2go")).toBe("pague");
+  it("returns an empty list when no significant token remains", () => {
+    expect(significantKeywords("8000")).toEqual([]);
+    expect(significantKeywords("compre el pan hoy")).toEqual(["pan"]);
   });
 
-  it("handles leading whitespace", () => {
-    expect(firstSignificantWord("  $500 uber viaje")).toBe("uber");
+  it("respects the max keyword count, keeping the trailing ones", () => {
+    expect(significantKeywords("compre un cafe en el kiosco", 1)).toEqual(["kiosco"]);
+  });
+
+  it("drops tokens without letters and keeps mixed alphanumeric tokens", () => {
+    expect(significantKeywords("pague en cafe2go")).toEqual(["cafe2go"]);
+    expect(significantKeywords("  $500 uber viaje")).toEqual(["uber", "viaje"]);
   });
 });

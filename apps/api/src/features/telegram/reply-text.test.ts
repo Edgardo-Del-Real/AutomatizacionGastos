@@ -92,8 +92,14 @@ describe("reply builders", () => {
     expect(correctionQuestionReply("uber viaje")).toContain("uber viaje");
   });
 
-  it("builds the correction done confirmation", () => {
-    expect(correctionDoneReply("Transporte")).toContain("Transporte");
+  it("builds the correction done confirmation without learned keywords", () => {
+    expect(correctionDoneReply("Transporte")).toBe('Listo, el movimiento quedó en "Transporte".');
+  });
+
+  it("builds the correction done confirmation listing the learned keywords", () => {
+    expect(correctionDoneReply("Cafe", ["cafe", "kiosco"])).toBe(
+      'Listo, el movimiento quedó en "Cafe". Aprendí: "cafe", "kiosco".',
+    );
   });
 
   it("builds command confirmations", () => {

@@ -174,6 +174,45 @@ describe("TelegramService (integration)", () => {
     expect(state?.pendingMovementId).toBe(movements[1]?.id);
   });
 
+  it("correction: 'no' keeps the movement as 'otro' and clears the state", async () => {
+    await seedCategories([]);
+    const replies: string[] = [];
+    const reply = async (text: string): Promise<void> => {
+      replies.push(text);
+    };
+
+    await service.handleUpdate(textUpdate({ messageId: 1, text: "$1000 panaderia" }), reply);
+    await service.handleUpdate(textUpdate({ messageId: 2, text: "no" }), reply);
+
+    const movements = await prisma.expense.findMany({ where: { ownerId } });
+    expect(movements).toHaveLength(1);
+    expect(movements[0]?.category).toBe("otro");
+    const state = await prisma.botState.findUnique({ where: { ownerId } });
+    expect(state?.state).toBe("idle");
+    expect(replies.at(-1)).toBe('Listo, quedó en "otro".');
+  });
+
+  it("correction: a multi-word non-category answer lists the categories and keeps the state open", async () => {
+    await seedCategories(["Cafe"]);
+    const replies: string[] = [];
+    const reply = async (text: string): Promise<void> => {
+      replies.push(text);
+    };
+
+    await service.handleUpdate(textUpdate({ messageId: 1, text: "$1000 panaderia" }), reply);
+    await service.handleUpdate(textUpdate({ messageId: 2, text: "no se qué categoria" }), reply);
+
+    const state = await prisma.botState.findUnique({ where: { ownerId } });
+    expect(state?.state).toBe("awaiting_category");
+    expect(replies.at(-1)).toContain("No encontré la categoría");
+    expect(replies.at(-1)).toContain("Cafe");
+
+    // The pending correction is still resolvable afterwards.
+    await service.handleUpdate(textUpdate({ messageId: 3, text: "Cafe" }), reply);
+    const movements = await prisma.expense.findMany({ where: { ownerId } });
+    expect(movements[0]?.category).toBe("Cafe");
+  });
+
   it("correction: learns up to three significant keywords and a later note auto-matches", async () => {
     await seedCategories(["Cafe"]);
     const reply = async (): Promise<void> => undefined;

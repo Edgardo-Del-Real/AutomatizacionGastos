@@ -47,9 +47,8 @@ export function setupDoneReply(created: string[]): string {
   return `Categorías creadas: ${created.join(", ")}.`;
 }
 
-export function correctionQuestionReply(note: string | null): string {
-  const part = note === null ? "este movimiento" : `"${truncateNote(note)}"`;
-  return `¿A qué categoría corresponde ${part}?`;
+export function correctionOfferReply(amount: number, note: string | null, category: string): string {
+  return `${successReply(amount, note, category)}. ¿Querés asignarle otra categoría? Escribí el nombre o "no".`;
 }
 
 export function correctionDoneReply(category: string, keywords: string[] = []): string {
@@ -59,6 +58,19 @@ export function correctionDoneReply(category: string, keywords: string[] = []): 
   }
   const learned = keywords.map((keyword) => `"${keyword}"`).join(", ");
   return `${base} Aprendí: ${learned}.`;
+}
+
+export function otroKeptReply(): string {
+  return `Listo, quedó en "otro".`;
+}
+
+export function categoryNotFoundReply(name: string, categories: string[]): string {
+  const quoted = categories.map((category) => `"${category}"`).join(", ");
+  return `No encontré la categoría "${name}". Elegí una de estas: ${quoted}.`;
+}
+
+export function correctionAbandonedReply(): string {
+  return `Ojo: dejé sin asignar la corrección anterior (el movimiento queda en "otro"). Ahora registro el nuevo.`;
 }
 
 export function categoryCreatedReply(name: string): string {

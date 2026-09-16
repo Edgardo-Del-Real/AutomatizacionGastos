@@ -3,15 +3,18 @@ import {
   categoryCreatedReply,
   categoryErrorReply,
   categoryListReply,
+  categoryNotFoundReply,
   categoryRenamedReply,
+  correctionAbandonedReply,
   correctionDoneReply,
-  correctionQuestionReply,
+  correctionOfferReply,
   duplicateCategoryReply,
   formatARS,
   helpReply,
   keywordAssociatedReply,
   missingCategoryReply,
   movementMissingReply,
+  otroKeptReply,
   setupDoneReply,
   setupQuestionReply,
   setupRetryReply,
@@ -88,8 +91,10 @@ describe("reply builders", () => {
     );
   });
 
-  it("builds the correction question with the pending note", () => {
-    expect(correctionQuestionReply("uber viaje")).toContain("uber viaje");
+  it("builds the correction offer confirming the registration first and then offering reassignment", () => {
+    expect(correctionOfferReply(2500, "capuchino", "otro")).toBe(
+      'Registrado: $\u00A02.500,00 (capuchino) — Categoría: otro. ¿Querés asignarle otra categoría? Escribí el nombre o "no".',
+    );
   });
 
   it("builds the correction done confirmation without learned keywords", () => {
@@ -100,6 +105,21 @@ describe("reply builders", () => {
     expect(correctionDoneReply("Cafe", ["cafe", "kiosco"])).toBe(
       'Listo, el movimiento quedó en "Cafe". Aprendí: "cafe", "kiosco".',
     );
+  });
+
+  it("builds the keep-as-otro confirmation", () => {
+    expect(otroKeptReply()).toBe('Listo, quedó en "otro".');
+  });
+
+  it("builds the category-not-found reply listing the existing categories", () => {
+    const reply = categoryNotFoundReply("Zapateria", ["Cafe", "otro"]);
+    expect(reply).toContain('"Zapateria"');
+    expect(reply).toContain('"Cafe"');
+    expect(reply).toContain('"otro"');
+  });
+
+  it("builds the abandoned-correction warning", () => {
+    expect(correctionAbandonedReply()).toContain("otro");
   });
 
   it("builds command confirmations", () => {

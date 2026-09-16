@@ -106,6 +106,7 @@ const summaryPayload = {
     avgPerMovement: 25000,
     maxAmount: 50000,
     count: 2,
+    countThisMonth: 1,
   },
   mom: {
     months: [{ month: "2026-07", income: 0, expenses: 5000, balance: -5000 }],
@@ -131,6 +132,7 @@ describe("movementSummarySchema", () => {
     const parsed = movementSummarySchema.parse(summaryPayload);
     expect(parsed.kpis.balance).toBe(37500);
     expect(parsed.kpis.count).toBe(2);
+    expect(parsed.kpis.countThisMonth).toBe(1);
     expect(parsed.mom.months[0]?.balance).toBe(-5000);
     expect(parsed.daily[0]?.day).toBe("2026-08-01");
     expect(parsed.categories[0]?.incomePercent).toBe(100);

@@ -1,33 +1,55 @@
 @import "tailwindcss";
+@import "@fontsource-variable/inter";
+@import "@fontsource-variable/jetbrains-mono";
 
 @theme {
   --font-sans:
-    ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue",
-    Arial, "Noto Sans", sans-serif;
+    "Inter Variable", ui-sans-serif, system-ui, -apple-system, "Segoe UI",
+    Roboto, "Helvetica Neue", Arial, "Noto Sans", sans-serif;
   --font-mono:
-    ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono",
-    monospace;
+    "JetBrains Mono Variable", ui-monospace, SFMono-Regular, Menlo, Consolas,
+    "Liberation Mono", monospace;
 
-  --color-canvas: #f6f7f9;
-  --color-surface: #ffffff;
-  --color-border: #e5e7eb;
-  --color-ink: #111827;
-  --color-ink-soft: #4b5563;
-  --color-ink-faint: #9ca3af;
-  --color-accent: #0d9488;
-  --color-accent-strong: #0f766e;
-  --color-accent-soft: #ccfbf1;
-  --color-danger: #b91c1c;
+  --color-canvas: #0b0f14;
+  --color-surface: #11161d;
+  --color-surface-raised: #171e27;
+  --color-border: #202a35;
+  --color-border-strong: #2d3a48;
+  --color-ink: #eef2f6;
+  --color-ink-soft: #9aa8b8;
+  --color-ink-faint: #64748b;
+  --color-accent: #2dd4bf;
+  --color-accent-strong: #14b8a6;
+  --color-accent-soft: rgba(45, 212, 191, 0.14);
+  --color-on-accent: #052e2b;
+  --color-danger: #ef4444;
+  --color-income: #34d399;
+  --color-income-soft: rgba(52, 211, 153, 0.14);
+  --color-expense: #f87171;
+  --color-expense-soft: rgba(248, 113, 113, 0.14);
 
   --radius-card: 0.75rem;
+  --radius-control: 0.5rem;
 
   --shadow-card:
-    0 1px 2px rgb(17 24 39 / 0.04), 0 6px 20px rgb(17 24 39 / 0.05);
+    0 1px 2px rgb(0 0 0 / 0.5), 0 8px 24px rgb(0 0 0 / 0.35);
+  --shadow-float: 0 8px 32px rgb(0 0 0 / 0.5);
 }
 
 @layer base {
+  html {
+    color-scheme: dark;
+  }
+
   body {
     background-color: var(--color-canvas);
+    background-image: radial-gradient(
+      1200px 600px at 70% -10%,
+      rgba(45, 212, 191, 0.06),
+      transparent 60%
+    );
+    background-attachment: fixed;
+    background-repeat: no-repeat;
     color: var(--color-ink);
   }
 }

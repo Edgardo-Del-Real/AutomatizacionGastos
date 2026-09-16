@@ -13,12 +13,12 @@ function MovementLines({ movements }: { movements: Top["expenses"] }) {
       {movements.map((movement) => (
         <li
           key={movement.id}
-          className="flex items-center justify-between gap-4 text-sm"
+          className="flex items-center justify-between gap-4 rounded px-2 py-1.5 text-sm transition-colors hover:bg-white/5"
         >
           <span className="truncate text-ink-soft">
             {movement.note ?? movement.category ?? "—"}
           </span>
-          <span className="font-semibold text-ink tabular-nums">
+          <span className="font-mono font-semibold text-ink tabular-nums">
             {formatARS(movement.amount)}
           </span>
         </li>
@@ -36,8 +36,11 @@ export function TopMovements({ top }: { top: Top }) {
       <p className="mt-0.5 text-sm text-ink-soft">
         Mayores gastos e ingresos del período
       </p>
-      <div className="mt-4 grid gap-6 sm:grid-cols-2">
-        <section aria-label="Top gastos">
+      <div className="mt-4 grid gap-4 sm:grid-cols-2">
+        <section
+          aria-label="Top gastos"
+          className="rounded-card border border-border bg-white/[0.02] p-4"
+        >
           <h3 className="text-xs font-semibold tracking-wide text-ink-faint uppercase">
             Top gastos
           </h3>
@@ -45,7 +48,10 @@ export function TopMovements({ top }: { top: Top }) {
             <MovementLines movements={top.expenses} />
           </div>
         </section>
-        <section aria-label="Top ingresos">
+        <section
+          aria-label="Top ingresos"
+          className="rounded-card border border-border bg-white/[0.02] p-4"
+        >
           <h3 className="text-xs font-semibold tracking-wide text-ink-faint uppercase">
             Top ingresos
           </h3>

@@ -18,6 +18,8 @@ function resolveTestDatabaseUrl(): string {
   return url.toString();
 }
 
+const BA_OFFSET_MS = 3 * 60 * 60 * 1000;
+
 type SeedMovement = {
   ownerId: string;
   amount: number;
@@ -221,6 +223,7 @@ describe("movements route", () => {
         avgPerMovement: 0,
         maxAmount: 0,
         count: 0,
+        countThisMonth: 0,
       });
       expect(summary.mom.months).toHaveLength(6);
       expect(summary.daily).toHaveLength(30);
@@ -261,6 +264,41 @@ describe("movements route", () => {
       expect(june.balance).toBe(100);
       expect(july.expenses).toBe(50);
       expect(july.balance).toBe(-50);
+    });
+
+    it("counts current-month movements separately from the all-time total", async () => {
+      // Relative to now (Buenos Aires) so the test never goes stale.
+      const baNow = new Date(Date.now() - BA_OFFSET_MS);
+      const thisMonthNoon = new Date(
+        Date.UTC(baNow.getUTCFullYear(), baNow.getUTCMonth(), 5, 12, 0, 0),
+      ).toISOString();
+      const lastMonthNoon = new Date(
+        Date.UTC(baNow.getUTCFullYear(), baNow.getUTCMonth() - 1, 5, 12, 0, 0),
+      ).toISOString();
+
+      await seed({
+        ownerId: "owner-1",
+        amount: 100,
+        currency: "ARS",
+        category: "food",
+        occurredAt: thisMonthNoon,
+        type: "EXPENSE",
+      });
+      await seed({
+        ownerId: "owner-1",
+        amount: 200,
+        currency: "ARS",
+        category: "food",
+        occurredAt: lastMonthNoon,
+        type: "EXPENSE",
+      });
+
+      const response = await app.inject({ method: "GET", url: "/movements/summary?ownerId=owner-1" });
+
+      expect(response.statusCode).toBe(200);
+      const summary = response.json();
+      expect(summary.kpis.count).toBe(2);
+      expect(summary.kpis.countThisMonth).toBe(1);
     });
   });
 

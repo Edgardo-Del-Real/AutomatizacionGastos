@@ -16,7 +16,7 @@ type MovementEditFormProps = {
 };
 
 const FIELD_CLASS =
-  "mt-1 w-full rounded-lg border border-border bg-canvas px-3 py-2 text-sm text-ink focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent";
+  "mt-1 w-full rounded-control border border-border bg-surface px-3 py-2 text-sm text-ink shadow-sm transition-colors focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent-soft";
 const LABEL_CLASS = "text-xs font-medium tracking-wide text-ink-faint uppercase";
 
 export function MovementEditForm({
@@ -66,7 +66,7 @@ export function MovementEditForm({
     <form
       aria-label="Editar movimiento"
       onSubmit={handleSubmit}
-      className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4"
+      className="grid gap-3 border-y border-border-strong bg-surface-raised p-4 sm:grid-cols-2 sm:p-6 lg:grid-cols-4"
     >
       <div>
         <label htmlFor="edit-amount" className={LABEL_CLASS}>
@@ -126,14 +126,14 @@ export function MovementEditForm({
         <button
           type="submit"
           disabled={busy === "patch"}
-          className="inline-flex items-center rounded-lg bg-accent px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-accent-strong focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent disabled:opacity-60"
+          className="inline-flex items-center rounded-control bg-accent px-4 py-2 text-sm font-semibold text-on-accent transition-colors hover:bg-accent-strong focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-soft disabled:opacity-60"
         >
           Guardar
         </button>
         <button
           type="button"
           onClick={onCancel}
-          className="inline-flex items-center rounded-lg border border-border bg-surface px-4 py-2 text-sm font-semibold text-ink transition-colors hover:bg-canvas focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
+          className="inline-flex items-center rounded-control border border-border bg-surface px-4 py-2 text-sm font-semibold text-ink-soft transition-colors hover:bg-surface-raised hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-soft"
         >
           Cancelar
         </button>

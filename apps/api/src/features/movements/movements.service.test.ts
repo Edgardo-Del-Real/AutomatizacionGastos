@@ -101,3 +101,52 @@ describe("MovementService.updateMovement", () => {
     );
   });
 });
+
+describe("MovementService.getSummary", () => {
+  function makeSummaryHarness() {
+    const repository = {
+      summaryKpis: vi.fn(),
+      summaryMonths: vi.fn(async () => []),
+      summaryDaily: vi.fn(async () => []),
+      summaryCategories: vi.fn(async () => []),
+      topByType: vi.fn(async () => []),
+    } as unknown as MovementRepository;
+    const service = new MovementService(repository, {} as CategoryService);
+    return { service, summaryKpis: vi.mocked(repository.summaryKpis) };
+  }
+
+  it("exposes countThisMonth from a current-month summaryKpis call alongside the all-time kpis", async () => {
+    const { service, summaryKpis } = makeSummaryHarness();
+    summaryKpis.mockResolvedValueOnce({
+      income: 3000,
+      expenses: 1000,
+      count: 3,
+      maxAmount: 1200,
+      monthsWithData: 2,
+    });
+    summaryKpis.mockResolvedValueOnce({
+      income: 1000,
+      expenses: 400,
+      count: 2,
+      maxAmount: 500,
+      monthsWithData: 1,
+    });
+
+    const summary = await service.getSummary("default");
+
+    expect(summaryKpis).toHaveBeenCalledTimes(2);
+    expect(summaryKpis).toHaveBeenNthCalledWith(1, "default", { from: undefined, to: undefined });
+    expect(summary.kpis.count).toBe(3);
+    expect(summary.kpis.countThisMonth).toBe(2);
+
+    // The second call is scoped to the current Buenos Aires month: from the 1st
+    // to the last day of that month, derived from the month key in `from`.
+    const thisMonthPeriod = summaryKpis.mock.calls[1]?.[1] as { from: string; to: string };
+    const match = /^(\d{4})-(\d{2})-01$/.exec(thisMonthPeriod.from);
+    expect(match).not.toBeNull();
+    const lastDay = new Date(Date.UTC(Number(match![1]), Number(match![2]), 0)).getUTCDate();
+    expect(thisMonthPeriod.to).toBe(
+      `${thisMonthPeriod.from.slice(0, 7)}-${String(lastDay).padStart(2, "0")}`,
+    );
+  });
+});

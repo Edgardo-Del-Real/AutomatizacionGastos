@@ -48,14 +48,17 @@ export class MovementService {
 
   async getSummary(ownerId: string, from?: string, to?: string): Promise<MovementSummary> {
     const period: SummaryPeriod = { from, to };
-    const [kpis, months, daily, categories, topExpenses, topIncome] = await Promise.all([
-      this.repository.summaryKpis(ownerId, period),
-      this.repository.summaryMonths(ownerId),
-      this.repository.summaryDaily(ownerId),
-      this.repository.summaryCategories(ownerId, period),
-      this.repository.topByType(ownerId, "EXPENSE", TOP_LIMIT, period),
-      this.repository.topByType(ownerId, "INCOME", TOP_LIMIT, period),
-    ]);
+    const thisMonthPeriod = currentMonthPeriod();
+    const [kpis, thisMonthKpis, months, daily, categories, topExpenses, topIncome] =
+      await Promise.all([
+        this.repository.summaryKpis(ownerId, period),
+        this.repository.summaryKpis(ownerId, thisMonthPeriod),
+        this.repository.summaryMonths(ownerId),
+        this.repository.summaryDaily(ownerId),
+        this.repository.summaryCategories(ownerId, period),
+        this.repository.topByType(ownerId, "EXPENSE", TOP_LIMIT, period),
+        this.repository.topByType(ownerId, "INCOME", TOP_LIMIT, period),
+      ]);
 
     const balance = kpis.income - kpis.expenses;
     const avgPerMonth = kpis.count === 0 ? 0 : balance / kpis.monthsWithData;
@@ -94,6 +97,7 @@ export class MovementService {
         avgPerMovement,
         maxAmount: kpis.maxAmount,
         count: kpis.count,
+        countThisMonth: thisMonthKpis.count,
       },
       mom: { months: momMonths },
       daily: dailySeries,
@@ -105,6 +109,18 @@ export class MovementService {
 
 function currentBaDate(): Date {
   return new Date(Date.now() - BA_OFFSET_MS);
+}
+
+function currentMonthPeriod(): SummaryPeriod {
+  const now = currentBaDate();
+  const monthKey = formatMonthKey(now);
+  const lastDay = new Date(
+    Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 0),
+  ).getUTCDate();
+  return {
+    from: `${monthKey}-01`,
+    to: `${monthKey}-${String(lastDay).padStart(2, "0")}`,
+  };
 }
 
 function lastMonths(count: number): string[] {

@@ -49,6 +49,8 @@ type Harness = {
   mockRecord: ReturnType<typeof vi.fn>;
   mockCreateExpense: ReturnType<typeof vi.fn>;
   mockUpdateMovement: ReturnType<typeof vi.fn>;
+  mockListMovements: ReturnType<typeof vi.fn>;
+  mockGetSummary: ReturnType<typeof vi.fn>;
   mockListCategories: ReturnType<typeof vi.fn>;
   mockMatchNote: ReturnType<typeof vi.fn>;
   mockCreateCategory: ReturnType<typeof vi.fn>;
@@ -98,6 +100,8 @@ function makeHarness(): Harness {
       type: "EXPENSE",
       ...(patch as Record<string, unknown>),
     })),
+    listMovements: vi.fn(async () => []),
+    getSummary: vi.fn(async () => emptySummary()),
   } as unknown as MovementService;
   const categoryService = {
     listCategories: vi.fn(async () => []),
@@ -155,6 +159,8 @@ function makeHarness(): Harness {
     mockRecord: vi.mocked(messageRepository.recordProcessed),
     mockCreateExpense: vi.mocked(expenseService.createExpense),
     mockUpdateMovement: vi.mocked(movementService.updateMovement),
+    mockListMovements: vi.mocked(movementService.listMovements),
+    mockGetSummary: vi.mocked(movementService.getSummary),
     mockListCategories: vi.mocked(categoryService.listCategories),
     mockMatchNote: vi.mocked(categoryService.matchNote),
     mockCreateCategory: vi.mocked(categoryService.createCategory),
@@ -174,6 +180,25 @@ function seedHarnessCategories(h: Harness, names: string[]): void {
   h.mockListCategories.mockResolvedValue(
     names.map((name) => ({ id: `c-${name}`, ownerId, name, createdAt: new Date(), keywords: [] })),
   );
+}
+
+function emptySummary() {
+  return {
+    kpis: {
+      income: 0,
+      expenses: 0,
+      balance: 0,
+      avgPerMonth: 0,
+      avgPerMovement: 0,
+      maxAmount: 0,
+      count: 0,
+      countThisMonth: 0,
+    },
+    mom: { months: [{ month: "2026-09", income: 0, expenses: 0, balance: 0 }] },
+    daily: [],
+    categories: [],
+    top: { expenses: [], income: [] },
+  };
 }
 
 describe("TelegramService state machine", () => {
@@ -1172,43 +1197,235 @@ describe("TelegramService brain orchestration (llm-conversational-bot)", () => {
     expect(h.replies.at(-1)).toContain("Supermercado");
   });
 
-  it("redirects a query_balance intent honestly without creating a movement", async () => {
+  it("answers a query_balance intent with the real balance and sends the brain reply verbatim", async () => {
     seedHarnessCategories(h, ["otro"]);
+    h.mockGetSummary.mockResolvedValue({
+      kpis: {
+        income: 3000,
+        expenses: 1000,
+        balance: 2000,
+        avgPerMonth: 0,
+        avgPerMovement: 0,
+        maxAmount: 1000,
+        count: 3,
+        countThisMonth: 1,
+      },
+      mom: { months: [{ month: "2026-09", income: 1000, expenses: 500, balance: 500 }] },
+      daily: [],
+      categories: [],
+      top: { expenses: [], income: [] },
+    });
     h.mockBrainInterpret.mockResolvedValue({
       intent: "query_balance",
       amount: null,
       category: null,
       note: null,
+      query_type: null,
     });
-    h.mockBrainReply.mockResolvedValue("Todavía no puedo consultar el balance.");
+    h.mockBrainReply.mockResolvedValue("Tu balance es $ 2.000,00.");
 
-    await h.service.handleUpdate(textUpdate({ text: "cuánto gasté?", messageId: 1 }), h.reply);
+    await h.service.handleUpdate(textUpdate({ text: "cuánto me queda?", messageId: 1 }), h.reply);
 
     expect(h.mockCreateExpense).not.toHaveBeenCalled();
     expect(h.mockSetState).not.toHaveBeenCalled();
+    expect(h.mockGetSummary).toHaveBeenCalledWith(ownerId);
     expect(h.mockBrainReply).toHaveBeenCalledWith({
       intent: "query_balance",
-      ok: false,
-      action: "redirected",
+      ok: true,
+      action: "answered",
       amount: null,
       category: null,
       note: null,
+      query_type: "balance",
+      query: { query_type: "balance", balance: 2000, income: 3000, expenses: 1000 },
     });
-    expect(h.replies.at(-1)).toBe("Todavía no puedo consultar el balance.");
+    expect(h.replies.at(-1)).toBe("Tu balance es $ 2.000,00.");
   });
 
-  it("redirects query_* with the fixed fallback when the brain reply is null", async () => {
+  it("answers a query_month intent with the real data and the fixed template when the brain reply is null", async () => {
     seedHarnessCategories(h, ["otro"]);
+    h.mockGetSummary.mockResolvedValue({
+      kpis: {
+        income: 5000,
+        expenses: 2000,
+        balance: 3000,
+        avgPerMonth: 0,
+        avgPerMovement: 0,
+        maxAmount: 1500,
+        count: 5,
+        countThisMonth: 3,
+      },
+      mom: {
+        months: [
+          { month: "2026-08", income: 2000, expenses: 1000, balance: 1000 },
+          { month: "2026-09", income: 3000, expenses: 2000, balance: 1000 },
+        ],
+      },
+      daily: [],
+      categories: [],
+      top: { expenses: [], income: [] },
+    });
     h.mockBrainInterpret.mockResolvedValue({
       intent: "query_month",
       amount: null,
       category: null,
       note: null,
+      query_type: null,
     });
+    h.mockBrainReply.mockResolvedValue(null);
 
     await h.service.handleUpdate(textUpdate({ text: "cuánto gasté este mes?", messageId: 1 }), h.reply);
 
     expect(h.mockCreateExpense).not.toHaveBeenCalled();
+    expect(h.mockBrainReply).toHaveBeenCalled();
+    expect(h.replies.at(-1)).toContain(formatARS(2000));
+    expect(h.replies.at(-1)).not.toBe(queryRedirectReply());
+  });
+
+  it("answers a query/categories intent by listing the owner categories through the brain", async () => {
+    seedHarnessCategories(h, ["Cafe", "Transporte", "otro"]);
+    h.mockListCategories.mockResolvedValue([
+      { id: "c1", ownerId, name: "Cafe", createdAt: new Date(), keywords: ["cafe"] },
+      { id: "c2", ownerId, name: "Transporte", createdAt: new Date(), keywords: [] },
+      { id: "c3", ownerId, name: "otro", createdAt: new Date(), keywords: [] },
+    ]);
+    h.mockBrainInterpret.mockResolvedValue({
+      intent: "query",
+      amount: null,
+      category: null,
+      note: null,
+      query_type: "categories",
+    });
+    h.mockBrainReply.mockResolvedValue("Tenés Cafe y Transporte.");
+
+    await h.service.handleUpdate(textUpdate({ text: "cuales son las categorias disponibles?", messageId: 1 }), h.reply);
+
+    expect(h.mockCreateExpense).not.toHaveBeenCalled();
+    expect(h.mockListCategories).toHaveBeenCalledWith(ownerId);
+    expect(h.mockBrainReply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        intent: "query",
+        ok: true,
+        action: "answered",
+        query_type: "categories",
+        query: {
+          query_type: "categories",
+          categories: [
+            { name: "Cafe", keywords: ["cafe"] },
+            { name: "Transporte", keywords: [] },
+            { name: "otro", keywords: [] },
+          ],
+        },
+      }),
+    );
+    expect(h.replies.at(-1)).toBe("Tenés Cafe y Transporte.");
+  });
+
+  it("answers a query/categories intent with the fixed template when the brain reply is null", async () => {
+    seedHarnessCategories(h, ["otro"]);
+    h.mockBrainInterpret.mockResolvedValue({
+      intent: "query",
+      amount: null,
+      category: null,
+      note: null,
+      query_type: "categories",
+    });
+    h.mockBrainReply.mockResolvedValue(null);
+
+    await h.service.handleUpdate(textUpdate({ text: "que categorias tengo?", messageId: 1 }), h.reply);
+
+    expect(h.mockCreateExpense).not.toHaveBeenCalled();
+    expect(h.replies.at(-1)).toContain("otro");
+  });
+
+  it("answers a query_recent intent with the most recent movements", async () => {
+    seedHarnessCategories(h, ["otro"]);
+    h.mockListMovements.mockResolvedValue([
+      {
+        id: "m1",
+        ownerId,
+        amount: 2500,
+        currency: "ARS",
+        category: "Cafe",
+        note: "cafe con leche",
+        occurredAt: new Date("2026-09-17T12:00:00.000Z"),
+        createdAt: new Date(),
+        type: "EXPENSE",
+      },
+      {
+        id: "m2",
+        ownerId,
+        amount: 50000,
+        currency: "ARS",
+        category: null,
+        note: null,
+        occurredAt: new Date("2026-09-16T12:00:00.000Z"),
+        createdAt: new Date(),
+        type: "INCOME",
+      },
+    ]);
+    h.mockBrainInterpret.mockResolvedValue({
+      intent: "query_recent",
+      amount: null,
+      category: null,
+      note: null,
+      query_type: null,
+    });
+    h.mockBrainReply.mockResolvedValue("Tus últimos movimientos: gastaste 2500 en Cafe.");
+
+    await h.service.handleUpdate(textUpdate({ text: "ultimos movimientos", messageId: 1 }), h.reply);
+
+    expect(h.mockListMovements).toHaveBeenCalledWith(ownerId, {});
+    expect(h.mockBrainReply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        intent: "query_recent",
+        action: "answered",
+        query_type: "recent",
+        query: {
+          query_type: "recent",
+          movements: [
+            { amount: 2500, category: "Cafe", note: "cafe con leche", date: "2026-09-17", type: "EXPENSE" },
+            { amount: 50000, category: null, note: null, date: "2026-09-16", type: "INCOME" },
+          ],
+        },
+      }),
+    );
+    expect(h.replies.at(-1)).toBe("Tus últimos movimientos: gastaste 2500 en Cafe.");
+  });
+
+  it("redirects a malformed query intent without a query_type instead of executing", async () => {
+    seedHarnessCategories(h, ["otro"]);
+    h.mockBrainInterpret.mockResolvedValue({
+      intent: "query",
+      amount: null,
+      category: null,
+      note: null,
+      query_type: null,
+    });
+
+    await h.service.handleUpdate(textUpdate({ text: "quiero saber todo", messageId: 1 }), h.reply);
+
+    expect(h.mockCreateExpense).not.toHaveBeenCalled();
+    expect(h.mockListMovements).not.toHaveBeenCalled();
+    expect(h.mockGetSummary).not.toHaveBeenCalled();
+    expect(h.replies.at(-1)).toBe(queryRedirectReply());
+  });
+
+  it("redirects honestly when the query executor fails", async () => {
+    seedHarnessCategories(h, ["otro"]);
+    h.mockGetSummary.mockRejectedValue(new Error("db down"));
+    h.mockBrainInterpret.mockResolvedValue({
+      intent: "query_balance",
+      amount: null,
+      category: null,
+      note: null,
+      query_type: null,
+    });
+
+    await h.service.handleUpdate(textUpdate({ text: "cuánto me queda?", messageId: 1 }), h.reply);
+
+    expect(h.mockCreateExpense).not.toHaveBeenCalled();
+    expect(h.mockLogger).toHaveBeenCalled();
     expect(h.replies.at(-1)).toBe(queryRedirectReply());
   });
 

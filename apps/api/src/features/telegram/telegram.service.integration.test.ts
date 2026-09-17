@@ -421,26 +421,53 @@ describe("TelegramService (integration)", () => {
     expect(replies.at(-1)).toContain("Cafe");
   });
 
-  it("brain: a redirect intent creates no movement and replies honestly", async () => {
+  it("brain: a query_balance intent executes the real balance and falls back to the fixed template when the brain reply is null", async () => {
     await seedCategories([]);
     const replies: string[] = [];
     const stubbed = buildService(
       () => undefined,
       stubBrain({
         interpret: async () => ({ intent: "query_balance", amount: null, category: null, note: null }),
-        reply: async () => "Todavía no puedo consultar el balance.",
       }),
     );
 
-    await stubbed.handleUpdate(textUpdate({ messageId: 1, text: "cuánto gasté?" }), async (text) => {
+    await stubbed.handleUpdate(textUpdate({ messageId: 1, text: "cuánto me queda?" }), async (text) => {
       replies.push(text);
     });
 
     expect(await prisma.expense.count()).toBe(0);
-    // A redirect never writes state: no row means the owner stays idle.
+    // An answered query never writes state: no row means the owner stays idle.
     const state = await prisma.botState.findUnique({ where: { ownerId } });
     expect(state).toBeNull();
-    expect(replies.at(-1)).toBe("Todavía no puedo consultar el balance.");
+    expect(replies.at(-1)).toContain(formatARS(0));
+  });
+
+  it("brain: a query/categories intent lists the real categories through the brain reply", async () => {
+    await seedCategories(["Cafe", "Transporte"]);
+    const replies: string[] = [];
+    const stubbed = buildService(
+      () => undefined,
+      stubBrain({
+        interpret: async () => ({
+          intent: "query",
+          amount: null,
+          category: null,
+          note: null,
+          query_type: "categories",
+        }),
+        reply: async () => "Tenés Cafe, Transporte y otro.",
+      }),
+    );
+
+    await stubbed.handleUpdate(
+      textUpdate({ messageId: 1, text: "cuales son las categorias disponibles?" }),
+      async (text) => {
+        replies.push(text);
+      },
+    );
+
+    expect(await prisma.expense.count()).toBe(0);
+    expect(replies.at(-1)).toBe("Tenés Cafe, Transporte y otro.");
   });
 
   it("brain: an off_topic intent creates no movement and never chats", async () => {

@@ -1,4 +1,5 @@
 import type { QueryExecutionResult, RecentMovementResult } from "./query.types";
+import type { ExecutionResult } from "./bot-brain";
 
 const arsFormatter = new Intl.NumberFormat("es-AR", {
   style: "currency",
@@ -160,6 +161,26 @@ export function categoryCreatedReply(name: string): string {
   return `Categoría "${name}" creada.`;
 }
 
+export function categoryDeletedReply(name: string): string {
+  return `Categoría "${name}" borrada.`;
+}
+
+export function otroDeleteForbiddenReply(): string {
+  return 'No puedo borrar la categoría "otro": es el respaldo para los movimientos sin categoría.';
+}
+
+export function capabilitiesSummaryReply(): string {
+  return (
+    "Puedo:\n" +
+    "- registrar gastos e ingresos (monto + nota)\n" +
+    "- corregir el monto o la categoría de un movimiento\n" +
+    "- consultar tus categorías, últimos movimientos, saldo o resumen del mes\n" +
+    "- crear, borrar y renombrar categorías\n" +
+    "- asociar una palabra a una categoría\n" +
+    "- ayudarte (mandá un monto con una nota y lo cargo)"
+  );
+}
+
 export function categoryRenamedReply(from: string, to: string): string {
   return `Categoría renombrada: "${from}" → "${to}".`;
 }
@@ -194,4 +215,47 @@ export function movementMissingReply(): string {
 
 export function categoryErrorReply(message: string): string {
   return `Error: ${message}`;
+}
+
+/**
+ * Fixed fallback for the category CRUD and capabilities execution results.
+ * Mirrors `queryReplyTemplate`: renders the same facts the brain reply would.
+ */
+export function categoryCommandReplyTemplate(result: ExecutionResult): string {
+  switch (result.intent) {
+    case "create_category":
+      if (result.ok) {
+        return categoryCreatedReply(result.category ?? "");
+      }
+      if (result.error === "duplicate") {
+        return duplicateCategoryReply(result.category ?? "");
+      }
+      return categoryErrorReply(result.message ?? "no se pudo crear la categoría");
+    case "delete_category":
+      if (result.ok) {
+        return categoryDeletedReply(result.category ?? "");
+      }
+      if (result.error === "not_found") {
+        return missingCategoryReply(result.category ?? "");
+      }
+      if (result.error === "otro_forbidden") {
+        return otroDeleteForbiddenReply();
+      }
+      return categoryErrorReply(result.message ?? "no se pudo borrar la categoría");
+    case "rename_category":
+      if (result.ok) {
+        return categoryRenamedReply(result.category ?? "", result.new_name ?? "");
+      }
+      if (result.error === "not_found") {
+        return missingCategoryReply(result.category ?? "");
+      }
+      if (result.error === "duplicate") {
+        return duplicateCategoryReply(result.new_name ?? "");
+      }
+      return categoryErrorReply(result.message ?? "no se pudo renombrar la categoría");
+    case "capabilities":
+      return capabilitiesSummaryReply();
+    default:
+      return helpReply();
+  }
 }

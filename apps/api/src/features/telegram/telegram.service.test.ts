@@ -6,6 +6,7 @@ import type { MovementService } from "../movements/movements.service";
 import type { CategoryService } from "../categories/categories.service";
 import type { BotStateRepository, BotStateRecord } from "./bot-state.repository";
 import type { ConversationEnvelope, ExecutionResult } from "./bot-brain";
+import { ValidationFailedError } from "../../infra/errors";
 import {
   associateKeywordRedirectReply,
   formatARS,
@@ -54,6 +55,7 @@ type Harness = {
   mockListCategories: ReturnType<typeof vi.fn>;
   mockMatchNote: ReturnType<typeof vi.fn>;
   mockCreateCategory: ReturnType<typeof vi.fn>;
+  mockDeleteCategory: ReturnType<typeof vi.fn>;
   mockAssociateKeyword: ReturnType<typeof vi.fn>;
   mockRenameCategory: ReturnType<typeof vi.fn>;
   mockEnsureOtro: ReturnType<typeof vi.fn>;
@@ -112,6 +114,12 @@ function makeHarness(): Harness {
       name,
       createdAt: new Date(),
     })),
+    deleteCategory: vi.fn(async (owner: string, name: string) => ({
+      id: `cat-${name}`,
+      ownerId: owner,
+      name,
+      createdAt: new Date(),
+    })),
     associateKeyword: vi.fn(async () => undefined),
     renameCategory: vi.fn(async () => null),
     ensureOtro: vi.fn(async (owner: string) => ({
@@ -164,6 +172,7 @@ function makeHarness(): Harness {
     mockListCategories: vi.mocked(categoryService.listCategories),
     mockMatchNote: vi.mocked(categoryService.matchNote),
     mockCreateCategory: vi.mocked(categoryService.createCategory),
+    mockDeleteCategory: vi.mocked(categoryService.deleteCategory),
     mockAssociateKeyword: vi.mocked(categoryService.associateKeyword),
     mockRenameCategory: vi.mocked(categoryService.renameCategory),
     mockEnsureOtro: vi.mocked(categoryService.ensureOtro),
@@ -1580,5 +1589,173 @@ describe("TelegramService brain orchestration (llm-conversational-bot)", () => {
 
     expect(h.mockBrainInterpret).not.toHaveBeenCalled();
     expect(h.mockBrainReply).not.toHaveBeenCalled();
+  });
+
+  it("creates a category through the create_category intent and sends the brain reply verbatim", async () => {
+    seedHarnessCategories(h, ["otro"]);
+    h.mockBrainInterpret.mockResolvedValue({
+      intent: "create_category",
+      amount: null,
+      category: "Mascotas",
+      note: null,
+    });
+    h.mockBrainReply.mockResolvedValue("Listo, creé la categoría Mascotas.");
+
+    await h.service.handleUpdate(textUpdate({ text: "creá una categoria llamada mascotas", messageId: 1 }), h.reply);
+
+    expect(h.mockCreateCategory).toHaveBeenCalledWith(ownerId, "Mascotas");
+    expect(h.mockBrainReply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        intent: "create_category",
+        ok: true,
+        action: "created",
+        category: "Mascotas",
+      }),
+    );
+    expect(h.replies.at(-1)).toBe("Listo, creé la categoría Mascotas.");
+  });
+
+  it("creates a category and falls back to the fixed template when the brain reply is null", async () => {
+    seedHarnessCategories(h, ["otro"]);
+    h.mockBrainInterpret.mockResolvedValue({
+      intent: "create_category",
+      amount: null,
+      category: "Mascotas",
+      note: null,
+    });
+    h.mockBrainReply.mockResolvedValue(null);
+
+    await h.service.handleUpdate(textUpdate({ text: "creá una categoria llamada mascotas", messageId: 1 }), h.reply);
+
+    expect(h.mockCreateCategory).toHaveBeenCalledWith(ownerId, "Mascotas");
+    expect(h.replies.at(-1)).toBe('Categoría "Mascotas" creada.');
+  });
+
+  it("replies with the duplicate template when create_category collides with an existing name", async () => {
+    seedHarnessCategories(h, ["Mascotas", "otro"]);
+    h.mockCreateCategory.mockRejectedValue(new ValidationFailedError('Category "Mascotas" already exists'));
+    h.mockBrainInterpret.mockResolvedValue({
+      intent: "create_category",
+      amount: null,
+      category: "Mascotas",
+      note: null,
+    });
+
+    await h.service.handleUpdate(textUpdate({ text: "creá la categoria mascotas", messageId: 1 }), h.reply);
+
+    expect(h.replies.at(-1)).toBe('Ya existe una categoría "Mascotas".');
+  });
+
+  it("deletes a category through the delete_category intent and sends the brain reply verbatim", async () => {
+    seedHarnessCategories(h, ["Viajes", "otro"]);
+    h.mockDeleteCategory.mockResolvedValue({ id: "c-viajes", ownerId, name: "Viajes", createdAt: new Date() });
+    h.mockBrainInterpret.mockResolvedValue({
+      intent: "delete_category",
+      amount: null,
+      category: "Viajes",
+      note: null,
+    });
+    h.mockBrainReply.mockResolvedValue("Listo, borré Viajes.");
+
+    await h.service.handleUpdate(textUpdate({ text: "borra la categoria viajes", messageId: 1 }), h.reply);
+
+    expect(h.mockDeleteCategory).toHaveBeenCalledWith(ownerId, "Viajes");
+    expect(h.mockBrainReply).toHaveBeenCalledWith(
+      expect.objectContaining({ intent: "delete_category", ok: true, action: "deleted", category: "Viajes" }),
+    );
+    expect(h.replies.at(-1)).toBe("Listo, borré Viajes.");
+  });
+
+  it("refuses to delete 'otro' through the bot with the fixed warning", async () => {
+    seedHarnessCategories(h, ["otro"]);
+    h.mockDeleteCategory.mockRejectedValue(new ValidationFailedError('Cannot delete the "otro" fallback category'));
+    h.mockBrainInterpret.mockResolvedValue({
+      intent: "delete_category",
+      amount: null,
+      category: "otro",
+      note: null,
+    });
+
+    await h.service.handleUpdate(textUpdate({ text: "borra la categoria otro", messageId: 1 }), h.reply);
+
+    expect(h.replies.at(-1)).toContain("otro");
+    expect(h.replies.at(-1)).not.toBe('Categoría "otro" borrada.');
+  });
+
+  it("renames a category through the rename_category intent", async () => {
+    seedHarnessCategories(h, ["Super", "otro"]);
+    h.mockRenameCategory.mockResolvedValue({ id: "c-super", ownerId, name: "Supermercado", createdAt: new Date() });
+    h.mockBrainInterpret.mockResolvedValue({
+      intent: "rename_category",
+      amount: null,
+      category: "Super",
+      note: null,
+      new_name: "Supermercado",
+    });
+    h.mockBrainReply.mockResolvedValue("Listo, ahora es Supermercado.");
+
+    await h.service.handleUpdate(textUpdate({ text: "renombra super a supermercado", messageId: 1 }), h.reply);
+
+    expect(h.mockRenameCategory).toHaveBeenCalledWith(ownerId, "Super", "Supermercado");
+    expect(h.mockBrainReply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        intent: "rename_category",
+        ok: true,
+        action: "renamed",
+        category: "Super",
+        new_name: "Supermercado",
+      }),
+    );
+    expect(h.replies.at(-1)).toBe("Listo, ahora es Supermercado.");
+  });
+
+  it("replies with the missing-category template when rename targets an unknown category", async () => {
+    seedHarnessCategories(h, ["otro"]);
+    h.mockRenameCategory.mockResolvedValue(null);
+    h.mockBrainInterpret.mockResolvedValue({
+      intent: "rename_category",
+      amount: null,
+      category: "Fantasma",
+      note: null,
+      new_name: "Fantasmas",
+    });
+
+    await h.service.handleUpdate(textUpdate({ text: "renombra fantasma a fantasmas", messageId: 1 }), h.reply);
+
+    expect(h.replies.at(-1)).toBe('No existe la categoría "Fantasma".');
+  });
+
+  it("answers a capabilities intent with the fixed summary and never with 'No se ejecutó nada'", async () => {
+    seedHarnessCategories(h, ["otro"]);
+    h.mockBrainInterpret.mockResolvedValue({
+      intent: "capabilities",
+      amount: null,
+      category: null,
+      note: null,
+    });
+
+    await h.service.handleUpdate(textUpdate({ text: "podes borrar categorias?", messageId: 1 }), h.reply);
+
+    expect(h.mockCreateExpense).not.toHaveBeenCalled();
+    expect(h.replies.at(-1)).toContain("borrar");
+    expect(h.replies.at(-1)).not.toContain("No se ejecutó nada");
+  });
+
+  it("sends the brain reply verbatim for a capabilities intent", async () => {
+    seedHarnessCategories(h, ["otro"]);
+    h.mockBrainInterpret.mockResolvedValue({
+      intent: "capabilities",
+      amount: null,
+      category: null,
+      note: null,
+    });
+    h.mockBrainReply.mockResolvedValue("Sí, puedo crear, borrar y renombrar categorías.");
+
+    await h.service.handleUpdate(textUpdate({ text: "qué podés hacer?", messageId: 1 }), h.reply);
+
+    expect(h.mockBrainReply).toHaveBeenCalledWith(
+      expect.objectContaining({ intent: "capabilities", ok: true, action: "capabilities" }),
+    );
+    expect(h.replies.at(-1)).toBe("Sí, puedo crear, borrar y renombrar categorías.");
   });
 });

@@ -73,6 +73,38 @@
   },
   {
     "role": "user",
+    "content": "creá una categoria llamada mascotas"
+  },
+  {
+    "role": "assistant",
+    "content": "{\"intent\":\"create_category\",\"amount\":null,\"category\":\"mascotas\",\"note\":null,\"query_type\":null,\"new_name\":null}"
+  },
+  {
+    "role": "user",
+    "content": "borra la categoria viajes"
+  },
+  {
+    "role": "assistant",
+    "content": "{\"intent\":\"delete_category\",\"amount\":null,\"category\":\"viajes\",\"note\":null,\"query_type\":null,\"new_name\":null}"
+  },
+  {
+    "role": "user",
+    "content": "renombra super a supermercado"
+  },
+  {
+    "role": "assistant",
+    "content": "{\"intent\":\"rename_category\",\"amount\":null,\"category\":\"super\",\"note\":null,\"query_type\":null,\"new_name\":\"supermercado\"}"
+  },
+  {
+    "role": "user",
+    "content": "podes borrar categorias?"
+  },
+  {
+    "role": "assistant",
+    "content": "{\"intent\":\"capabilities\",\"amount\":null,\"category\":null,\"note\":null,\"query_type\":null,\"new_name\":null}"
+  },
+  {
+    "role": "user",
     "content": "5000"
   },
   {

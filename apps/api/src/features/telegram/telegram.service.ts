@@ -15,6 +15,7 @@ import { NotFoundError, ValidationFailedError } from "../../infra/errors";
 import type { MovementService } from "../movements/movements.service";
 import type { BotStateRecord, BotStateRepository } from "./bot-state.repository";
 import { normalizeAmountString, type BotBrain, type ConversationEnvelope, type ExecutionResult } from "./bot-brain";
+import { CategoryExecutor } from "./category-executor";
 import { isMilStance } from "./mil-stance";
 import { QueryExecutor } from "./query-executor";
 import { deriveQueryType, type QueryExecutionResult } from "./query.types";
@@ -24,6 +25,8 @@ import {
   amountConfirmationAbandonedReply,
   amountConflictReply,
   associateKeywordRedirectReply,
+  capabilitiesSummaryReply,
+  categoryCommandReplyTemplate,
   categoryCreatedReply,
   categoryErrorReply,
   categoryListReply,
@@ -88,9 +91,11 @@ const KEEP_OTRO_ANSWERS = new Set(["no", "otro", "dejalo", "deja", "nada"]);
 
 export class TelegramService {
   private readonly queryExecutor: QueryExecutor;
+  private readonly categoryExecutor: CategoryExecutor;
 
   constructor(private readonly deps: TelegramServiceDeps) {
     this.queryExecutor = new QueryExecutor(deps.movementService, deps.categoryService);
+    this.categoryExecutor = new CategoryExecutor(deps.categoryService);
   }
 
   async handleUpdate(update: unknown, reply?: ReplyPort): Promise<void> {
@@ -182,6 +187,14 @@ export class TelegramService {
       case "associate_keyword":
         await this.sendRedirect("associate_keyword", associateKeywordRedirectReply(), reply);
         return;
+      case "create_category":
+      case "delete_category":
+      case "rename_category":
+        await this.executeCategoryCommand(envelope, reply);
+        return;
+      case "capabilities":
+        await this.sendCapabilities(reply);
+        return;
       case "off_topic":
         await this.sendRedirect("off_topic", offTopicRedirectReply(), reply);
         return;
@@ -204,6 +217,34 @@ export class TelegramService {
       { intent, ok: false, action: "redirected", amount: null, category: null, note: null },
       fixed,
     );
+  }
+
+  /**
+   * Category CRUD executors: run the real CategoryService and feed the ACTUAL
+   * result (created/deleted/renamed names, error messages) to the brain reply,
+   * falling back to the fixed template that mirrors the same facts. Errors are
+   * carried in the result — the executor never throws for domain failures.
+   */
+  private async executeCategoryCommand(envelope: ConversationEnvelope, reply?: ReplyPort): Promise<void> {
+    const result = await this.categoryExecutor.execute(this.deps.ownerId, envelope);
+    await this.makeSender(true, reply)(result, categoryCommandReplyTemplate(result));
+  }
+
+  /**
+   * Capability questions: a deterministic summary listing what the bot can do,
+   * available to the LLM via the reply flow and used as the fixed fallback.
+   * Never reports "no action" for a capability question.
+   */
+  private async sendCapabilities(reply?: ReplyPort): Promise<void> {
+    const result: ExecutionResult = {
+      intent: "capabilities",
+      ok: true,
+      action: "capabilities",
+      amount: null,
+      category: null,
+      note: null,
+    };
+    await this.makeSender(true, reply)(result, capabilitiesSummaryReply());
   }
 
   /**

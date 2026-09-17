@@ -176,4 +176,82 @@ describe("categories service (integration)", () => {
     expect(await service.matchNote("owner-1", "pague $1200 en uber viaje")).toBe("Transporte");
     expect(await service.matchNote("owner-1", "pague $300 en la farmacia")).toBeNull();
   });
+
+  describe("deleteCategory", () => {
+    it("deletes a category and cascades to its keywords", async () => {
+      await service.createCategory("owner-1", "Viajes");
+      await service.associateKeyword("owner-1", "aerolinea", "Viajes");
+      await service.ensureOtro("owner-1");
+
+      const deleted = await service.deleteCategory("owner-1", "Viajes");
+
+      expect(deleted?.name).toBe("Viajes");
+      const remaining = await prisma.category.findMany({ where: { ownerId: "owner-1" } });
+      expect(remaining.map((category) => category.name)).toEqual(["otro"]);
+      const keywords = await prisma.categoryKeyword.findMany({ where: { ownerId: "owner-1" } });
+      expect(keywords).toHaveLength(0);
+    });
+
+    it("refuses to delete the 'otro' fallback category with 422 and keeps it", async () => {
+      await service.ensureOtro("owner-1");
+
+      await expect(service.deleteCategory("owner-1", "otro")).rejects.toBeInstanceOf(
+        ValidationFailedError,
+      );
+      expect(await prisma.category.count({ where: { ownerId: "owner-1" } })).toBe(1);
+    });
+
+    it("throws NotFound when the category does not exist", async () => {
+      await expect(service.deleteCategory("owner-1", "Fantasmas")).rejects.toBeInstanceOf(
+        NotFoundError,
+      );
+    });
+
+    it("rejects an empty or whitespace-only name with 422", async () => {
+      await expect(service.deleteCategory("owner-1", "   ")).rejects.toBeInstanceOf(
+        ValidationFailedError,
+      );
+    });
+
+    it("does not delete another owner's category", async () => {
+      await service.createCategory("owner-2", "Viajes");
+
+      await expect(service.deleteCategory("owner-1", "Viajes")).rejects.toBeInstanceOf(
+        NotFoundError,
+      );
+      expect(await prisma.category.count({ where: { ownerId: "owner-2" } })).toBe(1);
+    });
+
+    it("finds the category by normalized name (accent fold and case)", async () => {
+      await service.createCategory("owner-1", "Cafe");
+
+      const deleted = await service.deleteCategory("owner-1", "café");
+
+      expect(deleted?.name).toBe("Cafe");
+      expect(await prisma.category.count({ where: { ownerId: "owner-1" } })).toBe(0);
+    });
+
+    it("leaves existing movements untouched when deleting a category", async () => {
+      await service.createCategory("owner-1", "Viajes");
+      await prisma.expense.createMany({
+        data: [
+          {
+            ownerId: "owner-1",
+            amount: 5000,
+            currency: "ARS",
+            category: "Viajes",
+            note: "pasaje",
+            occurredAt: new Date("2026-09-01T12:00:00.000Z"),
+            type: "EXPENSE",
+          },
+        ],
+      });
+
+      await service.deleteCategory("owner-1", "Viajes");
+
+      const movements = await prisma.expense.findMany({ where: { ownerId: "owner-1" } });
+      expect(movements).toHaveLength(1);
+      expect(movements[0]?.category).toBe("Viajes");
+    });
+  });
 });

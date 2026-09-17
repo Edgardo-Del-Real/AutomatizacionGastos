@@ -581,4 +581,186 @@ describe("TelegramService (integration)", () => {
     const state = await prisma.botState.findUnique({ where: { ownerId } });
     expect(state?.state).toBe("awaiting_category");
   });
+
+  it("brain: a create_category intent creates the category through the real service and replies", async () => {
+    await seedCategories(["otro"]);
+    const replies: string[] = [];
+    const stubbed = buildService(
+      () => undefined,
+      stubBrain({
+        interpret: async () => ({ intent: "create_category", amount: null, category: "Mascotas", note: null }),
+        reply: async () => "Listo, creé Mascotas.",
+      }),
+    );
+
+    await stubbed.handleUpdate(
+      textUpdate({ messageId: 1, text: "creá una categoria llamada mascotas" }),
+      async (text) => {
+        replies.push(text);
+      },
+    );
+
+    const categories = await categoryService.listCategories(ownerId);
+    expect(categories.some((category) => category.name === "Mascotas")).toBe(true);
+    expect(await prisma.expense.count()).toBe(0);
+    expect(replies.at(-1)).toBe("Listo, creé Mascotas.");
+  });
+
+  it("brain: a duplicate create_category intent falls back to the fixed duplicate template", async () => {
+    await seedCategories(["Mascotas"]);
+    const replies: string[] = [];
+    const stubbed = buildService(
+      () => undefined,
+      stubBrain({
+        interpret: async () => ({ intent: "create_category", amount: null, category: "Mascotas", note: null }),
+      }),
+    );
+
+    await stubbed.handleUpdate(
+      textUpdate({ messageId: 1, text: "creá la categoria mascotas" }),
+      async (text) => {
+        replies.push(text);
+      },
+    );
+
+    expect(replies.at(-1)).toBe('Ya existe una categoría "Mascotas".');
+  });
+
+  it("brain: a delete_category intent deletes the category and its keywords but not the movements", async () => {
+    await seedCategories(["Viajes"]);
+    await categoryService.associateKeyword(ownerId, "aerolinea", "Viajes");
+    await prisma.expense.createMany({
+      data: [
+        {
+          ownerId,
+          amount: 5000,
+          currency: "ARS",
+          category: "Viajes",
+          note: "pasaje",
+          occurredAt: new Date("2026-09-01T12:00:00.000Z"),
+          type: "EXPENSE",
+        },
+      ],
+    });
+    const replies: string[] = [];
+    const stubbed = buildService(
+      () => undefined,
+      stubBrain({
+        interpret: async () => ({ intent: "delete_category", amount: null, category: "Viajes", note: null }),
+        reply: async () => "Listo, borré Viajes.",
+      }),
+    );
+
+    await stubbed.handleUpdate(
+      textUpdate({ messageId: 1, text: "borra la categoria viajes" }),
+      async (text) => {
+        replies.push(text);
+      },
+    );
+
+    const categories = await categoryService.listCategories(ownerId);
+    expect(categories.some((category) => category.name === "Viajes")).toBe(false);
+    expect(categories.some((category) => category.name === "otro")).toBe(true);
+    expect(await prisma.categoryKeyword.count({ where: { ownerId } })).toBe(0);
+    const movements = await prisma.expense.findMany({ where: { ownerId } });
+    expect(movements).toHaveLength(1);
+    expect(movements[0]?.category).toBe("Viajes");
+    expect(replies.at(-1)).toBe("Listo, borré Viajes.");
+  });
+
+  it("brain: a delete_category intent for 'otro' is refused with the fixed warning", async () => {
+    await seedCategories([]);
+    const replies: string[] = [];
+    const stubbed = buildService(
+      () => undefined,
+      stubBrain({
+        interpret: async () => ({ intent: "delete_category", amount: null, category: "otro", note: null }),
+      }),
+    );
+
+    await stubbed.handleUpdate(
+      textUpdate({ messageId: 1, text: "borra la categoria otro" }),
+      async (text) => {
+        replies.push(text);
+      },
+    );
+
+    expect(replies.at(-1)).toContain("otro");
+    expect(replies.at(-1)).not.toBe('Categoría "otro" borrada.');
+    const categories = await categoryService.listCategories(ownerId);
+    expect(categories.some((category) => category.name === "otro")).toBe(true);
+  });
+
+  it("brain: a rename_category intent renames the category through the real service", async () => {
+    await seedCategories(["Super"]);
+    const replies: string[] = [];
+    const stubbed = buildService(
+      () => undefined,
+      stubBrain({
+        interpret: async () => ({
+          intent: "rename_category",
+          amount: null,
+          category: "Super",
+          note: null,
+          new_name: "Supermercado",
+        }),
+        reply: async () => "Listo, ahora es Supermercado.",
+      }),
+    );
+
+    await stubbed.handleUpdate(
+      textUpdate({ messageId: 1, text: "renombra super a supermercado" }),
+      async (text) => {
+        replies.push(text);
+      },
+    );
+
+    const categories = await categoryService.listCategories(ownerId);
+    expect(categories.some((category) => category.name === "Supermercado")).toBe(true);
+    expect(categories.some((category) => category.name === "Super")).toBe(false);
+    expect(replies.at(-1)).toBe("Listo, ahora es Supermercado.");
+  });
+
+  it("brain: a capabilities intent answers with the fixed summary and never with 'No se ejecutó nada'", async () => {
+    await seedCategories(["otro"]);
+    const replies: string[] = [];
+    const stubbed = buildService(
+      () => undefined,
+      stubBrain({
+        interpret: async () => ({ intent: "capabilities", amount: null, category: null, note: null }),
+      }),
+    );
+
+    await stubbed.handleUpdate(
+      textUpdate({ messageId: 1, text: "podes borrar categorias?" }),
+      async (text) => {
+        replies.push(text);
+      },
+    );
+
+    expect(await prisma.expense.count()).toBe(0);
+    expect(replies.at(-1)).toContain("borrar");
+    expect(replies.at(-1)).not.toContain("No se ejecutó nada");
+  });
+
+  it("brain: a capabilities intent sends the brain reply verbatim", async () => {
+    await seedCategories(["otro"]);
+    const replies: string[] = [];
+    const stubbed = buildService(
+      () => undefined,
+      stubBrain({
+        interpret: async () => ({ intent: "capabilities", amount: null, category: null, note: null }),
+        reply: async () => "Sí, puedo crear, borrar y renombrar categorías.",
+      }),
+    );
+
+    await stubbed.handleUpdate(
+      textUpdate({ messageId: 1, text: "qué sabés hacer?" }),
+      async (text) => {
+        replies.push(text);
+      },
+    );
+
+    expect(replies.at(-1)).toBe("Sí, puedo crear, borrar y renombrar categorías.");
+  });
 });

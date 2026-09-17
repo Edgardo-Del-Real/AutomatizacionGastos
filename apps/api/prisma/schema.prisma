@@ -55,7 +55,7 @@ model CategoryKeyword {
   keyword    String
   ownerId    String
   createdAt  DateTime @default(now())
-  category   Category @relation(fields: [categoryId], references: [id])
+  category   Category @relation(fields: [categoryId], references: [id], onDelete: Cascade)
 
   @@unique([ownerId, keyword])
   @@index([ownerId])

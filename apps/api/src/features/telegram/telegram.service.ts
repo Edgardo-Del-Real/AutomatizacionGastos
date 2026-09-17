@@ -1,5 +1,5 @@
 import type { CategoryService } from "../categories/categories.service";
-import { firstSignificantWord, normalizeForMatch } from "../categories/matcher";
+import { normalizeForMatch } from "../categories/matcher";
 import type { ExpenseService } from "../expenses/expenses.service";
 import { classifyMovementType, parseAmountAndNote, type ParsedAmount } from "../messages/message.parser";
 import { isUniqueConstraintViolation, type ProcessedMessageRepository } from "../messages/message.repository";
@@ -12,14 +12,17 @@ import {
   categoryCreatedReply,
   categoryErrorReply,
   categoryListReply,
+  categoryNotFoundReply,
   categoryRenamedReply,
+  correctionAbandonedReply,
   correctionDoneReply,
-  correctionQuestionReply,
+  correctionOfferReply,
   duplicateCategoryReply,
   helpReply,
   keywordAssociatedReply,
   missingCategoryReply,
   movementMissingReply,
+  otroKeptReply,
   setupDoneReply,
   setupQuestionReply,
   setupRetryReply,
@@ -42,6 +45,9 @@ export type TelegramServiceDeps = {
 const IDLE = "idle";
 const AWAITING_SETUP = "awaiting_setup";
 const AWAITING_CATEGORY = "awaiting_category";
+
+/** Answers that keep the movement in "otro" and end the correction dialog. */
+const KEEP_OTRO_ANSWERS = new Set(["no", "otro", "dejalo", "deja", "nada"]);
 
 export class TelegramService {
   constructor(private readonly deps: TelegramServiceDeps) {}
@@ -143,7 +149,8 @@ export class TelegramService {
         pendingMovementId: movement.id,
         pendingNote: note,
       });
-      await this.safeReply(reply, correctionQuestionReply(note));
+      // The movement is already registered in "otro"; the reassignment is optional.
+      await this.safeReply(reply, correctionOfferReply(parsed.amount, note, "otro"));
     }
   }
 
@@ -203,6 +210,18 @@ export class TelegramService {
     const normalizedText = normalizeForMatch(body);
     const trimmed = body.trim();
 
+    // Keep the movement in "otro": explicit abandonment answers never dead-end.
+    if (KEEP_OTRO_ANSWERS.has(normalizedText)) {
+      await this.deps.botStateRepository.set({
+        ownerId,
+        state: IDLE,
+        pendingMovementId: null,
+        pendingNote: null,
+      });
+      await this.safeReply(reply, otroKeptReply());
+      return;
+    }
+
     // D6 rule 1: exact normalized match on an existing category name → ANSWER
     // (multi-word names; a category named "500" beats an amount).
     const exactCategory = categories.find((category) => normalizeForMatch(category.name) === normalizedText);
@@ -211,8 +230,9 @@ export class TelegramService {
       return;
     }
 
-    // D6 rule 2: parses as amount → NEW registration; the new pending replaces the old.
+    // D6 rule 2: parses as amount → NEW registration; the pending correction is abandoned.
     if (parseAmountAndNote(body) !== null) {
+      await this.safeReply(reply, correctionAbandonedReply());
       await this.handleRegistration(body, reply);
       return;
     }
@@ -224,8 +244,10 @@ export class TelegramService {
       return;
     }
 
-    // D6 rule 4: everything else follows the registration path (unparseable → help).
-    await this.handleRegistration(body, reply);
+    // A multi-word non-category answer → DO NOT dead-end: list the existing
+    // categories so the user can pick, keeping the state open (the movement is
+    // already safe in "otro").
+    await this.safeReply(reply, categoryNotFoundReply(trimmed, categories.map((category) => category.name)));
   }
 
   private async answerCorrection(
@@ -250,15 +272,6 @@ export class TelegramService {
         const text = error instanceof NotFoundError ? movementMissingReply() : categoryErrorReply("no se pudo actualizar el movimiento");
         await this.safeReply(reply, text);
         return;
-      }
-
-      const word = firstSignificantWord(state.pendingNote ?? "");
-      if (word !== null) {
-        try {
-          await this.deps.categoryService.associateKeyword(ownerId, word, category);
-        } catch (error) {
-          this.deps.logger?.(`Telegram: failed to learn keyword: ${String(error)}`);
-        }
       }
     }
 

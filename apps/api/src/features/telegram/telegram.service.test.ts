@@ -282,7 +282,7 @@ describe("TelegramService state machine", () => {
     expect(h.replies.at(-1)).toContain("supermercado");
   });
 
-  it("answers a correction by reassigning the pending movement and learning the note's first word", async () => {
+  it("answers a correction by reassigning the pending movement without learning keywords", async () => {
     h.mockListCategories.mockResolvedValue([
       { id: "c1", ownerId, name: "otro", createdAt: new Date(), keywords: [] },
       { id: "c2", ownerId, name: "Transporte", createdAt: new Date(), keywords: [] },
@@ -292,7 +292,8 @@ describe("TelegramService state machine", () => {
     await h.service.handleUpdate(textUpdate({ text: "Transporte", messageId: 10 }), h.reply);
 
     expect(h.mockUpdateMovement).toHaveBeenCalledWith(ownerId, "mov-1", { category: "Transporte" });
-    expect(h.mockAssociateKeyword).toHaveBeenCalledWith(ownerId, "uber", "Transporte");
+    expect(h.mockAssociateKeyword).not.toHaveBeenCalled();
+    expect(h.replies.at(-1)).toBe('Listo, el movimiento quedó en "Transporte".');
     expect(h.mockSetState).toHaveBeenLastCalledWith({
       ownerId,
       state: "idle",
@@ -317,24 +318,13 @@ describe("TelegramService state machine", () => {
 
     expect(h.mockCreateCategory).toHaveBeenCalledWith(ownerId, "Mascotas");
     expect(h.mockUpdateMovement).toHaveBeenCalledWith(ownerId, "mov-1", { category: "Mascotas" });
-    expect(h.mockAssociateKeyword).toHaveBeenCalledWith(ownerId, "veterinaria", "Mascotas");
+    expect(h.mockAssociateKeyword).not.toHaveBeenCalled();
     expect(h.mockSetState).toHaveBeenLastCalledWith({
       ownerId,
       state: "idle",
       pendingMovementId: null,
       pendingNote: null,
     });
-  });
-
-  it("skips keyword learning when the pending note has no significant word", async () => {
-    h.mockListCategories.mockResolvedValue([
-      { id: "c1", ownerId, name: "otro", createdAt: new Date(), keywords: [] },
-    ]);
-
-    await h.service.handleUpdate(textUpdate({ text: "8000", messageId: 9 }), h.reply);
-    await h.service.handleUpdate(textUpdate({ text: "Transporte", messageId: 10 }), h.reply);
-
-    expect(h.mockAssociateKeyword).not.toHaveBeenCalled();
   });
 
   it("resolves a correction after a restart by reading the persisted state (restart survival)", async () => {
@@ -462,7 +452,7 @@ describe("TelegramService ambiguity rules (awaiting_category, D6)", () => {
     ]);
   });
 
-  it('treats a lone "8000" as a NEW registration, not an answer', async () => {
+  it('treats a lone "8000" as a NEW registration, not an answer, and warns about the abandoned correction', async () => {
     await h.service.handleUpdate(textUpdate({ text: "$1000 anterior", messageId: 1 }), h.reply);
     h.mockCreateExpense.mockClear();
 
@@ -473,6 +463,7 @@ describe("TelegramService ambiguity rules (awaiting_category, D6)", () => {
       expect.objectContaining({ amount: 8000, note: null, category: "otro" }),
       ownerId,
     );
+    expect(h.replies.at(-2)).toContain("corrección anterior");
     // Re-enters the correction loop with the NEW pending movement.
     expect(h.mockSetState).toHaveBeenLastCalledWith({
       ownerId,
@@ -535,6 +526,7 @@ describe("TelegramService ambiguity rules (awaiting_category, D6)", () => {
       expect.objectContaining({ amount: 8000, note: "$ super", category: "otro" }),
       ownerId,
     );
+    expect(h.replies.at(-2)).toContain("corrección anterior");
     expect(h.mockSetState).toHaveBeenLastCalledWith({
       ownerId,
       state: "awaiting_category",
@@ -543,15 +535,50 @@ describe("TelegramService ambiguity rules (awaiting_category, D6)", () => {
     });
   });
 
-  it("a multi-word non-category non-amount reply falls through to the registration path (help)", async () => {
+  it('keeps the movement as "otro" and clears state when the user answers "no"', async () => {
     await h.service.handleUpdate(textUpdate({ text: "$1000 anterior", messageId: 1 }), h.reply);
+
+    await h.service.handleUpdate(textUpdate({ text: "no", messageId: 2 }), h.reply);
+
+    expect(h.mockUpdateMovement).not.toHaveBeenCalled();
+    expect(h.mockAssociateKeyword).not.toHaveBeenCalled();
+    expect(h.mockSetState).toHaveBeenLastCalledWith({
+      ownerId,
+      state: "idle",
+      pendingMovementId: null,
+      pendingNote: null,
+    });
+    expect(h.replies.at(-1)).toBe('Listo, quedó en "otro".');
+  });
+
+  it.each(["otro", "dejalo", "dejá", "nada"])('keeps the movement as "otro" for the answer "%s"', async (answer) => {
+    await h.service.handleUpdate(textUpdate({ text: "$1000 anterior", messageId: 1 }), h.reply);
+    h.mockUpdateMovement.mockClear();
+
+    await h.service.handleUpdate(textUpdate({ text: answer, messageId: 2 }), h.reply);
+
+    expect(h.mockUpdateMovement).not.toHaveBeenCalled();
+    expect(h.mockSetState).toHaveBeenLastCalledWith({
+      ownerId,
+      state: "idle",
+      pendingMovementId: null,
+      pendingNote: null,
+    });
+    expect(h.replies.at(-1)).toBe('Listo, quedó en "otro".');
+  });
+
+  it("a multi-word non-category answer lists the existing categories and keeps the state open", async () => {
+    await h.service.handleUpdate(textUpdate({ text: "$1000 anterior", messageId: 1 }), h.reply);
+    h.mockSetState.mockClear();
     h.mockCreateExpense.mockClear();
 
-    await h.service.handleUpdate(textUpdate({ text: "no se qué categoría", messageId: 2 }), h.reply);
+    await h.service.handleUpdate(textUpdate({ text: "no se qué categoria", messageId: 2 }), h.reply);
 
     expect(h.mockUpdateMovement).not.toHaveBeenCalled();
     expect(h.mockCreateExpense).not.toHaveBeenCalled();
-    expect(h.replies.at(-1)).toContain("No entendí");
+    expect(h.mockSetState).not.toHaveBeenCalled();
+    expect(h.replies.at(-1)).toContain('No encontré la categoría');
+    expect(h.replies.at(-1)).toContain('"otro"');
   });
 });
 

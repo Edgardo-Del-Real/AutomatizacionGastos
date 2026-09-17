@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { firstSignificantWord, matchCategory, normalizeForMatch } from "./matcher";
+import { matchCategory, normalizeForMatch } from "./matcher";
 
 const createdAt = (iso: string): Date => new Date(iso);
 
@@ -57,23 +57,5 @@ describe("matchCategory", () => {
     const zzz = { keyword: "zzz", category: "Z", createdAt: createdAt("2026-09-01T10:00:00Z") };
 
     expect(matchCategory("zzz y aaa", [zzz, aaa])).toBe("A");
-  });
-});
-
-describe("firstSignificantWord", () => {
-  it("returns the first token containing a letter, skipping amount tokens", () => {
-    expect(firstSignificantWord("$8000 super")).toBe("super");
-  });
-
-  it("returns null when no token contains a letter", () => {
-    expect(firstSignificantWord("8000")).toBeNull();
-  });
-
-  it("returns the token itself when it mixes letters and digits", () => {
-    expect(firstSignificantWord("pague en cafe2go")).toBe("pague");
-  });
-
-  it("handles leading whitespace", () => {
-    expect(firstSignificantWord("  $500 uber viaje")).toBe("uber");
   });
 });

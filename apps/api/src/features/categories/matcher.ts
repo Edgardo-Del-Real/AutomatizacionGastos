@@ -47,15 +47,3 @@ export function matchCategory(note: string, rules: KeywordRule[]): string | null
   return null;
 }
 
-/**
- * First token containing a letter ("$500" is not significant; "uber" is).
- */
-export function firstSignificantWord(note: string): string | null {
-  const tokens = note.trim().split(/\s+/);
-  for (const token of tokens) {
-    if (/[a-zà-ÿ]/i.test(token)) {
-      return token;
-    }
-  }
-  return null;
-}

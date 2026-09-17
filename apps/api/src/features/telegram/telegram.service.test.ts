@@ -282,7 +282,7 @@ describe("TelegramService state machine", () => {
     expect(h.replies.at(-1)).toContain("supermercado");
   });
 
-  it("answers a correction by reassigning the pending movement and learning the significant keywords", async () => {
+  it("answers a correction by reassigning the pending movement without learning keywords", async () => {
     h.mockListCategories.mockResolvedValue([
       { id: "c1", ownerId, name: "otro", createdAt: new Date(), keywords: [] },
       { id: "c2", ownerId, name: "Transporte", createdAt: new Date(), keywords: [] },
@@ -292,30 +292,14 @@ describe("TelegramService state machine", () => {
     await h.service.handleUpdate(textUpdate({ text: "Transporte", messageId: 10 }), h.reply);
 
     expect(h.mockUpdateMovement).toHaveBeenCalledWith(ownerId, "mov-1", { category: "Transporte" });
-    expect(h.mockAssociateKeyword).toHaveBeenCalledWith(ownerId, "uber", "Transporte");
-    expect(h.mockAssociateKeyword).toHaveBeenCalledWith(ownerId, "viaje", "Transporte");
-    expect(h.replies.at(-1)).toContain('Aprendí: "uber", "viaje"');
+    expect(h.mockAssociateKeyword).not.toHaveBeenCalled();
+    expect(h.replies.at(-1)).toBe('Listo, el movimiento quedó en "Transporte".');
     expect(h.mockSetState).toHaveBeenLastCalledWith({
       ownerId,
       state: "idle",
       pendingMovementId: null,
       pendingNote: null,
     });
-  });
-
-  it("skips keywords already learned by a different category (no stealing)", async () => {
-    h.mockListCategories.mockResolvedValue([
-      { id: "c1", ownerId, name: "otro", createdAt: new Date(), keywords: [] },
-      { id: "c2", ownerId, name: "Cafe", createdAt: new Date(), keywords: ["cafe"] },
-      { id: "c3", ownerId, name: "Salud", createdAt: new Date(), keywords: [] },
-    ]);
-
-    await h.service.handleUpdate(textUpdate({ text: "$100 cafe del bar", messageId: 9 }), h.reply);
-    await h.service.handleUpdate(textUpdate({ text: "Salud", messageId: 10 }), h.reply);
-
-    expect(h.mockAssociateKeyword).toHaveBeenCalledTimes(1);
-    expect(h.mockAssociateKeyword).toHaveBeenCalledWith(ownerId, "bar", "Salud");
-    expect(h.mockAssociateKeyword).not.toHaveBeenCalledWith(ownerId, "cafe", "Salud");
   });
 
   it("auto-creates an unknown single-word answer category and applies it (D6 rule 3)", async () => {
@@ -334,25 +318,13 @@ describe("TelegramService state machine", () => {
 
     expect(h.mockCreateCategory).toHaveBeenCalledWith(ownerId, "Mascotas");
     expect(h.mockUpdateMovement).toHaveBeenCalledWith(ownerId, "mov-1", { category: "Mascotas" });
-    expect(h.mockAssociateKeyword).toHaveBeenCalledWith(ownerId, "veterinaria", "Mascotas");
+    expect(h.mockAssociateKeyword).not.toHaveBeenCalled();
     expect(h.mockSetState).toHaveBeenLastCalledWith({
       ownerId,
       state: "idle",
       pendingMovementId: null,
       pendingNote: null,
     });
-  });
-
-  it("skips keyword learning when the pending note has no significant word", async () => {
-    h.mockListCategories.mockResolvedValue([
-      { id: "c1", ownerId, name: "otro", createdAt: new Date(), keywords: [] },
-    ]);
-
-    await h.service.handleUpdate(textUpdate({ text: "8000", messageId: 9 }), h.reply);
-    await h.service.handleUpdate(textUpdate({ text: "Transporte", messageId: 10 }), h.reply);
-
-    expect(h.mockAssociateKeyword).not.toHaveBeenCalled();
-    expect(h.replies.at(-1)).toBe('Listo, el movimiento quedó en "Transporte".');
   });
 
   it("resolves a correction after a restart by reading the persisted state (restart survival)", async () => {

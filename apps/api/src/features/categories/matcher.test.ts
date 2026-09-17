@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { matchCategory, normalizeForMatch, significantKeywords } from "./matcher";
+import { matchCategory, normalizeForMatch } from "./matcher";
 
 const createdAt = (iso: string): Date => new Date(iso);
 
@@ -57,30 +57,5 @@ describe("matchCategory", () => {
     const zzz = { keyword: "zzz", category: "Z", createdAt: createdAt("2026-09-01T10:00:00Z") };
 
     expect(matchCategory("zzz y aaa", [zzz, aaa])).toBe("A");
-  });
-});
-
-describe("significantKeywords", () => {
-  it("prefers the LAST significant words, skipping stopwords and short tokens", () => {
-    expect(significantKeywords("compre un cafe en el kiosco")).toEqual(["cafe", "kiosco"]);
-  });
-
-  it("normalizes and dedupes keywords, keeping the last occurrence", () => {
-    expect(significantKeywords("compré Café")).toEqual(["cafe"]);
-    expect(significantKeywords("cafe transporte cafe")).toEqual(["transporte", "cafe"]);
-  });
-
-  it("returns an empty list when no significant token remains", () => {
-    expect(significantKeywords("8000")).toEqual([]);
-    expect(significantKeywords("compre el pan hoy")).toEqual(["pan"]);
-  });
-
-  it("respects the max keyword count, keeping the trailing ones", () => {
-    expect(significantKeywords("compre un cafe en el kiosco", 1)).toEqual(["kiosco"]);
-  });
-
-  it("drops tokens without letters and keeps mixed alphanumeric tokens", () => {
-    expect(significantKeywords("pague en cafe2go")).toEqual(["cafe2go"]);
-    expect(significantKeywords("  $500 uber viaje")).toEqual(["uber", "viaje"]);
   });
 });

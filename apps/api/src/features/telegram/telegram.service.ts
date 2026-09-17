@@ -1,5 +1,5 @@
 import type { CategoryService } from "../categories/categories.service";
-import { normalizeForMatch, significantKeywords } from "../categories/matcher";
+import { normalizeForMatch } from "../categories/matcher";
 import type { ExpenseService } from "../expenses/expenses.service";
 import { classifyMovementType, parseAmountAndNote, type ParsedAmount } from "../messages/message.parser";
 import { isUniqueConstraintViolation, type ProcessedMessageRepository } from "../messages/message.repository";
@@ -256,7 +256,6 @@ export class TelegramService {
     reply?: ReplyPort,
   ): Promise<void> {
     const ownerId = this.deps.ownerId;
-    const learned: string[] = [];
 
     if (state.pendingMovementId !== null) {
       try {
@@ -274,26 +273,6 @@ export class TelegramService {
         await this.safeReply(reply, text);
         return;
       }
-
-      const keywords = significantKeywords(state.pendingNote ?? "");
-      if (keywords.length > 0) {
-        // Skip keywords already owned by any category so learning never steals
-        // an existing rule or collides with oldest-wins matching.
-        const existingKeywords = new Set(
-          (await this.deps.categoryService.listCategories(ownerId)).flatMap((candidate) => candidate.keywords),
-        );
-        for (const keyword of keywords) {
-          if (existingKeywords.has(keyword)) {
-            continue;
-          }
-          try {
-            await this.deps.categoryService.associateKeyword(ownerId, keyword, category);
-            learned.push(keyword);
-          } catch (error) {
-            this.deps.logger?.(`Telegram: failed to learn keyword: ${String(error)}`);
-          }
-        }
-      }
     }
 
     await this.deps.botStateRepository.set({
@@ -302,7 +281,7 @@ export class TelegramService {
       pendingMovementId: null,
       pendingNote: null,
     });
-    await this.safeReply(reply, correctionDoneReply(category, learned));
+    await this.safeReply(reply, correctionDoneReply(category));
   }
 
   private async handleCommand(command: TelegramCommand, reply?: ReplyPort): Promise<void> {

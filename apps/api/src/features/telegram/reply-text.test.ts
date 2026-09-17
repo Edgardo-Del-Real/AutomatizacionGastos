@@ -97,14 +97,8 @@ describe("reply builders", () => {
     );
   });
 
-  it("builds the correction done confirmation without learned keywords", () => {
+  it("builds the correction done confirmation", () => {
     expect(correctionDoneReply("Transporte")).toBe('Listo, el movimiento quedó en "Transporte".');
-  });
-
-  it("builds the correction done confirmation listing the learned keywords", () => {
-    expect(correctionDoneReply("Cafe", ["cafe", "kiosco"])).toBe(
-      'Listo, el movimiento quedó en "Cafe". Aprendí: "cafe", "kiosco".',
-    );
   });
 
   it("builds the keep-as-otro confirmation", () => {

@@ -1,0 +1,50 @@
+[
+  {
+    "role": "user",
+    "content": "gaste 5 mil en el super"
+  },
+  {
+    "role": "assistant",
+    "content": "{\"intent\":\"register_expense\",\"amount\":5000,\"category\":\"Supermercado\",\"note\":\"super\"}"
+  },
+  {
+    "role": "user",
+    "content": "compre mercaderia"
+  },
+  {
+    "role": "assistant",
+    "content": "{\"intent\":\"register_expense\",\"amount\":null,\"category\":\"Supermercado\",\"note\":\"mercaderia\"}"
+  },
+  {
+    "role": "user",
+    "content": "cuánto gasté este mes?"
+  },
+  {
+    "role": "assistant",
+    "content": "{\"intent\":\"query_month\",\"amount\":null,\"category\":null,\"note\":null}"
+  },
+  {
+    "role": "user",
+    "content": "hola, cómo andás?"
+  },
+  {
+    "role": "assistant",
+    "content": "{\"intent\":\"off_topic\",\"amount\":null,\"category\":null,\"note\":null}"
+  },
+  {
+    "role": "user",
+    "content": "de ahora en más uber va a transporte"
+  },
+  {
+    "role": "assistant",
+    "content": "{\"intent\":\"associate_keyword\",\"amount\":null,\"category\":null,\"note\":null}"
+  },
+  {
+    "role": "user",
+    "content": "5000"
+  },
+  {
+    "role": "assistant",
+    "content": "{\"intent\":\"correct_amount\",\"amount\":5000,\"category\":null,\"note\":null}"
+  }
+]

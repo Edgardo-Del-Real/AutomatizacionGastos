@@ -14,7 +14,7 @@ import { PrismaProcessedMessageRepository } from "./features/messages/message.re
 import { PrismaCategoryRepository } from "./features/categories/categories.repository";
 import { CategoryService } from "./features/categories/categories.service";
 import { PrismaBotStateRepository } from "./features/telegram/bot-state.repository";
-import { GroqNoteInterpreter } from "./features/telegram/note-interpreter";
+import { GroqBotBrain } from "./features/telegram/bot-brain";
 import { TelegramService } from "./features/telegram/telegram.service";
 
 export type AppOptions = {
@@ -41,11 +41,11 @@ export function buildApp(options: AppOptions = {}): FastifyInstance {
     ownerChatId: env.TELEGRAM_OWNER_CHAT_ID,
     ownerId: env.OWNER_ID,
     logger: (message: string) => console.log(message),
-    // Deterministic-only when no key: no interpreter is constructed and
-    // `interpret` is never invoked (spec "Missing key means no interpreter").
+    // Deterministic-only when no key: no brain is constructed and
+    // `interpret`/`reply` are never invoked (spec "Missing key means no brain").
     ...(env.GROQ_API_KEY !== undefined
       ? {
-          interpreter: new GroqNoteInterpreter({
+          brain: new GroqBotBrain({
             apiKey: env.GROQ_API_KEY,
             model: env.LLM_MODEL,
             baseUrl: env.LLM_BASE_URL,

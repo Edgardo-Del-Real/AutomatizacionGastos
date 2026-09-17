@@ -14,12 +14,14 @@ import { isUniqueConstraintViolation, type ProcessedMessageRepository } from "..
 import { NotFoundError, ValidationFailedError } from "../../infra/errors";
 import type { MovementService } from "../movements/movements.service";
 import type { BotStateRecord, BotStateRepository } from "./bot-state.repository";
-import { normalizeAmountString, type InterpretedNote, type NoteInterpreter } from "./note-interpreter";
+import { normalizeAmountString, type BotBrain, type ConversationEnvelope, type ExecutionResult } from "./bot-brain";
+import { isMilStance } from "./mil-stance";
 import { parseCommand, type TelegramCommand } from "./telegram.commands";
 import { normalizeTelegramMessage } from "./telegram.parser";
 import {
   amountConfirmationAbandonedReply,
   amountConflictReply,
+  associateKeywordRedirectReply,
   categoryCreatedReply,
   categoryErrorReply,
   categoryListReply,
@@ -33,7 +35,9 @@ import {
   keywordAssociatedReply,
   missingCategoryReply,
   movementMissingReply,
+  offTopicRedirectReply,
   otroKeptReply,
+  queryRedirectReply,
   setupDoneReply,
   setupQuestionReply,
   setupRetryReply,
@@ -41,6 +45,9 @@ import {
 } from "./reply-text";
 
 export type ReplyPort = (text: string) => Promise<void>;
+
+/** Brain-written branch sender: sends the LLM reply when active, else the fixed template. */
+export type Sender = (result: ExecutionResult, fixed: string) => Promise<void>;
 
 export type TelegramServiceDeps = {
   messageRepository: ProcessedMessageRepository;
@@ -51,8 +58,8 @@ export type TelegramServiceDeps = {
   ownerChatId: number;
   ownerId: string;
   logger?: (message: string) => void;
-  /** Optional LLM interpreter; when absent the bot runs deterministic-only. */
-  interpreter?: NoteInterpreter;
+  /** Optional LLM brain; when absent the bot runs deterministic-only. */
+  brain?: BotBrain;
 };
 
 const IDLE = "idle";
@@ -138,8 +145,8 @@ export class TelegramService {
     const parsed = parseAmountAndNote(body);
     const categories = await this.deps.categoryService.listCategories(ownerId);
 
-    // The setup gate wins BEFORE any interpreter call: the interpreter never
-    // fires for owners without categories.
+    // The setup gate wins BEFORE any brain call: the brain never fires for
+    // owners without categories.
     if (categories.length === 0) {
       await this.deps.botStateRepository.set({
         ownerId,
@@ -151,73 +158,139 @@ export class TelegramService {
       return;
     }
 
+    const envelope = await this.tryBrainInterpret(body);
+    if (envelope === null) {
+      // D5: interpret-null → full deterministic path, fixed replies, no reply call.
+      await this.deterministicRegistration(body, parsed, categories, reply);
+      return;
+    }
+
+    switch (envelope.intent) {
+      case "query_recent":
+      case "query_balance":
+      case "query_month":
+        await this.sendRedirect(envelope.intent, queryRedirectReply(), reply);
+        return;
+      case "associate_keyword":
+        await this.sendRedirect("associate_keyword", associateKeywordRedirectReply(), reply);
+        return;
+      case "off_topic":
+        await this.sendRedirect("off_topic", offTopicRedirectReply(), reply);
+        return;
+      case "help":
+      case "correct_amount":
+      case "correct_category":
+        await this.makeSender(true, reply)(
+          { intent: envelope.intent, ok: true, action: "none", amount: null, category: null, note: null },
+          helpReply(),
+        );
+        return;
+      case "register_expense":
+        await this.executeRegistration(body, parsed, envelope, categories, reply);
+        return;
+    }
+  }
+
+  private async sendRedirect(intent: ConversationEnvelope["intent"], fixed: string, reply?: ReplyPort): Promise<void> {
+    await this.makeSender(true, reply)(
+      { intent, ok: false, action: "redirected", amount: null, category: null, note: null },
+      fixed,
+    );
+  }
+
+  /** Today's flow verbatim minus the brain: fixed replies only, no reply call. */
+  private async deterministicRegistration(
+    body: string,
+    parsed: ParsedAmount | null,
+    categories: CategoryWithKeywords[],
+    reply?: ReplyPort,
+  ): Promise<void> {
+    const ownerId = this.deps.ownerId;
     if (parsed === null) {
-      await this.handleAmountRescue(body, categories, reply);
+      await this.safeReply(reply, helpReply());
       return;
     }
 
     const note = parsed.note ?? body;
     const matched = await this.deps.categoryService.matchNote(ownerId, note);
 
-    // A user-authored keyword rule beats any interpreter suggestion.
+    // A user-authored keyword rule beats any brain suggestion.
     if (matched !== null) {
-      await this.registerWithCategory(body, parsed.amount, parsed.note, matched, reply);
+      await this.registerWithCategory(body, parsed.amount, parsed.note, matched, this.makeSender(false, reply));
       return;
     }
 
-    // Keyword miss → interpreter: category suggestion and amount-conflict check.
-    const interpretation = await this.tryInterpret(body);
-    if (interpretation === null) {
-      await this.registerOtroWithCorrection(body, parsed.amount, parsed.note, reply);
-      return;
-    }
-    if (interpretation.amount !== parsed.amount) {
-      await this.askAmountConfirmation(body, parsed, note, interpretation, categories, reply);
-      return;
-    }
-    const category = this.resolveSuggestion(interpretation.category, categories);
-    if (category !== null) {
-      await this.registerWithCategory(body, parsed.amount, parsed.note, category, reply);
-      return;
-    }
-    await this.registerOtroWithCorrection(body, parsed.amount, parsed.note, reply);
+    await this.registerOtroWithCorrection(body, parsed.amount, parsed.note, this.makeSender(false, reply));
   }
 
-  /** No deterministic amount: ask the interpreter to rescue one. */
-  private async handleAmountRescue(
+  /** register_expense envelope: amount → note → category, then register. */
+  private async executeRegistration(
     body: string,
+    parsed: ParsedAmount | null,
+    envelope: ConversationEnvelope,
     categories: CategoryWithKeywords[],
     reply?: ReplyPort,
   ): Promise<void> {
-    const interpretation = await this.tryInterpret(body);
-    if (interpretation === null) {
-      await this.safeReply(reply, helpReply());
+    const send = this.makeSender(true, reply);
+    const ownerId = this.deps.ownerId;
+    const detAmount = parsed?.amount ?? null;
+    const brainAmount = envelope.amount;
+
+    if (detAmount === null && brainAmount === null) {
+      await send(
+        { intent: "register_expense", ok: false, action: "none", amount: null, category: null, note: body },
+        helpReply(),
+      );
       return;
     }
-    // extractNote's no-parseable-token fallback returns the full body.
-    const note = extractNote(body);
-    const category = this.resolveSuggestion(interpretation.category, categories);
+
+    let amount: number;
+    if (detAmount === null) {
+      // Brain rescue: no deterministic amount.
+      amount = brainAmount as number;
+    } else if (brainAmount === null || brainAmount === detAmount) {
+      // Deterministic amount is authoritative when present and equal.
+      amount = detAmount;
+    } else if (isMilStance(body, detAmount)) {
+      // The deterministic parser trapped the digit part of a prose amount
+      // ("5 mil" → 5): the brain amount wins directly, no conflict question.
+      amount = brainAmount as number;
+    } else {
+      // Genuine disagreement: ask the owner, nothing registers silently.
+      await this.askAmountConfirmation(body, detAmount, brainAmount, parsed, envelope, categories, send);
+      return;
+    }
+
+    // Deterministic note wins; the brain fills the gap; never conflict-asks.
+    const note = parsed !== null ? (parsed.note ?? envelope.note) : (envelope.note ?? extractNote(body));
+
+    // Category: the keyword rule runs first and beats the brain suggestion;
+    // otherwise the suggestion resolves by exact normalized match only.
+    const matched = await this.deps.categoryService.matchNote(ownerId, note ?? body);
+    const category = matched ?? this.resolveSuggestion(envelope.category, categories);
     if (category !== null) {
-      await this.registerWithCategory(body, interpretation.amount, note, category, reply);
+      await this.registerWithCategory(body, amount, note, category, send);
       return;
     }
-    await this.registerOtroWithCorrection(body, interpretation.amount, note, reply);
+    await this.registerOtroWithCorrection(body, amount, note, send);
   }
 
   /** Amounts differ: persist the question and ask; nothing registers silently. */
   private async askAmountConfirmation(
     body: string,
-    parsed: ParsedAmount,
-    note: string | null,
-    interpretation: InterpretedNote,
+    detAmount: number,
+    brainAmount: number,
+    parsed: ParsedAmount | null,
+    envelope: ConversationEnvelope,
     categories: CategoryWithKeywords[],
-    reply?: ReplyPort,
+    send: Sender,
   ): Promise<void> {
+    const note = parsed !== null ? (parsed.note ?? envelope.note) : (envelope.note ?? extractNote(body));
     const payload: AmountConfirmationPayload = {
       body,
       note,
-      amounts: [parsed.amount, interpretation.amount],
-      category: this.resolveSuggestion(interpretation.category, categories),
+      amounts: [detAmount, brainAmount],
+      category: this.resolveSuggestion(envelope.category, categories),
     };
     await this.deps.botStateRepository.set({
       ownerId: this.deps.ownerId,
@@ -225,7 +298,10 @@ export class TelegramService {
       pendingMovementId: null,
       pendingNote: JSON.stringify(payload),
     });
-    await this.safeReply(reply, amountConflictReply(parsed.amount, interpretation.amount));
+    await send(
+      { intent: "register_expense", ok: false, action: "asked_amount", amount: detAmount, category: null, note: body },
+      amountConflictReply(detAmount, brainAmount),
+    );
   }
 
   private async handleAwaitingAmountConfirmation(
@@ -234,6 +310,7 @@ export class TelegramService {
     reply?: ReplyPort,
   ): Promise<void> {
     const ownerId = this.deps.ownerId;
+    const send = this.makeSender(this.brainAvailable, reply);
     const payload = this.decodeConfirmationPayload(state.pendingNote);
 
     // A corrupt or missing payload abandons the question like any non-answer.
@@ -244,7 +321,10 @@ export class TelegramService {
         pendingMovementId: null,
         pendingNote: null,
       });
-      await this.safeReply(reply, amountConfirmationAbandonedReply());
+      await send(
+        { intent: "register_expense", ok: false, action: "none", amount: null, category: null, note: body },
+        amountConfirmationAbandonedReply(),
+      );
       await this.handleRegistration(body, reply);
       return;
     }
@@ -262,16 +342,19 @@ export class TelegramService {
         pendingMovementId: null,
         pendingNote: null,
       });
-      await this.safeReply(reply, amountConfirmationAbandonedReply());
+      await send(
+        { intent: "register_expense", ok: false, action: "none", amount: null, category: null, note: body },
+        amountConfirmationAbandonedReply(),
+      );
       await this.handleRegistration(body, reply);
       return;
     }
 
     // Register from the STORED context; a creation failure leaves the question open.
     if (payload.category !== null) {
-      await this.registerWithCategory(payload.body, chosen, payload.note, payload.category, reply);
+      await this.registerWithCategory(payload.body, chosen, payload.note, payload.category, send);
     } else {
-      await this.registerOtroWithCorrection(payload.body, chosen, payload.note, reply);
+      await this.registerOtroWithCorrection(payload.body, chosen, payload.note, send);
     }
   }
 
@@ -287,22 +370,50 @@ export class TelegramService {
     }
   }
 
-  private async tryInterpret(body: string): Promise<InterpretedNote | null> {
-    if (this.deps.interpreter === undefined) {
+  private async tryBrainInterpret(body: string): Promise<ConversationEnvelope | null> {
+    if (this.deps.brain === undefined) {
       return null;
     }
     try {
-      return await this.deps.interpreter.interpret(body);
+      return await this.deps.brain.interpret(body);
     } catch (error) {
       // The port contract is never-throw; this wrapper is belt-and-braces so a
       // misbehaving client cannot kill the bot.
-      this.deps.logger?.(`Telegram: interpreter failed: ${String(error)}`);
+      this.deps.logger?.(`Telegram: brain interpret failed: ${String(error)}`);
+      return null;
+    }
+  }
+
+  private async tryBrainReply(result: ExecutionResult): Promise<string | null> {
+    if (this.deps.brain === undefined) {
+      return null;
+    }
+    try {
+      return await this.deps.brain.reply(result);
+    } catch (error) {
+      this.deps.logger?.(`Telegram: brain reply failed: ${String(error)}`);
       return null;
     }
   }
 
   /**
-   * Resolves an interpreter category suggestion against the owner's categories
+   * Builds the per-message sender. `brainActive` gates the reply call: it is
+   * true only when an envelope drove the outcome (idle path) or a brain is
+   * configured (dialog branches); when false no `reply` call ever happens (D5).
+   */
+  private makeSender(brainActive: boolean, reply?: ReplyPort): Sender {
+    return async (result: ExecutionResult, fixed: string): Promise<void> => {
+      const text = brainActive ? ((await this.tryBrainReply(result)) ?? fixed) : fixed;
+      await this.safeReply(reply, text);
+    };
+  }
+
+  private get brainAvailable(): boolean {
+    return this.deps.brain !== undefined;
+  }
+
+  /**
+   * Resolves a brain category suggestion against the owner's categories
    * by exact normalized equality. Never creates categories; "otro" is treated
    * as no suggestion so the normal correction flow follows.
    */
@@ -369,6 +480,7 @@ export class TelegramService {
     reply?: ReplyPort,
   ): Promise<void> {
     const ownerId = this.deps.ownerId;
+    const send = this.makeSender(this.brainAvailable, reply);
     const categories = await this.deps.categoryService.listCategories(ownerId);
     const normalizedText = normalizeForMatch(body);
     const trimmed = body.trim();
@@ -381,7 +493,10 @@ export class TelegramService {
         pendingMovementId: null,
         pendingNote: null,
       });
-      await this.safeReply(reply, otroKeptReply());
+      await send(
+        { intent: "correct_category", ok: true, action: "none", amount: null, category: "otro", note: null },
+        otroKeptReply(),
+      );
       return;
     }
 
@@ -389,13 +504,16 @@ export class TelegramService {
     // (multi-word names; a category named "500" beats an amount).
     const exactCategory = categories.find((category) => normalizeForMatch(category.name) === normalizedText);
     if (exactCategory !== undefined) {
-      await this.answerCorrection(state, exactCategory.name, reply);
+      await this.answerCorrection(state, exactCategory.name, send, reply);
       return;
     }
 
     // D6 rule 2: parses as amount → NEW registration; the pending correction is abandoned.
     if (parseAmountAndNote(body) !== null) {
-      await this.safeReply(reply, correctionAbandonedReply());
+      await send(
+        { intent: "correct_category", ok: false, action: "none", amount: null, category: null, note: body },
+        correctionAbandonedReply(),
+      );
       await this.handleRegistration(body, reply);
       return;
     }
@@ -403,19 +521,23 @@ export class TelegramService {
     // D6 rule 3: a single token → ANSWER + auto-create.
     if (trimmed.split(/\s+/).length === 1) {
       const created = await this.deps.categoryService.createCategory(ownerId, trimmed);
-      await this.answerCorrection(state, created.name, reply);
+      await this.answerCorrection(state, created.name, send, reply);
       return;
     }
 
     // A multi-word non-category answer → DO NOT dead-end: list the existing
     // categories so the user can pick, keeping the state open (the movement is
     // already safe in "otro").
-    await this.safeReply(reply, categoryNotFoundReply(trimmed, categories.map((category) => category.name)));
+    await send(
+      { intent: "correct_category", ok: false, action: "asked_category", amount: null, category: null, note: trimmed },
+      categoryNotFoundReply(trimmed, categories.map((category) => category.name)),
+    );
   }
 
   private async answerCorrection(
     state: BotStateRecord,
     category: string,
+    send: Sender,
     reply?: ReplyPort,
   ): Promise<void> {
     const ownerId = this.deps.ownerId;
@@ -432,6 +554,7 @@ export class TelegramService {
           pendingMovementId: null,
           pendingNote: null,
         });
+        // D7: error replies stay fixed-only.
         const text = error instanceof NotFoundError ? movementMissingReply() : categoryErrorReply("no se pudo actualizar el movimiento");
         await this.safeReply(reply, text);
         return;
@@ -444,7 +567,10 @@ export class TelegramService {
       pendingMovementId: null,
       pendingNote: null,
     });
-    await this.safeReply(reply, correctionDoneReply(category));
+    await send(
+      { intent: "correct_category", ok: true, action: "registered", amount: null, category, note: state.pendingNote },
+      correctionDoneReply(category),
+    );
   }
 
   private async handleCommand(command: TelegramCommand, reply?: ReplyPort): Promise<void> {
@@ -546,7 +672,7 @@ export class TelegramService {
     amount: number,
     note: string | null,
     category: string,
-    reply?: ReplyPort,
+    send: Sender,
   ): Promise<boolean> {
     const movement = await this.createMovement(body, amount, note, category);
     if (movement === null) {
@@ -558,7 +684,10 @@ export class TelegramService {
       pendingMovementId: null,
       pendingNote: null,
     });
-    await this.safeReply(reply, successReply(amount, note, category));
+    await send(
+      { intent: "register_expense", ok: true, action: "registered", amount, category, note },
+      successReply(amount, note, category),
+    );
     return true;
   }
 
@@ -567,7 +696,7 @@ export class TelegramService {
     body: string,
     amount: number,
     note: string | null,
-    reply?: ReplyPort,
+    send: Sender,
   ): Promise<boolean> {
     await this.deps.categoryService.ensureOtro(this.deps.ownerId);
     const movement = await this.createMovement(body, amount, note, "otro");
@@ -584,7 +713,10 @@ export class TelegramService {
       pendingNote: displayNote,
     });
     // The movement is already registered in "otro"; the reassignment is optional.
-    await this.safeReply(reply, correctionOfferReply(amount, displayNote, "otro"));
+    await send(
+      { intent: "register_expense", ok: true, action: "asked_category", amount, category: "otro", note: displayNote },
+      correctionOfferReply(amount, displayNote, "otro"),
+    );
     return true;
   }
 

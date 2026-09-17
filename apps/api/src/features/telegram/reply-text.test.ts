@@ -1,10 +1,14 @@
 import { describe, expect, it } from "vitest";
+import type { ExecutionResult } from "./bot-brain";
 import {
   amountConfirmationAbandonedReply,
   amountConflictReply,
   balanceQueryReply,
+  capabilitiesSummaryReply,
   categoriesQueryReply,
+  categoryCommandReplyTemplate,
   categoryCreatedReply,
+  categoryDeletedReply,
   categoryErrorReply,
   categoryListReply,
   categoryNotFoundReply,
@@ -19,6 +23,7 @@ import {
   missingCategoryReply,
   monthQueryReply,
   movementMissingReply,
+  otroDeleteForbiddenReply,
   otroKeptReply,
   queryReplyTemplate,
   recentQueryReply,
@@ -148,6 +153,21 @@ describe("reply builders", () => {
     );
   });
 
+  it("builds the delete confirmation and the otro-guard warning", () => {
+    expect(categoryDeletedReply("Viajes")).toBe('Categoría "Viajes" borrada.');
+    expect(otroDeleteForbiddenReply()).toContain("otro");
+  });
+
+  it("builds a capabilities summary listing what the bot can do", () => {
+    const summary = capabilitiesSummaryReply();
+
+    expect(summary).toContain("registrar");
+    expect(summary).toContain("consultar");
+    expect(summary).toContain("borrar");
+    expect(summary).toContain("renombrar");
+    expect(summary).toContain("asociar");
+  });
+
   it("builds command error replies", () => {
     expect(duplicateCategoryReply("Salud")).toContain("Salud");
     expect(missingCategoryReply("Salud")).toContain("Salud");
@@ -227,5 +247,83 @@ describe("query reply templates", () => {
     expect(
       queryReplyTemplate({ query_type: "month", month: "2026-09", monthIncome: 1, monthExpenses: 2, monthCount: 3 }),
     ).toContain("septiembre");
+  });
+});
+
+function categoryResult(overrides: Partial<ExecutionResult>): ExecutionResult {
+  return {
+    intent: "create_category",
+    ok: true,
+    action: "created",
+    amount: null,
+    category: "Mascotas",
+    note: null,
+    ...overrides,
+  };
+}
+
+describe("category command reply templates", () => {
+  it("confirms a created category", () => {
+    const text = categoryCommandReplyTemplate(categoryResult({ intent: "create_category", category: "Mascotas" }));
+
+    expect(text).toBe('Categoría "Mascotas" creada.');
+  });
+
+  it("reports a duplicate on create", () => {
+    const text = categoryCommandReplyTemplate(
+      categoryResult({ intent: "create_category", ok: false, error: "duplicate", category: "Mascotas", message: "already exists" }),
+    );
+
+    expect(text).toContain("Ya existe");
+    expect(text).toContain("Mascotas");
+  });
+
+  it("confirms a deleted category", () => {
+    const text = categoryCommandReplyTemplate(categoryResult({ intent: "delete_category", category: "Viajes" }));
+
+    expect(text).toBe('Categoría "Viajes" borrada.');
+  });
+
+  it("reports a missing category on delete", () => {
+    const text = categoryCommandReplyTemplate(
+      categoryResult({ intent: "delete_category", ok: false, error: "not_found", category: "Viajes", message: "not found" }),
+    );
+
+    expect(text).toContain("No existe");
+  });
+
+  it("refuses to delete the otro fallback", () => {
+    const text = categoryCommandReplyTemplate(
+      categoryResult({ intent: "delete_category", ok: false, error: "otro_forbidden", category: "otro", message: "fallback" }),
+    );
+
+    expect(text).toContain("otro");
+    expect(text).not.toContain("No existe");
+  });
+
+  it("confirms a rename with both names", () => {
+    const text = categoryCommandReplyTemplate(
+      categoryResult({ intent: "rename_category", category: "Super", new_name: "Supermercado" }),
+    );
+
+    expect(text).toContain("Super");
+    expect(text).toContain("Supermercado");
+  });
+
+  it("reports a duplicate on rename", () => {
+    const text = categoryCommandReplyTemplate(
+      categoryResult({ intent: "rename_category", ok: false, error: "duplicate", category: "Super", new_name: "Supermercado", message: "already exists" }),
+    );
+
+    expect(text).toContain("Ya existe");
+    expect(text).toContain("Supermercado");
+  });
+
+  it("falls back to the capabilities summary for the capabilities intent", () => {
+    const text = categoryCommandReplyTemplate(
+      categoryResult({ intent: "capabilities", ok: true, action: "capabilities" }),
+    );
+
+    expect(text).toBe(capabilitiesSummaryReply());
   });
 });

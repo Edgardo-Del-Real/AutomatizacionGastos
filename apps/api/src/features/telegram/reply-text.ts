@@ -76,6 +76,18 @@ export function amountConfirmationAbandonedReply(): string {
   return "Ojo: dejé sin asignar la pregunta del monto. Ahora registro el mensaje nuevo.";
 }
 
+export function queryRedirectReply(): string {
+  return "Todavía no puedo consultar gastos, balances ni resúmenes: esa función llega en una próxima versión. Para registrar un gasto mandá el monto con una nota, por ejemplo: $2500 supermercado.";
+}
+
+export function associateKeywordRedirectReply(): string {
+  return "Para asociar una palabra a una categoría usá el comando: asociar palabra: P a categoria: X.";
+}
+
+export function offTopicRedirectReply(): string {
+  return "Solo registro gastos e ingresos: mandá el monto con una nota (ej: $2500 supermercado) y lo cargo al toque.";
+}
+
 export function categoryCreatedReply(name: string): string {
   return `Categoría "${name}" creada.`;
 }

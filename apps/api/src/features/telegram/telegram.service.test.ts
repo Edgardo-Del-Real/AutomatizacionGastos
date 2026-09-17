@@ -5,8 +5,14 @@ import type { ProcessedMessageRepository } from "../messages/message.repository"
 import type { MovementService } from "../movements/movements.service";
 import type { CategoryService } from "../categories/categories.service";
 import type { BotStateRepository, BotStateRecord } from "./bot-state.repository";
-import type { InterpretedNote } from "./note-interpreter";
-import { formatARS } from "./reply-text";
+import type { ConversationEnvelope, ExecutionResult } from "./bot-brain";
+import {
+  associateKeywordRedirectReply,
+  formatARS,
+  helpReply,
+  offTopicRedirectReply,
+  queryRedirectReply,
+} from "./reply-text";
 import { amountConfirmationPayloadSchema, TelegramService } from "./telegram.service";
 
 const OWNER_CHAT_ID = 123456789;
@@ -50,7 +56,8 @@ type Harness = {
   mockRenameCategory: ReturnType<typeof vi.fn>;
   mockEnsureOtro: ReturnType<typeof vi.fn>;
   mockSetState: ReturnType<typeof vi.fn>;
-  mockInterpret: ReturnType<typeof vi.fn>;
+  mockBrainInterpret: ReturnType<typeof vi.fn>;
+  mockBrainReply: ReturnType<typeof vi.fn>;
   mockLogger: ReturnType<typeof vi.fn>;
   replies: string[];
   reply: (text: string) => Promise<void>;
@@ -121,8 +128,9 @@ function makeHarness(): Harness {
     }),
   } as unknown as BotStateRepository;
   const mockLogger = vi.fn();
-  const interpreter = {
-    interpret: vi.fn<(note: string) => Promise<InterpretedNote | null>>(async () => null),
+  const brain = {
+    interpret: vi.fn<(message: string) => Promise<ConversationEnvelope | null>>(async () => null),
+    reply: vi.fn<(result: ExecutionResult) => Promise<string | null>>(async () => null),
   };
 
   const service = new TelegramService({
@@ -134,7 +142,7 @@ function makeHarness(): Harness {
     ownerChatId: OWNER_CHAT_ID,
     ownerId,
     logger: mockLogger,
-    interpreter,
+    brain,
   });
 
   return {
@@ -154,11 +162,18 @@ function makeHarness(): Harness {
     mockRenameCategory: vi.mocked(categoryService.renameCategory),
     mockEnsureOtro: vi.mocked(categoryService.ensureOtro),
     mockSetState: vi.mocked(botStateRepository.set),
-    mockInterpret: vi.mocked(interpreter.interpret),
+    mockBrainInterpret: vi.mocked(brain.interpret),
+    mockBrainReply: vi.mocked(brain.reply),
     mockLogger,
     replies,
     reply,
   };
+}
+
+function seedHarnessCategories(h: Harness, names: string[]): void {
+  h.mockListCategories.mockResolvedValue(
+    names.map((name) => ({ id: `c-${name}`, ownerId, name, createdAt: new Date(), keywords: [] })),
+  );
 }
 
 describe("TelegramService state machine", () => {
@@ -172,7 +187,7 @@ describe("TelegramService state machine", () => {
     await h.service.handleUpdate(textUpdate(), h.reply);
 
     expect(h.mockCreateExpense).not.toHaveBeenCalled();
-    expect(h.mockInterpret).not.toHaveBeenCalled();
+    expect(h.mockBrainInterpret).not.toHaveBeenCalled();
     expect(h.mockSetState).toHaveBeenCalledWith({
       ownerId,
       state: "awaiting_setup",
@@ -362,21 +377,32 @@ describe("TelegramService state machine", () => {
     });
   });
 
-  it("records and creates a matched movement with the matched category and a success reply", async () => {
+  it("records and creates a matched movement with the matched category, ignoring the brain suggestion", async () => {
     h.mockListCategories.mockResolvedValue([
       { id: "c1", ownerId, name: "Cafe", createdAt: new Date(), keywords: [] },
       { id: "c2", ownerId, name: "otro", createdAt: new Date(), keywords: [] },
     ]);
     h.mockMatchNote.mockResolvedValue("Cafe");
+    // The brain is invoked (intent-first) but a user-authored keyword rule
+    // beats its category suggestion.
+    h.mockBrainInterpret.mockResolvedValue({
+      intent: "register_expense",
+      amount: 2500,
+      category: "Kiosco",
+      note: null,
+    });
 
     await h.service.handleUpdate(textUpdate({ text: "$2500 cafe", messageId: 11 }), h.reply);
 
+    expect(h.mockBrainInterpret).toHaveBeenCalledWith("$2500 cafe");
     expect(h.mockCreateExpense).toHaveBeenCalledWith(
       expect.objectContaining({ amount: 2500, category: "Cafe" }),
       ownerId,
     );
-    // A matched keyword rule beats the interpreter: it is never invoked.
-    expect(h.mockInterpret).not.toHaveBeenCalled();
+    expect(h.mockCreateExpense).not.toHaveBeenCalledWith(
+      expect.objectContaining({ category: "Kiosco" }),
+      ownerId,
+    );
     expect(h.replies.at(-1)).toContain("Cafe");
     expect(h.mockSetState).toHaveBeenLastCalledWith({
       ownerId,
@@ -683,7 +709,7 @@ describe("TelegramService commands", () => {
   });
 });
 
-describe("TelegramService interpreter integration (llm-note-interpreter)", () => {
+describe("TelegramService brain orchestration (llm-conversational-bot)", () => {
   let h: Harness;
 
   beforeEach(() => {
@@ -696,9 +722,9 @@ describe("TelegramService interpreter integration (llm-note-interpreter)", () =>
     note?: string | null;
   }): void {
     const payload = amountConfirmationPayloadSchema.parse({
-      body: "gaste como 5 mil pesos",
-      note: overrides?.note ?? "gaste como mil pesos",
-      amounts: overrides?.amounts ?? [5, 5000],
+      body: "gaste 4800 en el kiosco",
+      note: overrides?.note ?? "gaste en el kiosco",
+      amounts: overrides?.amounts ?? [4800, 5000],
       category: overrides?.category ?? null,
     });
     h.botStateRepository.set({
@@ -709,12 +735,17 @@ describe("TelegramService interpreter integration (llm-note-interpreter)", () =>
     });
   }
 
-  it("registers a keyword-miss with a resolvable interpreter category using the owner's spelling", async () => {
+  it("registers a keyword-miss with a resolvable brain category using the owner's spelling", async () => {
     h.mockListCategories.mockResolvedValue([
       { id: "c1", ownerId, name: "otro", createdAt: new Date(), keywords: [] },
       { id: "c2", ownerId, name: "Supermercado", createdAt: new Date(), keywords: [] },
     ]);
-    h.mockInterpret.mockResolvedValue({ amount: 2000, category: "supermercado", product: null });
+    h.mockBrainInterpret.mockResolvedValue({
+      intent: "register_expense",
+      amount: 2000,
+      category: "supermercado",
+      note: null,
+    });
 
     await h.service.handleUpdate(textUpdate({ text: "$2000 feria", messageId: 1 }), h.reply);
 
@@ -732,11 +763,16 @@ describe("TelegramService interpreter integration (llm-note-interpreter)", () =>
     expect(h.replies.at(-1)).toContain("Supermercado");
   });
 
-  it("falls to otro and offers correction when the interpreter category is unknown, never auto-creating it", async () => {
+  it("falls to otro and offers correction when the brain category is unknown, never auto-creating it", async () => {
     h.mockListCategories.mockResolvedValue([
       { id: "c1", ownerId, name: "otro", createdAt: new Date(), keywords: [] },
     ]);
-    h.mockInterpret.mockResolvedValue({ amount: 2000, category: "Kiosco", product: null });
+    h.mockBrainInterpret.mockResolvedValue({
+      intent: "register_expense",
+      amount: 2000,
+      category: "Kiosco",
+      note: null,
+    });
 
     await h.service.handleUpdate(textUpdate({ text: "$2000 chucherias", messageId: 1 }), h.reply);
 
@@ -753,11 +789,16 @@ describe("TelegramService interpreter integration (llm-note-interpreter)", () =>
     });
   });
 
-  it("treats an interpreter suggestion of 'otro' as no suggestion and offers the correction", async () => {
+  it("treats a brain suggestion of 'otro' as no suggestion and offers the correction", async () => {
     h.mockListCategories.mockResolvedValue([
       { id: "c1", ownerId, name: "otro", createdAt: new Date(), keywords: [] },
     ]);
-    h.mockInterpret.mockResolvedValue({ amount: 2000, category: "otro", product: null });
+    h.mockBrainInterpret.mockResolvedValue({
+      intent: "register_expense",
+      amount: 2000,
+      category: "otro",
+      note: null,
+    });
 
     await h.service.handleUpdate(textUpdate({ text: "$2000 feria", messageId: 1 }), h.reply);
 
@@ -773,11 +814,11 @@ describe("TelegramService interpreter integration (llm-note-interpreter)", () =>
     });
   });
 
-  it("falls back to today's otro path on a keyword miss when the interpreter returns null", async () => {
+  it("falls back to today's otro path on a keyword miss when the brain returns null", async () => {
     h.mockListCategories.mockResolvedValue([
       { id: "c1", ownerId, name: "otro", createdAt: new Date(), keywords: [] },
     ]);
-    h.mockInterpret.mockResolvedValue(null);
+    h.mockBrainInterpret.mockResolvedValue(null);
 
     await h.service.handleUpdate(textUpdate({ text: "$2000 feria", messageId: 1 }), h.reply);
 
@@ -791,6 +832,20 @@ describe("TelegramService interpreter integration (llm-note-interpreter)", () =>
       pendingMovementId: "mov-1",
       pendingNote: "$ feria",
     });
+  });
+
+  it("behaves exactly as today when the brain returns null, without any reply call", async () => {
+    h.mockListCategories.mockResolvedValue([
+      { id: "c1", ownerId, name: "otro", createdAt: new Date(), keywords: [] },
+    ]);
+
+    await h.service.handleUpdate(textUpdate({ text: "$2000 feria", messageId: 1 }), h.reply);
+
+    expect(h.mockCreateExpense).toHaveBeenCalledWith(
+      expect.objectContaining({ amount: 2000, category: "otro" }),
+      ownerId,
+    );
+    expect(h.mockBrainReply).not.toHaveBeenCalled();
   });
 
   it("rescues an unparseable amount and registers with the resolved category", async () => {
@@ -798,7 +853,12 @@ describe("TelegramService interpreter integration (llm-note-interpreter)", () =>
       { id: "c1", ownerId, name: "otro", createdAt: new Date(), keywords: [] },
       { id: "c2", ownerId, name: "Supermercado", createdAt: new Date(), keywords: [] },
     ]);
-    h.mockInterpret.mockResolvedValue({ amount: 5000, category: "Supermercado", product: null });
+    h.mockBrainInterpret.mockResolvedValue({
+      intent: "register_expense",
+      amount: 5000,
+      category: "Supermercado",
+      note: null,
+    });
 
     await h.service.handleUpdate(textUpdate({ text: "compre mercaderia", messageId: 1 }), h.reply);
 
@@ -818,7 +878,12 @@ describe("TelegramService interpreter integration (llm-note-interpreter)", () =>
     h.mockListCategories.mockResolvedValue([
       { id: "c1", ownerId, name: "otro", createdAt: new Date(), keywords: [] },
     ]);
-    h.mockInterpret.mockResolvedValue({ amount: 5000, category: null, product: null });
+    h.mockBrainInterpret.mockResolvedValue({
+      intent: "register_expense",
+      amount: 5000,
+      category: null,
+      note: null,
+    });
 
     await h.service.handleUpdate(textUpdate({ text: "compre mercaderia", messageId: 1 }), h.reply);
 
@@ -835,12 +900,12 @@ describe("TelegramService interpreter integration (llm-note-interpreter)", () =>
   });
 
   it.each(["gaste cinco mil pesos", "1234,50 cafe"])(
-    "replies with help and creates nothing when the rescue returns null for %s",
+    "replies with help and creates nothing when the interpret returns null for %s",
     async (body) => {
       h.mockListCategories.mockResolvedValue([
         { id: "c1", ownerId, name: "otro", createdAt: new Date(), keywords: [] },
       ]);
-      h.mockInterpret.mockResolvedValue(null);
+      h.mockBrainInterpret.mockResolvedValue(null);
 
       await h.service.handleUpdate(textUpdate({ text: body, messageId: 1 }), h.reply);
 
@@ -849,13 +914,18 @@ describe("TelegramService interpreter integration (llm-note-interpreter)", () =>
     },
   );
 
-  it("asks the owner on an amount conflict and persists the confirmation payload", async () => {
+  it("asks the owner on a genuine amount conflict and persists the confirmation payload", async () => {
     h.mockListCategories.mockResolvedValue([
       { id: "c1", ownerId, name: "otro", createdAt: new Date(), keywords: [] },
     ]);
-    h.mockInterpret.mockResolvedValue({ amount: 5000, category: null, product: null });
+    h.mockBrainInterpret.mockResolvedValue({
+      intent: "register_expense",
+      amount: 5000,
+      category: null,
+      note: null,
+    });
 
-    await h.service.handleUpdate(textUpdate({ text: "gaste como 5 mil pesos", messageId: 1 }), h.reply);
+    await h.service.handleUpdate(textUpdate({ text: "gaste 4800 en el kiosco", messageId: 1 }), h.reply);
 
     expect(h.mockCreateExpense).not.toHaveBeenCalled();
     const lastCall = h.mockSetState.mock.calls.at(-1)?.[0] as BotStateRecord;
@@ -867,13 +937,38 @@ describe("TelegramService interpreter integration (llm-note-interpreter)", () =>
       note: string | null;
       category: string | null;
     };
-    expect(payload.amounts).toEqual([5, 5000]);
-    expect(payload.body).toBe("gaste como 5 mil pesos");
-    expect(payload.note).toBe("gaste como mil pesos");
+    expect(payload.amounts).toEqual([4800, 5000]);
+    expect(payload.body).toBe("gaste 4800 en el kiosco");
+    expect(payload.note).toBe("gaste en el kiosco");
     expect(payload.category).toBeNull();
     const reply = h.replies.at(-1) ?? "";
-    expect(reply).toContain(formatARS(5));
+    expect(reply).toContain(formatARS(4800));
     expect(reply).toContain(formatARS(5000));
+  });
+
+  it('registers the brain amount directly for a "5 mil" stance message with no conflict question', async () => {
+    h.mockListCategories.mockResolvedValue([
+      { id: "c1", ownerId, name: "otro", createdAt: new Date(), keywords: [] },
+    ]);
+    h.mockBrainInterpret.mockResolvedValue({
+      intent: "register_expense",
+      amount: 5000,
+      category: null,
+      note: null,
+    });
+
+    await h.service.handleUpdate(textUpdate({ text: "gaste 5 mil en el super", messageId: 1 }), h.reply);
+
+    expect(h.mockCreateExpense).toHaveBeenCalledWith(
+      expect.objectContaining({ amount: 5000, category: "otro" }),
+      ownerId,
+    );
+    // Registered directly: the conflict question and its state never fire.
+    expect(h.mockSetState).toHaveBeenLastCalledWith(
+      expect.objectContaining({ state: "awaiting_category" }),
+    );
+    expect(h.replies.at(-1)).toContain(formatARS(5000));
+    expect(h.replies.at(-1)).not.toContain("no me queda claro");
   });
 
   it("registers the chosen amount from the stored context on a matching answer", async () => {
@@ -888,7 +983,7 @@ describe("TelegramService interpreter integration (llm-note-interpreter)", () =>
     expect(h.mockCreateExpense).toHaveBeenCalledWith(
       expect.objectContaining({
         amount: 5000,
-        note: "gaste como mil pesos",
+        note: "gaste en el kiosco",
         category: "Supermercado",
         type: "EXPENSE",
       }),
@@ -918,7 +1013,7 @@ describe("TelegramService interpreter integration (llm-note-interpreter)", () =>
       ownerId,
       state: "awaiting_category",
       pendingMovementId: "mov-1",
-      pendingNote: "gaste como mil pesos",
+      pendingNote: "gaste en el kiosco",
     });
   });
 
@@ -951,9 +1046,9 @@ describe("TelegramService interpreter integration (llm-note-interpreter)", () =>
       { id: "c2", ownerId, name: "Transporte", createdAt: new Date(), keywords: [] },
     ]);
     const payload = amountConfirmationPayloadSchema.parse({
-      body: "gaste como 5 mil pesos en taxi",
-      note: "gaste como mil pesos en taxi",
-      amounts: [5, 5000],
+      body: "gaste 4800 en taxi",
+      note: "gaste en taxi",
+      amounts: [4800, 5000],
       category: "Transporte",
     });
     h.botStateRepository.set({
@@ -1024,5 +1119,249 @@ describe("TelegramService interpreter integration (llm-note-interpreter)", () =>
     expect(h.mockCreateExpense).not.toHaveBeenCalled();
     expect(h.mockSetState).not.toHaveBeenCalled();
     expect(h.replies.at(-1)).toContain("otro");
+  });
+
+  it("runs the registration flow for a register_expense envelope and sends the brain reply verbatim", async () => {
+    seedHarnessCategories(h, ["Supermercado", "otro"]);
+    h.mockBrainInterpret.mockResolvedValue({
+      intent: "register_expense",
+      amount: 5000,
+      category: "Supermercado",
+      note: null,
+    });
+    h.mockBrainReply.mockResolvedValue("Listo, quedó registrado 5000 en Supermercado.");
+
+    await h.service.handleUpdate(textUpdate({ text: "compre mercaderia", messageId: 1 }), h.reply);
+
+    expect(h.mockCreateExpense).toHaveBeenCalledWith(
+      expect.objectContaining({ amount: 5000, category: "Supermercado", note: "compre mercaderia" }),
+      ownerId,
+    );
+    expect(h.mockBrainReply).toHaveBeenCalledWith({
+      intent: "register_expense",
+      ok: true,
+      action: "registered",
+      amount: 5000,
+      category: "Supermercado",
+      note: "compre mercaderia",
+    });
+    expect(h.replies.at(-1)).toBe("Listo, quedó registrado 5000 en Supermercado.");
+    expect(h.mockSetState).toHaveBeenLastCalledWith({
+      ownerId,
+      state: "idle",
+      pendingMovementId: null,
+      pendingNote: null,
+    });
+  });
+
+  it("sends the fixed success template carrying the same facts when the brain reply is null", async () => {
+    seedHarnessCategories(h, ["Supermercado", "otro"]);
+    h.mockBrainInterpret.mockResolvedValue({
+      intent: "register_expense",
+      amount: 5000,
+      category: "Supermercado",
+      note: null,
+    });
+    h.mockBrainReply.mockResolvedValue(null);
+
+    await h.service.handleUpdate(textUpdate({ text: "compre mercaderia", messageId: 1 }), h.reply);
+
+    expect(h.mockBrainReply).toHaveBeenCalled();
+    expect(h.replies.at(-1)).toContain(formatARS(5000));
+    expect(h.replies.at(-1)).toContain("compre mercaderia");
+    expect(h.replies.at(-1)).toContain("Supermercado");
+  });
+
+  it("redirects a query_balance intent honestly without creating a movement", async () => {
+    seedHarnessCategories(h, ["otro"]);
+    h.mockBrainInterpret.mockResolvedValue({
+      intent: "query_balance",
+      amount: null,
+      category: null,
+      note: null,
+    });
+    h.mockBrainReply.mockResolvedValue("Todavía no puedo consultar el balance.");
+
+    await h.service.handleUpdate(textUpdate({ text: "cuánto gasté?", messageId: 1 }), h.reply);
+
+    expect(h.mockCreateExpense).not.toHaveBeenCalled();
+    expect(h.mockSetState).not.toHaveBeenCalled();
+    expect(h.mockBrainReply).toHaveBeenCalledWith({
+      intent: "query_balance",
+      ok: false,
+      action: "redirected",
+      amount: null,
+      category: null,
+      note: null,
+    });
+    expect(h.replies.at(-1)).toBe("Todavía no puedo consultar el balance.");
+  });
+
+  it("redirects query_* with the fixed fallback when the brain reply is null", async () => {
+    seedHarnessCategories(h, ["otro"]);
+    h.mockBrainInterpret.mockResolvedValue({
+      intent: "query_month",
+      amount: null,
+      category: null,
+      note: null,
+    });
+
+    await h.service.handleUpdate(textUpdate({ text: "cuánto gasté este mes?", messageId: 1 }), h.reply);
+
+    expect(h.mockCreateExpense).not.toHaveBeenCalled();
+    expect(h.replies.at(-1)).toBe(queryRedirectReply());
+  });
+
+  it("redirects an off_topic intent without creating a movement and never chats", async () => {
+    seedHarnessCategories(h, ["otro"]);
+    h.mockBrainInterpret.mockResolvedValue({
+      intent: "off_topic",
+      amount: null,
+      category: null,
+      note: null,
+    });
+    h.mockBrainReply.mockResolvedValue("Solo registro gastos: mandame un monto.");
+
+    await h.service.handleUpdate(textUpdate({ text: "hola, cómo andás?", messageId: 1 }), h.reply);
+
+    expect(h.mockCreateExpense).not.toHaveBeenCalled();
+    expect(h.mockSetState).not.toHaveBeenCalled();
+    expect(h.replies.at(-1)).toBe("Solo registro gastos: mandame un monto.");
+    expect(h.replies.at(-1)).not.toContain("bien, gracias");
+  });
+
+  it("redirects an off_topic intent to the fixed expense-scoped fallback when the brain reply is null", async () => {
+    seedHarnessCategories(h, ["otro"]);
+    h.mockBrainInterpret.mockResolvedValue({
+      intent: "off_topic",
+      amount: null,
+      category: null,
+      note: null,
+    });
+
+    await h.service.handleUpdate(textUpdate({ text: "hola", messageId: 1 }), h.reply);
+
+    expect(h.mockCreateExpense).not.toHaveBeenCalled();
+    expect(h.replies.at(-1)).toBe(offTopicRedirectReply());
+  });
+
+  it("redirects associate_keyword to the explicit command", async () => {
+    seedHarnessCategories(h, ["otro"]);
+    h.mockBrainInterpret.mockResolvedValue({
+      intent: "associate_keyword",
+      amount: null,
+      category: null,
+      note: null,
+    });
+
+    await h.service.handleUpdate(textUpdate({ text: "de ahora en más uber va a transporte", messageId: 1 }), h.reply);
+
+    expect(h.mockCreateExpense).not.toHaveBeenCalled();
+    expect(h.replies.at(-1)).toBe(associateKeywordRedirectReply());
+  });
+
+  it("replies with help for help and reserved correct_* intents in idle", async () => {
+    seedHarnessCategories(h, ["otro"]);
+    h.mockBrainInterpret.mockResolvedValue({
+      intent: "help",
+      amount: null,
+      category: null,
+      note: null,
+    });
+
+    await h.service.handleUpdate(textUpdate({ text: "qué puedo hacer?", messageId: 1 }), h.reply);
+
+    expect(h.mockCreateExpense).not.toHaveBeenCalled();
+    expect(h.replies.at(-1)).toBe(helpReply());
+
+    h.mockBrainInterpret.mockResolvedValue({
+      intent: "correct_amount",
+      amount: 5000,
+      category: null,
+      note: null,
+    });
+    await h.service.handleUpdate(textUpdate({ text: "5000", messageId: 2 }), h.reply);
+
+    expect(h.mockCreateExpense).not.toHaveBeenCalled();
+    expect(h.replies.at(-1)).toBe(helpReply());
+  });
+
+  it("uses the deterministic note when both the parser and the brain provide one", async () => {
+    seedHarnessCategories(h, ["otro"]);
+    h.mockBrainInterpret.mockResolvedValue({
+      intent: "register_expense",
+      amount: 2500,
+      category: null,
+      note: "cafe con leche",
+    });
+
+    await h.service.handleUpdate(textUpdate({ text: "cafe 2500", messageId: 1 }), h.reply);
+
+    expect(h.mockCreateExpense).toHaveBeenCalledWith(
+      expect.objectContaining({ amount: 2500, note: "cafe" }),
+      ownerId,
+    );
+  });
+
+  it("fills the note gap from the brain when the deterministic note is absent", async () => {
+    seedHarnessCategories(h, ["otro"]);
+    h.mockBrainInterpret.mockResolvedValue({
+      intent: "register_expense",
+      amount: 2500,
+      category: null,
+      note: "cafe",
+    });
+
+    await h.service.handleUpdate(textUpdate({ text: "2500", messageId: 1 }), h.reply);
+
+    expect(h.mockCreateExpense).toHaveBeenCalledWith(
+      expect.objectContaining({ amount: 2500, note: "cafe" }),
+      ownerId,
+    );
+  });
+
+  it("does not call interpret for dialog answers but routes branch replies through reply", async () => {
+    seedHarnessCategories(h, ["otro", "Transporte"]);
+    h.mockBrainReply.mockResolvedValue("Listo, el movimiento quedó en Transporte.");
+
+    await h.service.handleUpdate(textUpdate({ text: "$1200 uber viaje", messageId: 1 }), h.reply);
+    h.mockBrainInterpret.mockClear();
+
+    await h.service.handleUpdate(textUpdate({ text: "Transporte", messageId: 2 }), h.reply);
+
+    expect(h.mockBrainInterpret).not.toHaveBeenCalled();
+    expect(h.mockBrainReply).toHaveBeenCalledWith({
+      intent: "correct_category",
+      ok: true,
+      action: "registered",
+      amount: null,
+      category: "Transporte",
+      note: "$ uber viaje",
+    });
+    expect(h.replies.at(-1)).toBe("Listo, el movimiento quedó en Transporte.");
+  });
+
+  it("routes an amount-confirmation answer through the brain reply without calling interpret", async () => {
+    seedHarnessCategories(h, ["otro"]);
+    seedConfirmation();
+    h.mockBrainInterpret.mockClear();
+    h.mockBrainReply.mockResolvedValue("Listo, quedó registrado 5000.");
+
+    await h.service.handleUpdate(textUpdate({ text: "5000", messageId: 2 }), h.reply);
+
+    expect(h.mockBrainInterpret).not.toHaveBeenCalled();
+    // The stored category is null, so the answer registers in "otro" and the
+    // branch result reports the correction offer.
+    expect(h.mockBrainReply).toHaveBeenCalledWith(
+      expect.objectContaining({ intent: "register_expense", action: "asked_category", amount: 5000 }),
+    );
+    expect(h.replies.at(-1)).toBe("Listo, quedó registrado 5000.");
+  });
+
+  it("never calls the brain reply for commands", async () => {
+    await h.service.handleUpdate(textUpdate({ text: "listar categorias", messageId: 1 }), h.reply);
+
+    expect(h.mockBrainInterpret).not.toHaveBeenCalled();
+    expect(h.mockBrainReply).not.toHaveBeenCalled();
   });
 });

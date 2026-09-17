@@ -10,7 +10,8 @@ import { PrismaProcessedMessageRepository } from "../messages/message.repository
 import { PrismaMovementRepository } from "../movements/movements.repository";
 import { MovementService } from "../movements/movements.service";
 import { PrismaBotStateRepository } from "./bot-state.repository";
-import type { NoteInterpreter } from "./note-interpreter";
+import type { BotBrain, ConversationEnvelope } from "./bot-brain";
+import { formatARS } from "./reply-text";
 import { TelegramService } from "./telegram.service";
 
 loadDotEnvFromDisk();
@@ -43,6 +44,17 @@ function textUpdate(overrides?: { fromId?: number; chatId?: number; messageId?: 
   };
 }
 
+/** Canned brain with a null interpret by default: deterministic-only unless overridden. */
+function stubBrain(overrides?: {
+  interpret?: (message: string) => Promise<ConversationEnvelope | null>;
+  reply?: (result: unknown) => Promise<string | null>;
+}): BotBrain {
+  return {
+    interpret: overrides?.interpret ?? (async () => null),
+    reply: overrides?.reply ?? (async () => null),
+  };
+}
+
 describe("TelegramService (integration)", () => {
   const testDatabaseUrl = resolveTestDatabaseUrl();
   let prisma: PrismaClient;
@@ -61,7 +73,7 @@ describe("TelegramService (integration)", () => {
 
   function buildService(
     logger: (message: string) => void = () => undefined,
-    interpreter?: NoteInterpreter,
+    brain?: BotBrain,
   ): TelegramService {
     const messageRepository = new PrismaProcessedMessageRepository(prisma);
     const expenseService = new ExpenseService(new PrismaExpenseRepository(prisma));
@@ -76,8 +88,8 @@ describe("TelegramService (integration)", () => {
       ownerChatId: OWNER_CHAT_ID,
       ownerId,
       logger,
-      // Default: no interpreter → deterministic-only; tests inject stubs.
-      ...(interpreter === undefined ? {} : { interpreter }),
+      // Default: no brain → deterministic-only; tests inject stubs.
+      ...(brain === undefined ? {} : { brain }),
     });
   }
 
@@ -121,6 +133,17 @@ describe("TelegramService (integration)", () => {
     const after = await prisma.botState.findUnique({ where: { ownerId } });
     expect(after?.state).toBe("idle");
     expect(replies.at(-1)).toContain("Cafe");
+  });
+
+  it("setup: the brain is never invoked when the owner has no categories", async () => {
+    const interpret = vi.fn(async () => null);
+    const stubbed = buildService(() => undefined, stubBrain({ interpret }));
+
+    await stubbed.handleUpdate(textUpdate({ messageId: 1, text: "$2500 cafe" }), async () => undefined);
+
+    expect(interpret).not.toHaveBeenCalled();
+    const state = await prisma.botState.findUnique({ where: { ownerId } });
+    expect(state?.state).toBe("awaiting_setup");
   });
 
   it("correction: an unmatched registration gets 'otro', the answer reassigns it without learning", async () => {
@@ -308,12 +331,20 @@ describe("TelegramService (integration)", () => {
     expect(replies).toHaveLength(0);
   });
 
-  it("interpreter: a keyword-miss suggestion resolving to an owner category registers without a correction round-trip", async () => {
+  it("brain: a keyword-miss suggestion resolving to an owner category registers without a correction round-trip", async () => {
     await seedCategories(["Supermercado"]);
     const replies: string[] = [];
-    const stubbed = buildService(() => undefined, {
-      interpret: async () => ({ amount: 2000, category: "supermercado", product: null }),
-    });
+    const stubbed = buildService(
+      () => undefined,
+      stubBrain({
+        interpret: async () => ({
+          intent: "register_expense",
+          amount: 2000,
+          category: "supermercado",
+          note: null,
+        }),
+      }),
+    );
 
     await stubbed.handleUpdate(textUpdate({ messageId: 1, text: "$2000 feria" }), async (text) => {
       replies.push(text);
@@ -328,11 +359,14 @@ describe("TelegramService (integration)", () => {
     expect(replies.at(-1)).toContain("Supermercado");
   });
 
-  it("interpreter: rescues an amount for an unparseable note and registers it", async () => {
+  it("brain: rescues an amount for an unparseable note and registers it", async () => {
     await seedCategories([]);
-    const stubbed = buildService(() => undefined, {
-      interpret: async () => ({ amount: 5000, category: null, product: null }),
-    });
+    const stubbed = buildService(
+      () => undefined,
+      stubBrain({
+        interpret: async () => ({ intent: "register_expense", amount: 5000, category: null, note: null }),
+      }),
+    );
 
     await stubbed.handleUpdate(textUpdate({ messageId: 1, text: "compre mercaderia" }), async () => undefined);
 
@@ -344,14 +378,101 @@ describe("TelegramService (integration)", () => {
     expect(state?.state).toBe("awaiting_category");
   });
 
-  it("interpreter: conflicting amounts persist an awaiting_amount_confirmation row and ask the owner", async () => {
-    await seedCategories([]);
+  it("brain: a registered movement sends the brain reply verbatim", async () => {
+    await seedCategories(["Cafe"]);
     const replies: string[] = [];
-    const stubbed = buildService(() => undefined, {
-      interpret: async () => ({ amount: 5000, category: null, product: null }),
+    const stubbed = buildService(
+      () => undefined,
+      stubBrain({
+        interpret: async () => ({ intent: "register_expense", amount: 2500, category: "Cafe", note: null }),
+        reply: async () => "Listo, quedó registrado 2500 en Cafe.",
+      }),
+    );
+
+    await stubbed.handleUpdate(textUpdate({ messageId: 1, text: "$2500 cafe" }), async (text) => {
+      replies.push(text);
     });
 
-    await stubbed.handleUpdate(textUpdate({ messageId: 1, text: "gaste como 5 mil pesos" }), async (text) => {
+    const movements = await prisma.expense.findMany({ where: { ownerId } });
+    expect(movements).toHaveLength(1);
+    expect(movements[0]?.amount.toNumber()).toBe(2500);
+    expect(movements[0]?.category).toBe("Cafe");
+    expect(replies.at(-1)).toBe("Listo, quedó registrado 2500 en Cafe.");
+  });
+
+  it("brain: a null reply falls back to the fixed success template carrying the same facts", async () => {
+    await seedCategories(["Cafe"]);
+    const replies: string[] = [];
+    const reply = vi.fn(async (text: string): Promise<void> => {
+      replies.push(text);
+    });
+    const stubbed = buildService(
+      () => undefined,
+      stubBrain({
+        interpret: async () => ({ intent: "register_expense", amount: 2500, category: "Cafe", note: null }),
+        reply: async () => null,
+      }),
+    );
+
+    await stubbed.handleUpdate(textUpdate({ messageId: 1, text: "$2500 cafe" }), reply);
+
+    expect(replies.at(-1)).toContain("Registrado");
+    expect(replies.at(-1)).toContain(formatARS(2500));
+    expect(replies.at(-1)).toContain("Cafe");
+  });
+
+  it("brain: a redirect intent creates no movement and replies honestly", async () => {
+    await seedCategories([]);
+    const replies: string[] = [];
+    const stubbed = buildService(
+      () => undefined,
+      stubBrain({
+        interpret: async () => ({ intent: "query_balance", amount: null, category: null, note: null }),
+        reply: async () => "Todavía no puedo consultar el balance.",
+      }),
+    );
+
+    await stubbed.handleUpdate(textUpdate({ messageId: 1, text: "cuánto gasté?" }), async (text) => {
+      replies.push(text);
+    });
+
+    expect(await prisma.expense.count()).toBe(0);
+    // A redirect never writes state: no row means the owner stays idle.
+    const state = await prisma.botState.findUnique({ where: { ownerId } });
+    expect(state).toBeNull();
+    expect(replies.at(-1)).toBe("Todavía no puedo consultar el balance.");
+  });
+
+  it("brain: an off_topic intent creates no movement and never chats", async () => {
+    await seedCategories([]);
+    const replies: string[] = [];
+    const stubbed = buildService(
+      () => undefined,
+      stubBrain({
+        interpret: async () => ({ intent: "off_topic", amount: null, category: null, note: null }),
+      }),
+    );
+
+    await stubbed.handleUpdate(textUpdate({ messageId: 1, text: "hola, cómo andás?" }), async (text) => {
+      replies.push(text);
+    });
+
+    expect(await prisma.expense.count()).toBe(0);
+    expect(replies.at(-1)).toContain("gastos");
+    expect(replies.at(-1)).not.toContain("bien");
+  });
+
+  it("brain: conflicting amounts persist an awaiting_amount_confirmation row and ask the owner", async () => {
+    await seedCategories([]);
+    const replies: string[] = [];
+    const stubbed = buildService(
+      () => undefined,
+      stubBrain({
+        interpret: async () => ({ intent: "register_expense", amount: 5000, category: null, note: null }),
+      }),
+    );
+
+    await stubbed.handleUpdate(textUpdate({ messageId: 1, text: "gaste 4800 en el kiosco" }), async (text) => {
       replies.push(text);
     });
 
@@ -359,21 +480,48 @@ describe("TelegramService (integration)", () => {
     const state = await prisma.botState.findUnique({ where: { ownerId } });
     expect(state?.state).toBe("awaiting_amount_confirmation");
     const payload = JSON.parse(state?.pendingNote ?? "{}") as { amounts: number[] };
-    expect(payload.amounts).toEqual([5, 5000]);
+    expect(payload.amounts).toEqual([4800, 5000]);
     expect(replies.at(-1)).toContain("monto");
   });
 
-  it("interpreter: the confirmation resolves after a service rebuild (restart survival)", async () => {
-    await seedCategories(["Transporte"]);
-    const stubbed = buildService(() => undefined, {
-      interpret: async () => ({ amount: 5000, category: "Transporte", product: null }),
-    });
-    await stubbed.handleUpdate(
-      textUpdate({ messageId: 1, text: "gaste como 5 mil pesos en taxi" }),
-      async () => undefined,
+  it('brain: a "5 mil" stance message registers the brain amount with no conflict question', async () => {
+    await seedCategories([]);
+    const replies: string[] = [];
+    const stubbed = buildService(
+      () => undefined,
+      stubBrain({
+        interpret: async () => ({ intent: "register_expense", amount: 5000, category: null, note: null }),
+      }),
     );
 
-    // The process restarts: a fresh service without the interpreter still
+    await stubbed.handleUpdate(textUpdate({ messageId: 1, text: "gaste 5 mil en el super" }), async (text) => {
+      replies.push(text);
+    });
+
+    const movements = await prisma.expense.findMany({ where: { ownerId } });
+    expect(movements).toHaveLength(1);
+    expect(movements[0]?.amount.toNumber()).toBe(5000);
+    const state = await prisma.botState.findUnique({ where: { ownerId } });
+    expect(state?.state).toBe("awaiting_category");
+    expect(replies.at(-1)).toContain(formatARS(5000));
+  });
+
+  it("brain: the confirmation resolves after a service rebuild (restart survival)", async () => {
+    await seedCategories(["Transporte"]);
+    const stubbed = buildService(
+      () => undefined,
+      stubBrain({
+        interpret: async () => ({
+          intent: "register_expense",
+          amount: 5000,
+          category: "Transporte",
+          note: null,
+        }),
+      }),
+    );
+    await stubbed.handleUpdate(textUpdate({ messageId: 1, text: "gaste 4800 en taxi" }), async () => undefined);
+
+    // The process restarts: a fresh service without the brain still
     // resolves the persisted question.
     const restarted = buildService();
     await restarted.handleUpdate(textUpdate({ messageId: 2, text: "5000" }), async () => undefined);
@@ -386,17 +534,20 @@ describe("TelegramService (integration)", () => {
     expect(state?.state).toBe("idle");
   });
 
-  it("interpreter: a non-matching reply abandons the question and the new text registers normally", async () => {
+  it("brain: a non-matching reply abandons the question and the new text registers normally", async () => {
     await seedCategories([]);
-    const stubbed = buildService(() => undefined, {
-      interpret: async () => ({ amount: 5000, category: null, product: null }),
-    });
-    await stubbed.handleUpdate(textUpdate({ messageId: 1, text: "gaste como 5 mil pesos" }), async () => undefined);
+    const stubbed = buildService(
+      () => undefined,
+      stubBrain({
+        interpret: async () => ({ intent: "register_expense", amount: 5000, category: null, note: null }),
+      }),
+    );
+    await stubbed.handleUpdate(textUpdate({ messageId: 1, text: "gaste 4800 en el kiosco" }), async () => undefined);
 
     const restarted = buildService();
     await restarted.handleUpdate(textUpdate({ messageId: 2, text: "6000" }), async () => undefined);
 
-    // Nothing registers from the conflicting message (5 or 5000); only 6000.
+    // Nothing registers from the conflicting message (4800 or 5000); only 6000.
     const movements = await prisma.expense.findMany({ where: { ownerId } });
     expect(movements).toHaveLength(1);
     expect(movements[0]?.amount.toNumber()).toBe(6000);

@@ -1,15 +1,25 @@
+import { z } from "zod";
 import type { CategoryService } from "../categories/categories.service";
 import { normalizeForMatch } from "../categories/matcher";
+import type { CategoryWithKeywords } from "../categories/categories.types";
 import type { ExpenseService } from "../expenses/expenses.service";
-import { classifyMovementType, parseAmountAndNote, type ParsedAmount } from "../messages/message.parser";
+import {
+  classifyMovementType,
+  extractNote,
+  parseAmount,
+  parseAmountAndNote,
+  type ParsedAmount,
+} from "../messages/message.parser";
 import { isUniqueConstraintViolation, type ProcessedMessageRepository } from "../messages/message.repository";
 import { NotFoundError, ValidationFailedError } from "../../infra/errors";
 import type { MovementService } from "../movements/movements.service";
 import type { BotStateRecord, BotStateRepository } from "./bot-state.repository";
-import type { NoteInterpreter } from "./note-interpreter";
+import { normalizeAmountString, type InterpretedNote, type NoteInterpreter } from "./note-interpreter";
 import { parseCommand, type TelegramCommand } from "./telegram.commands";
 import { normalizeTelegramMessage } from "./telegram.parser";
 import {
+  amountConfirmationAbandonedReply,
+  amountConflictReply,
   categoryCreatedReply,
   categoryErrorReply,
   categoryListReply,
@@ -48,6 +58,20 @@ export type TelegramServiceDeps = {
 const IDLE = "idle";
 const AWAITING_SETUP = "awaiting_setup";
 const AWAITING_CATEGORY = "awaiting_category";
+const AWAITING_AMOUNT_CONFIRMATION = "awaiting_amount_confirmation";
+
+/**
+ * Stored payload of an open amount-conflict question. Lives in
+ * `BotState.pendingNote` (a String column) so it survives restarts.
+ */
+export const amountConfirmationPayloadSchema = z.object({
+  body: z.string().min(1),
+  note: z.string().nullable(),
+  amounts: z.tuple([z.number().positive(), z.number().positive()]),
+  category: z.string().min(1).nullable(),
+});
+
+export type AmountConfirmationPayload = z.infer<typeof amountConfirmationPayloadSchema>;
 
 /** Answers that keep the movement in "otro" and end the correction dialog. */
 const KEEP_OTRO_ANSWERS = new Set(["no", "otro", "dejalo", "deja", "nada"]);
@@ -101,20 +125,21 @@ export class TelegramService {
       return;
     }
 
+    if (state?.state === AWAITING_AMOUNT_CONFIRMATION) {
+      await this.handleAwaitingAmountConfirmation(state, body, reply);
+      return;
+    }
+
     await this.handleRegistration(body, reply);
   }
 
   private async handleRegistration(body: string, reply?: ReplyPort): Promise<void> {
-    const parsed = parseAmountAndNote(body);
-    if (parsed === null) {
-      await this.safeReply(reply, helpReply());
-      return;
-    }
-
     const ownerId = this.deps.ownerId;
+    const parsed = parseAmountAndNote(body);
     const categories = await this.deps.categoryService.listCategories(ownerId);
 
-    // D7: an owner with no categories enters setup; the registration is not persisted.
+    // The setup gate wins BEFORE any interpreter call: the interpreter never
+    // fires for owners without categories.
     if (categories.length === 0) {
       await this.deps.botStateRepository.set({
         ownerId,
@@ -126,35 +151,170 @@ export class TelegramService {
       return;
     }
 
-    const note = parsed.note ?? body;
-    const matched = await this.deps.categoryService.matchNote(ownerId, note);
-
-    if (matched !== null) {
-      const movement = await this.createMovement(body, parsed, matched);
-      if (movement !== null) {
-        await this.deps.botStateRepository.set({
-          ownerId,
-          state: IDLE,
-          pendingMovementId: null,
-          pendingNote: null,
-        });
-        await this.safeReply(reply, successReply(parsed.amount, parsed.note, matched));
-      }
+    if (parsed === null) {
+      await this.handleAmountRescue(body, categories, reply);
       return;
     }
 
-    await this.deps.categoryService.ensureOtro(ownerId);
-    const movement = await this.createMovement(body, parsed, "otro");
-    if (movement !== null) {
+    const note = parsed.note ?? body;
+    const matched = await this.deps.categoryService.matchNote(ownerId, note);
+
+    // A user-authored keyword rule beats any interpreter suggestion.
+    if (matched !== null) {
+      await this.registerWithCategory(body, parsed.amount, parsed.note, matched, reply);
+      return;
+    }
+
+    // Keyword miss → interpreter: category suggestion and amount-conflict check.
+    const interpretation = await this.tryInterpret(body);
+    if (interpretation === null) {
+      await this.registerOtroWithCorrection(body, parsed.amount, parsed.note, reply);
+      return;
+    }
+    if (interpretation.amount !== parsed.amount) {
+      await this.askAmountConfirmation(body, parsed, note, interpretation, categories, reply);
+      return;
+    }
+    const category = this.resolveSuggestion(interpretation.category, categories);
+    if (category !== null) {
+      await this.registerWithCategory(body, parsed.amount, parsed.note, category, reply);
+      return;
+    }
+    await this.registerOtroWithCorrection(body, parsed.amount, parsed.note, reply);
+  }
+
+  /** No deterministic amount: ask the interpreter to rescue one. */
+  private async handleAmountRescue(
+    body: string,
+    categories: CategoryWithKeywords[],
+    reply?: ReplyPort,
+  ): Promise<void> {
+    const interpretation = await this.tryInterpret(body);
+    if (interpretation === null) {
+      await this.safeReply(reply, helpReply());
+      return;
+    }
+    // extractNote's no-parseable-token fallback returns the full body.
+    const note = extractNote(body);
+    const category = this.resolveSuggestion(interpretation.category, categories);
+    if (category !== null) {
+      await this.registerWithCategory(body, interpretation.amount, note, category, reply);
+      return;
+    }
+    await this.registerOtroWithCorrection(body, interpretation.amount, note, reply);
+  }
+
+  /** Amounts differ: persist the question and ask; nothing registers silently. */
+  private async askAmountConfirmation(
+    body: string,
+    parsed: ParsedAmount,
+    note: string | null,
+    interpretation: InterpretedNote,
+    categories: CategoryWithKeywords[],
+    reply?: ReplyPort,
+  ): Promise<void> {
+    const payload: AmountConfirmationPayload = {
+      body,
+      note,
+      amounts: [parsed.amount, interpretation.amount],
+      category: this.resolveSuggestion(interpretation.category, categories),
+    };
+    await this.deps.botStateRepository.set({
+      ownerId: this.deps.ownerId,
+      state: AWAITING_AMOUNT_CONFIRMATION,
+      pendingMovementId: null,
+      pendingNote: JSON.stringify(payload),
+    });
+    await this.safeReply(reply, amountConflictReply(parsed.amount, interpretation.amount));
+  }
+
+  private async handleAwaitingAmountConfirmation(
+    state: BotStateRecord,
+    body: string,
+    reply?: ReplyPort,
+  ): Promise<void> {
+    const ownerId = this.deps.ownerId;
+    const payload = this.decodeConfirmationPayload(state.pendingNote);
+
+    // A corrupt or missing payload abandons the question like any non-answer.
+    if (payload === null) {
       await this.deps.botStateRepository.set({
         ownerId,
-        state: AWAITING_CATEGORY,
-        pendingMovementId: movement.id,
-        pendingNote: note,
+        state: IDLE,
+        pendingMovementId: null,
+        pendingNote: null,
       });
-      // The movement is already registered in "otro"; the reassignment is optional.
-      await this.safeReply(reply, correctionOfferReply(parsed.amount, note, "otro"));
+      await this.safeReply(reply, amountConfirmationAbandonedReply());
+      await this.handleRegistration(body, reply);
+      return;
     }
+
+    // Normalize FIRST so "5 mil" → 5000 beats the lone-"5" parser trap;
+    // parseAmount catches prose-wrapped replies like "es 5000".
+    const replied = normalizeAmountString(body) ?? parseAmount(body);
+    const chosen = payload.amounts.find((amount) => amount === replied);
+    if (chosen === undefined) {
+      // Abandon: clear the state first, then process the text as a new
+      // registration — nothing registers from the conflicting message.
+      await this.deps.botStateRepository.set({
+        ownerId,
+        state: IDLE,
+        pendingMovementId: null,
+        pendingNote: null,
+      });
+      await this.safeReply(reply, amountConfirmationAbandonedReply());
+      await this.handleRegistration(body, reply);
+      return;
+    }
+
+    // Register from the STORED context; a creation failure leaves the question open.
+    if (payload.category !== null) {
+      await this.registerWithCategory(payload.body, chosen, payload.note, payload.category, reply);
+    } else {
+      await this.registerOtroWithCorrection(payload.body, chosen, payload.note, reply);
+    }
+  }
+
+  private decodeConfirmationPayload(pendingNote: string | null): AmountConfirmationPayload | null {
+    if (pendingNote === null) {
+      return null;
+    }
+    try {
+      const parsed = amountConfirmationPayloadSchema.safeParse(JSON.parse(pendingNote));
+      return parsed.success ? parsed.data : null;
+    } catch {
+      return null;
+    }
+  }
+
+  private async tryInterpret(body: string): Promise<InterpretedNote | null> {
+    if (this.deps.interpreter === undefined) {
+      return null;
+    }
+    try {
+      return await this.deps.interpreter.interpret(body);
+    } catch (error) {
+      // The port contract is never-throw; this wrapper is belt-and-braces so a
+      // misbehaving client cannot kill the bot.
+      this.deps.logger?.(`Telegram: interpreter failed: ${String(error)}`);
+      return null;
+    }
+  }
+
+  /**
+   * Resolves an interpreter category suggestion against the owner's categories
+   * by exact normalized equality. Never creates categories; "otro" is treated
+   * as no suggestion so the normal correction flow follows.
+   */
+  private resolveSuggestion(suggestion: string | null, categories: CategoryWithKeywords[]): string | null {
+    if (suggestion === null) {
+      return null;
+    }
+    if (normalizeForMatch(suggestion) === "otro") {
+      return null;
+    }
+    const match = categories.find((category) => normalizeForMatch(category.name) === normalizeForMatch(suggestion));
+    return match === undefined ? null : match.name;
   }
 
   private async handleSetupReply(body: string, reply?: ReplyPort): Promise<void> {
@@ -358,15 +518,16 @@ export class TelegramService {
 
   private async createMovement(
     body: string,
-    parsed: ParsedAmount,
+    amount: number,
+    note: string | null,
     category: string,
   ): Promise<{ id: string } | null> {
     try {
       return await this.deps.expenseService.createExpense(
         {
-          amount: parsed.amount,
+          amount,
           currency: "ARS",
-          note: parsed.note,
+          note,
           occurredAt: new Date(),
           type: classifyMovementType(body),
           category,
@@ -377,6 +538,54 @@ export class TelegramService {
       this.deps.logger?.(`Telegram: failed to create movement: ${String(error)}`);
       return null;
     }
+  }
+
+  /** Shared tail: register with a resolved category, confirm, go idle. */
+  private async registerWithCategory(
+    body: string,
+    amount: number,
+    note: string | null,
+    category: string,
+    reply?: ReplyPort,
+  ): Promise<boolean> {
+    const movement = await this.createMovement(body, amount, note, category);
+    if (movement === null) {
+      return false;
+    }
+    await this.deps.botStateRepository.set({
+      ownerId: this.deps.ownerId,
+      state: IDLE,
+      pendingMovementId: null,
+      pendingNote: null,
+    });
+    await this.safeReply(reply, successReply(amount, note, category));
+    return true;
+  }
+
+  /** Shared tail: register in "otro", offer the category correction. */
+  private async registerOtroWithCorrection(
+    body: string,
+    amount: number,
+    note: string | null,
+    reply?: ReplyPort,
+  ): Promise<boolean> {
+    await this.deps.categoryService.ensureOtro(this.deps.ownerId);
+    const movement = await this.createMovement(body, amount, note, "otro");
+    if (movement === null) {
+      return false;
+    }
+    // The movement keeps the parsed note; the pending correction remembers the
+    // whole body when no note was parsed (today's behavior).
+    const displayNote = note ?? body;
+    await this.deps.botStateRepository.set({
+      ownerId: this.deps.ownerId,
+      state: AWAITING_CATEGORY,
+      pendingMovementId: movement.id,
+      pendingNote: displayNote,
+    });
+    // The movement is already registered in "otro"; the reassignment is optional.
+    await this.safeReply(reply, correctionOfferReply(amount, displayNote, "otro"));
+    return true;
   }
 
   private async safeReply(reply: ReplyPort | undefined, text: string): Promise<void> {

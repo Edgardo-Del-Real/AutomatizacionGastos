@@ -1,6 +1,6 @@
 import type { PrismaClient } from "@prisma/client";
 
-export const BOT_STATES = ["idle", "awaiting_setup", "awaiting_category"] as const;
+export const BOT_STATES = ["idle", "awaiting_setup", "awaiting_category", "awaiting_amount_confirmation"] as const;
 
 export type BotStateName = (typeof BOT_STATES)[number];
 

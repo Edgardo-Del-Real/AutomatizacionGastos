@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
+  amountConfirmationAbandonedReply,
+  amountConflictReply,
   categoryCreatedReply,
   categoryErrorReply,
   categoryListReply,
@@ -114,6 +116,21 @@ describe("reply builders", () => {
 
   it("builds the abandoned-correction warning", () => {
     expect(correctionAbandonedReply()).toContain("otro");
+  });
+
+  it("builds the amount-conflict reply showing both formatted amounts", () => {
+    const reply = amountConflictReply(5000, 4800);
+
+    expect(reply).toContain(formatARS(5000));
+    expect(reply).toContain(formatARS(4800));
+    expect(reply).toContain("Respondé con el monto, o mandá un registro nuevo y lo descarto");
+  });
+
+  it("builds the amount-confirmation abandonment reply", () => {
+    const reply = amountConfirmationAbandonedReply();
+
+    expect(reply).toContain("monto");
+    expect(reply).toContain("registro");
   });
 
   it("builds command confirmations", () => {

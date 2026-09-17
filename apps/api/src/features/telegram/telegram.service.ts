@@ -16,6 +16,8 @@ import type { MovementService } from "../movements/movements.service";
 import type { BotStateRecord, BotStateRepository } from "./bot-state.repository";
 import { normalizeAmountString, type BotBrain, type ConversationEnvelope, type ExecutionResult } from "./bot-brain";
 import { isMilStance } from "./mil-stance";
+import { QueryExecutor } from "./query-executor";
+import { deriveQueryType, type QueryExecutionResult } from "./query.types";
 import { parseCommand, type TelegramCommand } from "./telegram.commands";
 import { normalizeTelegramMessage } from "./telegram.parser";
 import {
@@ -38,6 +40,7 @@ import {
   offTopicRedirectReply,
   otroKeptReply,
   queryRedirectReply,
+  queryReplyTemplate,
   setupDoneReply,
   setupQuestionReply,
   setupRetryReply,
@@ -84,7 +87,11 @@ export type AmountConfirmationPayload = z.infer<typeof amountConfirmationPayload
 const KEEP_OTRO_ANSWERS = new Set(["no", "otro", "dejalo", "deja", "nada"]);
 
 export class TelegramService {
-  constructor(private readonly deps: TelegramServiceDeps) {}
+  private readonly queryExecutor: QueryExecutor;
+
+  constructor(private readonly deps: TelegramServiceDeps) {
+    this.queryExecutor = new QueryExecutor(deps.movementService, deps.categoryService);
+  }
 
   async handleUpdate(update: unknown, reply?: ReplyPort): Promise<void> {
     const message = normalizeTelegramMessage(update);
@@ -166,10 +173,11 @@ export class TelegramService {
     }
 
     switch (envelope.intent) {
+      case "query":
       case "query_recent":
       case "query_balance":
       case "query_month":
-        await this.sendRedirect(envelope.intent, queryRedirectReply(), reply);
+        await this.executeQuery(envelope, reply);
         return;
       case "associate_keyword":
         await this.sendRedirect("associate_keyword", associateKeywordRedirectReply(), reply);
@@ -195,6 +203,59 @@ export class TelegramService {
     await this.makeSender(true, reply)(
       { intent, ok: false, action: "redirected", amount: null, category: null, note: null },
       fixed,
+    );
+  }
+
+  /**
+   * Deterministic query executor: resolves the query_type from the envelope,
+   * fetches the owner's real data, and passes the executed result to the brain
+   * reply (falling back to the fixed template). Malformed envelopes and fetch
+   * failures degrade to the honest redirect — never invent data.
+   */
+  private async executeQuery(envelope: ConversationEnvelope, reply?: ReplyPort): Promise<void> {
+    const send = this.makeSender(true, reply);
+    const queryType = deriveQueryType(envelope.intent, envelope.query_type ?? null);
+
+    if (queryType === null) {
+      await send(
+        { intent: envelope.intent, ok: false, action: "redirected", amount: null, category: null, note: null },
+        queryRedirectReply(),
+      );
+      return;
+    }
+
+    let result: QueryExecutionResult;
+    try {
+      result = await this.queryExecutor.execute(this.deps.ownerId, queryType);
+    } catch (error) {
+      this.deps.logger?.(`Telegram: query ${queryType} failed: ${String(error)}`);
+      await send(
+        {
+          intent: envelope.intent,
+          ok: false,
+          action: "redirected",
+          amount: null,
+          category: null,
+          note: null,
+          query_type: queryType,
+        },
+        queryRedirectReply(),
+      );
+      return;
+    }
+
+    await send(
+      {
+        intent: envelope.intent,
+        ok: true,
+        action: "answered",
+        amount: null,
+        category: null,
+        note: null,
+        query_type: queryType,
+        query: result,
+      },
+      queryReplyTemplate(result),
     );
   }
 

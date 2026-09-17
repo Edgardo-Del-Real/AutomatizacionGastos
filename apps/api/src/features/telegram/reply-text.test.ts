@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import {
   amountConfirmationAbandonedReply,
   amountConflictReply,
+  balanceQueryReply,
+  categoriesQueryReply,
   categoryCreatedReply,
   categoryErrorReply,
   categoryListReply,
@@ -15,8 +17,11 @@ import {
   helpReply,
   keywordAssociatedReply,
   missingCategoryReply,
+  monthQueryReply,
   movementMissingReply,
   otroKeptReply,
+  queryReplyTemplate,
+  recentQueryReply,
   setupDoneReply,
   setupQuestionReply,
   setupRetryReply,
@@ -162,5 +167,65 @@ describe("reply builders", () => {
 
   it("builds an empty category list message", () => {
     expect(categoryListReply([])).toBe("No hay categorías.");
+  });
+});
+
+describe("query reply templates", () => {
+  it("lists the categories with their keywords", () => {
+    const text = categoriesQueryReply([
+      { name: "Cafe", keywords: ["cafe"] },
+      { name: "otro", keywords: [] },
+    ]);
+
+    expect(text).toContain("Cafe");
+    expect(text).toContain("cafe");
+    expect(text).toContain("otro");
+  });
+
+  it("warns when there are no categories", () => {
+    expect(categoriesQueryReply([])).toContain("categorías");
+  });
+
+  it("lists the recent movements with amount, category, note and date", () => {
+    const text = recentQueryReply([
+      { amount: 2500, category: "Cafe", note: "cafe con leche", date: "2026-09-17", type: "EXPENSE" },
+      { amount: 50000, category: null, note: null, date: "2026-09-16", type: "INCOME" },
+    ]);
+
+    expect(text).toContain(formatARS(2500));
+    expect(text).toContain("Cafe");
+    expect(text).toContain("cafe con leche");
+    expect(text).toContain("17/09");
+    expect(text).toContain(formatARS(50000));
+    expect(text).toContain("ingreso");
+  });
+
+  it("warns when there are no movements", () => {
+    expect(recentQueryReply([])).toContain("movimientos");
+  });
+
+  it("builds the balance reply from income minus expenses", () => {
+    const text = balanceQueryReply(1000, 3000, 2000);
+
+    expect(text).toContain(formatARS(1000));
+    expect(text).toContain(formatARS(3000));
+    expect(text).toContain(formatARS(2000));
+  });
+
+  it("builds the month summary reply", () => {
+    const text = monthQueryReply("2026-09", 3000, 2000, 4);
+
+    expect(text).toContain(formatARS(2000));
+    expect(text).toContain(formatARS(3000));
+    expect(text).toContain("4");
+  });
+
+  it("selects the fixed template per query_type", () => {
+    expect(queryReplyTemplate({ query_type: "categories", categories: [] })).toContain("categorías");
+    expect(queryReplyTemplate({ query_type: "recent", movements: [] })).toContain("movimientos");
+    expect(queryReplyTemplate({ query_type: "balance", balance: 1, income: 2, expenses: 1 })).toContain("balance");
+    expect(
+      queryReplyTemplate({ query_type: "month", month: "2026-09", monthIncome: 1, monthExpenses: 2, monthCount: 3 }),
+    ).toContain("septiembre");
   });
 });

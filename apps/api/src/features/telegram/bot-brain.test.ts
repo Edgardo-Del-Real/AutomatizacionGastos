@@ -203,6 +203,70 @@ describe("conversationEnvelopeSchema", () => {
   });
 
   it.each([
+    ["create_category", { intent: "create_category", amount: null, category: "Mascotas", note: null }],
+    ["delete_category", { intent: "delete_category", amount: null, category: "Viajes", note: null }],
+  ])("accepts the %s intent carrying the target category name", (intent, payload) => {
+    const result = conversationEnvelopeSchema.safeParse(payload);
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.category).toBe(payload.category);
+    }
+  });
+
+  it("accepts rename_category with the current name in category and the target in new_name", () => {
+    const result = conversationEnvelopeSchema.safeParse({
+      intent: "rename_category",
+      amount: null,
+      category: "Super",
+      note: null,
+      new_name: "Supermercado",
+    });
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.category).toBe("Super");
+      expect(result.data.new_name).toBe("Supermercado");
+    }
+  });
+
+  it("accepts the capabilities intent with null fields", () => {
+    const result = conversationEnvelopeSchema.safeParse({
+      intent: "capabilities",
+      amount: null,
+      category: null,
+      note: null,
+    });
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.new_name).toBeNull();
+    }
+  });
+
+  it("defaults new_name to null when the key is omitted", () => {
+    const result = conversationEnvelopeSchema.safeParse({
+      intent: "help",
+      amount: null,
+      category: null,
+      note: null,
+    });
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.new_name).toBeNull();
+    }
+  });
+
+  it.each([
+    ["empty", { intent: "rename_category", amount: null, category: "Super", note: null, new_name: "" }],
+    ["whitespace", { intent: "rename_category", amount: null, category: "Super", note: null, new_name: "   " }],
+    ["over 60 chars", { intent: "rename_category", amount: null, category: "Super", note: null, new_name: "n".repeat(61) }],
+  ])("bounds new_name: rejects %s", (_label, payload) => {
+    expect(conversationEnvelopeSchema.safeParse(payload).success).toBe(false);
+  });
+
+  it.each([
     ["missing query_type", { intent: "query", amount: null, category: null, note: null }],
     ["null query_type", { intent: "query", amount: null, category: null, note: null, query_type: null }],
     ["unknown query_type", { intent: "query", amount: null, category: null, note: null, query_type: "inventory" }],
@@ -278,6 +342,7 @@ describe("GroqBotBrain.interpret", () => {
       category: "Supermercado",
       note: "gaste en el super",
       query_type: null,
+      new_name: null,
     });
     expect(calls).toHaveLength(1);
   });
@@ -296,6 +361,7 @@ describe("GroqBotBrain.interpret", () => {
       category: null,
       note: null,
       query_type: null,
+      new_name: null,
     });
   });
 
@@ -320,6 +386,7 @@ describe("GroqBotBrain.interpret", () => {
       category: null,
       note: null,
       query_type: "categories",
+      new_name: null,
     });
   });
 
@@ -405,6 +472,56 @@ describe("GroqBotBrain.interpret", () => {
     const brain = brainWith(fetchImpl);
 
     await expect(brain.interpret("compre mercaderia")).resolves.toBeNull();
+  });
+
+  it("returns a rename_category envelope carrying the current and new names", async () => {
+    const { fetchImpl } = makeFetch(() =>
+      jsonResponse({
+        choices: [
+          {
+            message: {
+              content:
+                '{"intent":"rename_category","amount":null,"category":"super","note":null,"query_type":null,"new_name":"supermercado"}',
+            },
+          },
+        ],
+      }),
+    );
+    const brain = brainWith(fetchImpl);
+
+    await expect(brain.interpret("renombra super a supermercado")).resolves.toEqual({
+      intent: "rename_category",
+      amount: null,
+      category: "super",
+      note: null,
+      query_type: null,
+      new_name: "supermercado",
+    });
+  });
+
+  it("returns a create_category envelope for a create-phrasing message", async () => {
+    const { fetchImpl } = makeFetch(() =>
+      jsonResponse({
+        choices: [
+          {
+            message: {
+              content:
+                '{"intent":"create_category","amount":null,"category":"mascotas","note":null,"query_type":null,"new_name":null}',
+            },
+          },
+        ],
+      }),
+    );
+    const brain = brainWith(fetchImpl);
+
+    await expect(brain.interpret("creá una categoria llamada mascotas")).resolves.toEqual({
+      intent: "create_category",
+      amount: null,
+      category: "mascotas",
+      note: null,
+      query_type: null,
+      new_name: null,
+    });
   });
 
   it("degrades to null when the payload fails the schema (unknown intent)", async () => {
@@ -590,5 +707,26 @@ describe("prompt contracts", () => {
     expect(REPLY_SYSTEM_PROMPT).toContain("answered");
     expect(REPLY_SYSTEM_PROMPT).toContain("query");
     expect(REPLY_SYSTEM_PROMPT).toContain("inventar");
+  });
+
+  it("classifies category CRUD phrasing into create/delete/rename intents", () => {
+    expect(INTERPRET_SYSTEM_PROMPT).toContain("create_category");
+    expect(INTERPRET_SYSTEM_PROMPT).toContain("delete_category");
+    expect(INTERPRET_SYSTEM_PROMPT).toContain("rename_category");
+    expect(INTERPRET_SYSTEM_PROMPT).toContain("new_name");
+  });
+
+  it("answers capability questions naturally instead of returning no action", () => {
+    expect(INTERPRET_SYSTEM_PROMPT).toContain("capabilities");
+    expect(INTERPRET_SYSTEM_PROMPT).toContain("¿podes");
+    expect(INTERPRET_SYSTEM_PROMPT).toContain("sabés");
+  });
+
+  it("teaches the reply to confirm category actions, list capabilities and carry errors", () => {
+    expect(REPLY_SYSTEM_PROMPT).toContain("created");
+    expect(REPLY_SYSTEM_PROMPT).toContain("deleted");
+    expect(REPLY_SYSTEM_PROMPT).toContain("renamed");
+    expect(REPLY_SYSTEM_PROMPT).toContain("capabilities");
+    expect(REPLY_SYSTEM_PROMPT).toContain("message");
   });
 });

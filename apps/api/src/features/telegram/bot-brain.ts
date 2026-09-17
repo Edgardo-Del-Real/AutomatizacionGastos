@@ -10,6 +10,10 @@ export const BOT_INTENTS = [
   "query_balance",
   "query_month",
   "associate_keyword",
+  "create_category",
+  "delete_category",
+  "rename_category",
+  "capabilities",
   "help",
   "off_topic",
 ] as const;
@@ -23,9 +27,23 @@ export type ConversationEnvelope = {
   note: string | null;
   /** Discriminator for the `query` intent; absent for every other intent. */
   query_type?: QueryType | null;
+  /** Target name for `rename_category`; null for every other intent. */
+  new_name?: string | null;
 };
 
-export type BotAction = "registered" | "asked_amount" | "asked_category" | "redirected" | "answered" | "none";
+export type BotAction =
+  | "registered"
+  | "asked_amount"
+  | "asked_category"
+  | "redirected"
+  | "answered"
+  | "none"
+  | "created"
+  | "deleted"
+  | "renamed"
+  | "capabilities";
+
+export type CategoryCommandErrorCode = "duplicate" | "not_found" | "otro_forbidden" | "unknown";
 
 export type ExecutionResult = {
   intent: BotIntent;
@@ -36,6 +54,11 @@ export type ExecutionResult = {
   note: string | null;
   query_type?: QueryType | null;
   query?: QueryExecutionResult | null;
+  new_name?: string | null;
+  /** Human-readable error to transmit when ok is false. */
+  message?: string | null;
+  /** Machine discriminator for the fixed fallback template when ok is false. */
+  error?: CategoryCommandErrorCode | null;
 };
 
 /** Fase-2 stub: category-blind this slice — callers pass nothing, client ignores it. */
@@ -111,6 +134,7 @@ export const conversationEnvelopeSchema = z
     category: z.string().trim().min(1).max(60).nullable(),
     note: z.string().trim().min(1).max(200).nullable(),
     query_type: z.enum(QUERY_TYPES).nullable().default(null),
+    new_name: z.string().trim().min(1).max(60).nullable().default(null),
   })
   .refine(
     (data) =>
@@ -123,9 +147,9 @@ export const replyEnvelopeSchema = z.object({ reply: z.string().trim().min(1).ma
 export type ChatMessage = { role: "user" | "assistant"; content: string };
 
 export const INTERPRET_SYSTEM_PROMPT = [
-  'Respondé SOLO con un objeto JSON con exactamente estas claves: {"intent": string, "amount": number|null, "category": string|null, "note": string|null, "query_type": string|null}.',
+  'Respondé SOLO con un objeto JSON con exactamente estas claves: {"intent": string, "amount": number|null, "category": string|null, "note": string|null, "query_type": string|null, "new_name": string|null}.',
   "No agregues texto ni campos extra.",
-  '"intent" es exactamente UNA de: "register_expense" (cualquier movimiento de dinero, gasto o ingreso), "correct_amount", "correct_category", "query", "query_recent", "query_balance", "query_month", "associate_keyword", "help", "off_topic".',
+  '"intent" es exactamente UNA de: "register_expense" (cualquier movimiento de dinero, gasto o ingreso), "correct_amount", "correct_category", "query", "query_recent", "query_balance", "query_month", "associate_keyword", "create_category", "delete_category", "rename_category", "capabilities", "help", "off_topic".',
   "Si el mensaje tiene señal de gasto (verbo de gasto, $ o un monto) usá register_expense, aunque no tenga monto.",
   "NUNCA inventes un monto: usá null cuando el mensaje no tiene monto.",
   'Todo es en pesos argentinos (ARS): ignorá símbolos o nombres de moneda ($, usd, €) y no conviertas.',
@@ -135,6 +159,8 @@ export const INTERPRET_SYSTEM_PROMPT = [
   'Para preguntas sobre los datos del dueño usá "query" con su "query_type": "categories" (qué categorías tiene/disponibles), "recent" (últimos movimientos), "balance" (saldo, "cuánto me queda", "cuál es mi saldo"), "month" (resumen del mes).',
   '"query_recent", "query_balance" y "query_month" se mantienen por compatibilidad: preferí "query".',
   '"query_type" es null para cualquier intent que no sea "query".',
+  'Para crear, borrar o renombrar categorías usá "create_category", "delete_category" o "rename_category": "create_category" y "delete_category" llevan el nombre en "category"; "rename_category" lleva el nombre actual en "category" y el nuevo en "new_name". "new_name" es null salvo en "rename_category".',
+  'Para preguntas sobre lo que el bot SABE hacer (¿podes borrar categorías?, ¿qué sabés hacer?, ¿qué podes hacer?) usá "capabilities": es una pregunta de capacidades, NUNCA la trates como off_topic ni dejes la acción vacía.',
   'off_topic es para mensajes sin relación con gastos: clasificalo, NUNCA lo respondas como charla general.',
 ].join(" ");
 
@@ -178,6 +204,30 @@ export const FEW_SHOTS: readonly ChatMessage[] = [
   { role: "assistant", content: '{"intent":"off_topic","amount":null,"category":null,"note":null}' },
   { role: "user", content: "de ahora en más uber va a transporte" },
   { role: "assistant", content: '{"intent":"associate_keyword","amount":null,"category":null,"note":null}' },
+  { role: "user", content: "creá una categoria llamada mascotas" },
+  {
+    role: "assistant",
+    content:
+      '{"intent":"create_category","amount":null,"category":"mascotas","note":null,"query_type":null,"new_name":null}',
+  },
+  { role: "user", content: "borra la categoria viajes" },
+  {
+    role: "assistant",
+    content:
+      '{"intent":"delete_category","amount":null,"category":"viajes","note":null,"query_type":null,"new_name":null}',
+  },
+  { role: "user", content: "renombra super a supermercado" },
+  {
+    role: "assistant",
+    content:
+      '{"intent":"rename_category","amount":null,"category":"super","note":null,"query_type":null,"new_name":"supermercado"}',
+  },
+  { role: "user", content: "podes borrar categorias?" },
+  {
+    role: "assistant",
+    content:
+      '{"intent":"capabilities","amount":null,"category":null,"note":null,"query_type":null,"new_name":null}',
+  },
   { role: "user", content: "5000" },
   { role: "assistant", content: '{"intent":"correct_amount","amount":5000,"category":null,"note":null}' },
 ];
@@ -187,7 +237,8 @@ export const REPLY_SYSTEM_PROMPT = [
   "Recibís SOLO el JSON del resultado ejecutado y respondés con un objeto JSON: {\"reply\": string}.",
   "NUNCA afirmes un dato que no esté en el resultado: si amount es null no menciones montos.",
   "Máximo 2 oraciones, sin markdown.",
-  "Según action: registered = el movimiento se guardó o actualizó — confirmalo con los datos presentes; asked_amount = el monto es ambiguo — pedí el número exacto sin afirmar cuál es el correcto; asked_category = el movimiento quedó guardado en la categoría — ofrecé reasignarla; answered = respondé la consulta usando SOLO los datos del campo query (query_type y sus valores), sin inventar montos, categorías ni fechas; redirected = todavía no se puede — decilo con honestidad; none = no se ejecutó nada — guiá al dueño.",
+  "Según action: registered = el movimiento se guardó o actualizó — confirmalo con los datos presentes; asked_amount = el monto es ambiguo — pedí el número exacto sin afirmar cuál es el correcto; asked_category = el movimiento quedó guardado en la categoría — ofrecé reasignarla; answered = respondé la consulta usando SOLO los datos del campo query (query_type y sus valores), sin inventar montos, categorías ni fechas; redirected = todavía no se puede — decilo con honestidad; none = no se ejecutó nada — guiá al dueño; created = la categoría se creó — confirmalo con category; deleted = la categoría se borró — confirmalo con category; renamed = la categoría se renombró — confirmá category a new_name; capabilities = enumerá lo que el bot puede hacer (registrar gastos, corregir, consultar categorías/últimos movimientos/saldo/resumen del mes, crear/borrar/renombrar categorías, asociar palabras, ayuda).",
+  "Si ok es false y viene message, transmití ese error de forma amable y honesta sin inventar causas.",
 ].join(" ");
 
 export class GroqBotBrain implements BotBrain {

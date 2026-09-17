@@ -10,6 +10,7 @@ import { PrismaProcessedMessageRepository } from "../messages/message.repository
 import { PrismaMovementRepository } from "../movements/movements.repository";
 import { MovementService } from "../movements/movements.service";
 import { PrismaBotStateRepository } from "./bot-state.repository";
+import type { NoteInterpreter } from "./note-interpreter";
 import { TelegramService } from "./telegram.service";
 
 loadDotEnvFromDisk();
@@ -58,7 +59,10 @@ describe("TelegramService (integration)", () => {
     service = buildService();
   });
 
-  function buildService(logger: (message: string) => void = () => undefined): TelegramService {
+  function buildService(
+    logger: (message: string) => void = () => undefined,
+    interpreter?: NoteInterpreter,
+  ): TelegramService {
     const messageRepository = new PrismaProcessedMessageRepository(prisma);
     const expenseService = new ExpenseService(new PrismaExpenseRepository(prisma));
     const movementService = new MovementService(new PrismaMovementRepository(prisma), categoryService);
@@ -72,6 +76,8 @@ describe("TelegramService (integration)", () => {
       ownerChatId: OWNER_CHAT_ID,
       ownerId,
       logger,
+      // Default: no interpreter → deterministic-only; tests inject stubs.
+      ...(interpreter === undefined ? {} : { interpreter }),
     });
   }
 
@@ -300,5 +306,101 @@ describe("TelegramService (integration)", () => {
     expect(await prisma.processedMessage.count()).toBe(1);
     expect(await prisma.expense.count()).toBe(0);
     expect(replies).toHaveLength(0);
+  });
+
+  it("interpreter: a keyword-miss suggestion resolving to an owner category registers without a correction round-trip", async () => {
+    await seedCategories(["Supermercado"]);
+    const replies: string[] = [];
+    const stubbed = buildService(() => undefined, {
+      interpret: async () => ({ amount: 2000, category: "supermercado", product: null }),
+    });
+
+    await stubbed.handleUpdate(textUpdate({ messageId: 1, text: "$2000 feria" }), async (text) => {
+      replies.push(text);
+    });
+
+    const movements = await prisma.expense.findMany({ where: { ownerId } });
+    expect(movements).toHaveLength(1);
+    expect(movements[0]?.category).toBe("Supermercado");
+    expect(movements[0]?.amount.toNumber()).toBe(2000);
+    const state = await prisma.botState.findUnique({ where: { ownerId } });
+    expect(state?.state).toBe("idle");
+    expect(replies.at(-1)).toContain("Supermercado");
+  });
+
+  it("interpreter: rescues an amount for an unparseable note and registers it", async () => {
+    await seedCategories([]);
+    const stubbed = buildService(() => undefined, {
+      interpret: async () => ({ amount: 5000, category: null, product: null }),
+    });
+
+    await stubbed.handleUpdate(textUpdate({ messageId: 1, text: "compre mercaderia" }), async () => undefined);
+
+    const movements = await prisma.expense.findMany({ where: { ownerId } });
+    expect(movements).toHaveLength(1);
+    expect(movements[0]?.amount.toNumber()).toBe(5000);
+    expect(movements[0]?.category).toBe("otro");
+    const state = await prisma.botState.findUnique({ where: { ownerId } });
+    expect(state?.state).toBe("awaiting_category");
+  });
+
+  it("interpreter: conflicting amounts persist an awaiting_amount_confirmation row and ask the owner", async () => {
+    await seedCategories([]);
+    const replies: string[] = [];
+    const stubbed = buildService(() => undefined, {
+      interpret: async () => ({ amount: 5000, category: null, product: null }),
+    });
+
+    await stubbed.handleUpdate(textUpdate({ messageId: 1, text: "gaste como 5 mil pesos" }), async (text) => {
+      replies.push(text);
+    });
+
+    expect(await prisma.expense.count()).toBe(0);
+    const state = await prisma.botState.findUnique({ where: { ownerId } });
+    expect(state?.state).toBe("awaiting_amount_confirmation");
+    const payload = JSON.parse(state?.pendingNote ?? "{}") as { amounts: number[] };
+    expect(payload.amounts).toEqual([5, 5000]);
+    expect(replies.at(-1)).toContain("monto");
+  });
+
+  it("interpreter: the confirmation resolves after a service rebuild (restart survival)", async () => {
+    await seedCategories(["Transporte"]);
+    const stubbed = buildService(() => undefined, {
+      interpret: async () => ({ amount: 5000, category: "Transporte", product: null }),
+    });
+    await stubbed.handleUpdate(
+      textUpdate({ messageId: 1, text: "gaste como 5 mil pesos en taxi" }),
+      async () => undefined,
+    );
+
+    // The process restarts: a fresh service without the interpreter still
+    // resolves the persisted question.
+    const restarted = buildService();
+    await restarted.handleUpdate(textUpdate({ messageId: 2, text: "5000" }), async () => undefined);
+
+    const movements = await prisma.expense.findMany({ where: { ownerId } });
+    expect(movements).toHaveLength(1);
+    expect(movements[0]?.amount.toNumber()).toBe(5000);
+    expect(movements[0]?.category).toBe("Transporte");
+    const state = await prisma.botState.findUnique({ where: { ownerId } });
+    expect(state?.state).toBe("idle");
+  });
+
+  it("interpreter: a non-matching reply abandons the question and the new text registers normally", async () => {
+    await seedCategories([]);
+    const stubbed = buildService(() => undefined, {
+      interpret: async () => ({ amount: 5000, category: null, product: null }),
+    });
+    await stubbed.handleUpdate(textUpdate({ messageId: 1, text: "gaste como 5 mil pesos" }), async () => undefined);
+
+    const restarted = buildService();
+    await restarted.handleUpdate(textUpdate({ messageId: 2, text: "6000" }), async () => undefined);
+
+    // Nothing registers from the conflicting message (5 or 5000); only 6000.
+    const movements = await prisma.expense.findMany({ where: { ownerId } });
+    expect(movements).toHaveLength(1);
+    expect(movements[0]?.amount.toNumber()).toBe(6000);
+    const state = await prisma.botState.findUnique({ where: { ownerId } });
+    expect(state?.state).toBe("awaiting_category");
   });
 });

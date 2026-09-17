@@ -29,8 +29,8 @@ Chain strategy: pending
 
 ## Phase 2: Config & DI
 
-- [ ] 2.1 Add 4 vars to `apps/api/src/config/env.ts` — `GROQ_API_KEY` `z.string().min(1).optional()`, `LLM_MODEL` default `openai/gpt-oss-20b`, `LLM_BASE_URL` `z.string().url()` default Groq chat-completions, `LLM_TIMEOUT_MS` `z.coerce.number().int().positive()` default 5000. Test: invalid `LLM_BASE_URL` fails startup with zod config error. Δ ~10.
-- [ ] 2.2 Wire DI in `apps/api/src/app.ts` — construct `GroqNoteInterpreter` only when `env.GROQ_API_KEY` is set (no `fetchImpl` → global fetch); otherwise omit `interpreter` → deterministic-only, `interpret` never invoked (spec scenario). Δ ~10.
+- [x] 2.1 Add 4 vars to `apps/api/src/config/env.ts` — `GROQ_API_KEY` `z.string().min(1).optional()`, `LLM_MODEL` default `openai/gpt-oss-20b`, `LLM_BASE_URL` `z.string().url()` default Groq chat-completions, `LLM_TIMEOUT_MS` `z.coerce.number().int().positive()` default 5000. Test: invalid `LLM_BASE_URL` fails startup with zod config error. Δ ~10.
+- [x] 2.2 Wire DI in `apps/api/src/app.ts` — construct `GroqNoteInterpreter` only when `env.GROQ_API_KEY` is set (no `fetchImpl` → global fetch); otherwise omit `interpreter` → deterministic-only, `interpret` never invoked (spec scenario). Δ ~10.
 
 ## Phase 3: Bot integration — state, replies, service
 

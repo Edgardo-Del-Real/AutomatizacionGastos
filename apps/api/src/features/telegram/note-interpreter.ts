@@ -141,6 +141,11 @@ export class GroqNoteInterpreter implements NoteInterpreter {
       if (!result.success) {
         return null;
       }
+      // The refine guarantees a finite positive amount; the guard below is a
+      // belt-and-braces narrowing that keeps the client's contract total.
+      if (result.data.amount === null) {
+        return null;
+      }
 
       return {
         amount: result.data.amount,

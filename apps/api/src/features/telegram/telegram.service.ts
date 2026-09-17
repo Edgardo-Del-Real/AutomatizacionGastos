@@ -6,6 +6,7 @@ import { isUniqueConstraintViolation, type ProcessedMessageRepository } from "..
 import { NotFoundError, ValidationFailedError } from "../../infra/errors";
 import type { MovementService } from "../movements/movements.service";
 import type { BotStateRecord, BotStateRepository } from "./bot-state.repository";
+import type { NoteInterpreter } from "./note-interpreter";
 import { parseCommand, type TelegramCommand } from "./telegram.commands";
 import { normalizeTelegramMessage } from "./telegram.parser";
 import {
@@ -40,6 +41,8 @@ export type TelegramServiceDeps = {
   ownerChatId: number;
   ownerId: string;
   logger?: (message: string) => void;
+  /** Optional LLM interpreter; when absent the bot runs deterministic-only. */
+  interpreter?: NoteInterpreter;
 };
 
 const IDLE = "idle";

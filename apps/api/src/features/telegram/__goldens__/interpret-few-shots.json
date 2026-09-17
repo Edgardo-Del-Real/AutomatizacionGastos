@@ -21,7 +21,39 @@
   },
   {
     "role": "assistant",
-    "content": "{\"intent\":\"query_month\",\"amount\":null,\"category\":null,\"note\":null}"
+    "content": "{\"intent\":\"query\",\"amount\":null,\"category\":null,\"note\":null,\"query_type\":\"month\"}"
+  },
+  {
+    "role": "user",
+    "content": "cuales son las categorias disponibles"
+  },
+  {
+    "role": "assistant",
+    "content": "{\"intent\":\"query\",\"amount\":null,\"category\":null,\"note\":null,\"query_type\":\"categories\"}"
+  },
+  {
+    "role": "user",
+    "content": "que categorias tengo"
+  },
+  {
+    "role": "assistant",
+    "content": "{\"intent\":\"query\",\"amount\":null,\"category\":null,\"note\":null,\"query_type\":\"categories\"}"
+  },
+  {
+    "role": "user",
+    "content": "ultimos movimientos"
+  },
+  {
+    "role": "assistant",
+    "content": "{\"intent\":\"query\",\"amount\":null,\"category\":null,\"note\":null,\"query_type\":\"recent\"}"
+  },
+  {
+    "role": "user",
+    "content": "cuanto me queda"
+  },
+  {
+    "role": "assistant",
+    "content": "{\"intent\":\"query\",\"amount\":null,\"category\":null,\"note\":null,\"query_type\":\"balance\"}"
   },
   {
     "role": "user",

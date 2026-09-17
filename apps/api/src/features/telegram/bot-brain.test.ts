@@ -79,15 +79,18 @@ describe("normalizeAmountString", () => {
 });
 
 describe("conversationEnvelopeSchema", () => {
-  it.each(BOT_INTENTS)("accepts the %s intent with a null amount, category and note", (intent) => {
-    const result = conversationEnvelopeSchema.safeParse({
-      intent,
-      amount: null,
-      category: null,
-      note: null,
-    });
-    expect(result.success).toBe(true);
-  });
+  it.each(BOT_INTENTS.filter((intent) => intent !== "query"))(
+    "accepts the %s intent with a null amount, category and note",
+    (intent) => {
+      const result = conversationEnvelopeSchema.safeParse({
+        intent,
+        amount: null,
+        category: null,
+        note: null,
+      });
+      expect(result.success).toBe(true);
+    },
+  );
 
   it("normalizes a Spanish string amount and keeps category and note", () => {
     const result = conversationEnvelopeSchema.safeParse({
@@ -169,6 +172,55 @@ describe("conversationEnvelopeSchema", () => {
       expect(result.success).toBe(false);
     }
   });
+
+  it.each(["categories", "recent", "balance", "month"] as const)(
+    "accepts the query intent with query_type %s",
+    (queryType) => {
+      const result = conversationEnvelopeSchema.safeParse({
+        intent: "query",
+        amount: null,
+        category: null,
+        note: null,
+        query_type: queryType,
+      });
+
+      expect(result.success).toBe(true);
+      if (result.success) {
+        expect(result.data.query_type).toBe(queryType);
+      }
+    },
+  );
+
+  it("accepts query_type null for a non-query intent", () => {
+    const result = conversationEnvelopeSchema.safeParse({
+      intent: "off_topic",
+      amount: null,
+      category: null,
+      note: null,
+      query_type: null,
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it.each([
+    ["missing query_type", { intent: "query", amount: null, category: null, note: null }],
+    ["null query_type", { intent: "query", amount: null, category: null, note: null, query_type: null }],
+    ["unknown query_type", { intent: "query", amount: null, category: null, note: null, query_type: "inventory" }],
+  ])("rejects the query intent without a valid query_type (%s)", (_label, payload) => {
+    expect(conversationEnvelopeSchema.safeParse(payload).success).toBe(false);
+  });
+
+  it("keeps the legacy query_* intents valid without a query_type", () => {
+    for (const intent of ["query_recent", "query_balance", "query_month"]) {
+      const result = conversationEnvelopeSchema.safeParse({
+        intent,
+        amount: null,
+        category: null,
+        note: null,
+      });
+      expect(result.success).toBe(true);
+    }
+  });
 });
 
 describe("replyEnvelopeSchema", () => {
@@ -225,6 +277,7 @@ describe("GroqBotBrain.interpret", () => {
       amount: 5000,
       category: "Supermercado",
       note: "gaste en el super",
+      query_type: null,
     });
     expect(calls).toHaveLength(1);
   });
@@ -242,7 +295,49 @@ describe("GroqBotBrain.interpret", () => {
       amount: null,
       category: null,
       note: null,
+      query_type: null,
     });
+  });
+
+  it("returns a query envelope with a query_type for a categories question", async () => {
+    const { fetchImpl } = makeFetch(() =>
+      jsonResponse({
+        choices: [
+          {
+            message: {
+              content:
+                '{"intent":"query","amount":null,"category":null,"note":null,"query_type":"categories"}',
+            },
+          },
+        ],
+      }),
+    );
+    const brain = brainWith(fetchImpl);
+
+    await expect(brain.interpret("cuales son las categorias disponibles?")).resolves.toEqual({
+      intent: "query",
+      amount: null,
+      category: null,
+      note: null,
+      query_type: "categories",
+    });
+  });
+
+  it("degrades to null when the query intent lacks a query_type", async () => {
+    const { fetchImpl } = makeFetch(() =>
+      jsonResponse({
+        choices: [
+          {
+            message: {
+              content: '{"intent":"query","amount":null,"category":null,"note":null,"query_type":null}',
+            },
+          },
+        ],
+      }),
+    );
+    const brain = brainWith(fetchImpl);
+
+    await expect(brain.interpret("cuales son las categorias?")).resolves.toBeNull();
   });
 
   it("posts to the base URL with the bearer key, model, temperature 0, JSON mode, few-shots and the message", async () => {
@@ -480,5 +575,20 @@ describe("prompt contracts", () => {
     expect(REPLY_SYSTEM_PROMPT).toContain("registered");
     expect(REPLY_SYSTEM_PROMPT).toContain("asked_amount");
     expect(REPLY_SYSTEM_PROMPT).toContain("redirected");
+  });
+
+  it("classifies natural query phrasing into the query intent with a query_type", () => {
+    expect(INTERPRET_SYSTEM_PROMPT).toContain("query_type");
+    expect(INTERPRET_SYSTEM_PROMPT).toContain('"categories"');
+    expect(INTERPRET_SYSTEM_PROMPT).toContain('"recent"');
+    expect(INTERPRET_SYSTEM_PROMPT).toContain('"balance"');
+    expect(INTERPRET_SYSTEM_PROMPT).toContain('"month"');
+    expect(INTERPRET_SYSTEM_PROMPT).toContain("categorías tiene/disponibles");
+  });
+
+  it("teaches the reply to answer query intents from the executed data only", () => {
+    expect(REPLY_SYSTEM_PROMPT).toContain("answered");
+    expect(REPLY_SYSTEM_PROMPT).toContain("query");
+    expect(REPLY_SYSTEM_PROMPT).toContain("inventar");
   });
 });

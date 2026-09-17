@@ -1,9 +1,11 @@
 import { z } from "zod";
+import { QUERY_TYPES, type QueryExecutionResult, type QueryType } from "./query.types";
 
 export const BOT_INTENTS = [
   "register_expense",
   "correct_amount",
   "correct_category",
+  "query",
   "query_recent",
   "query_balance",
   "query_month",
@@ -19,9 +21,11 @@ export type ConversationEnvelope = {
   amount: number | null;
   category: string | null;
   note: string | null;
+  /** Discriminator for the `query` intent; absent for every other intent. */
+  query_type?: QueryType | null;
 };
 
-export type BotAction = "registered" | "asked_amount" | "asked_category" | "redirected" | "none";
+export type BotAction = "registered" | "asked_amount" | "asked_category" | "redirected" | "answered" | "none";
 
 export type ExecutionResult = {
   intent: BotIntent;
@@ -30,6 +34,8 @@ export type ExecutionResult = {
   amount: number | null;
   category: string | null;
   note: string | null;
+  query_type?: QueryType | null;
+  query?: QueryExecutionResult | null;
 };
 
 /** Fase-2 stub: category-blind this slice — callers pass nothing, client ignores it. */
@@ -104,26 +110,31 @@ export const conversationEnvelopeSchema = z
     amount: llmAmount.nullable(),
     category: z.string().trim().min(1).max(60).nullable(),
     note: z.string().trim().min(1).max(200).nullable(),
+    query_type: z.enum(QUERY_TYPES).nullable().default(null),
   })
   .refine(
     (data) =>
       data.intent !== "register_expense" || data.amount === null || (data.amount > 0 && Number.isFinite(data.amount)),
-  ); // belt-and-braces, mirrors today's schema
+  ) // belt-and-braces, mirrors today's schema
+  .refine((data) => data.intent !== "query" || data.query_type !== null, "query intent requires a query_type");
 
 export const replyEnvelopeSchema = z.object({ reply: z.string().trim().min(1).max(400) });
 
 export type ChatMessage = { role: "user" | "assistant"; content: string };
 
 export const INTERPRET_SYSTEM_PROMPT = [
-  'Respondé SOLO con un objeto JSON con exactamente estas claves: {"intent": string, "amount": number|null, "category": string|null, "note": string|null}.',
+  'Respondé SOLO con un objeto JSON con exactamente estas claves: {"intent": string, "amount": number|null, "category": string|null, "note": string|null, "query_type": string|null}.',
   "No agregues texto ni campos extra.",
-  '"intent" es exactamente UNA de: "register_expense" (cualquier movimiento de dinero, gasto o ingreso), "correct_amount", "correct_category", "query_recent", "query_balance", "query_month", "associate_keyword", "help", "off_topic".',
+  '"intent" es exactamente UNA de: "register_expense" (cualquier movimiento de dinero, gasto o ingreso), "correct_amount", "correct_category", "query", "query_recent", "query_balance", "query_month", "associate_keyword", "help", "off_topic".',
   "Si el mensaje tiene señal de gasto (verbo de gasto, $ o un monto) usá register_expense, aunque no tenga monto.",
   "NUNCA inventes un monto: usá null cuando el mensaje no tiene monto.",
   'Todo es en pesos argentinos (ARS): ignorá símbolos o nombres de moneda ($, usd, €) y no conviertas.',
   '"1.234,50" y "1234,50" significan 1234.50; "1234.5" significa 1234.5; "5 mil" o "cinco mil" significan 5000 — devolvé el número.',
   '"category" es una sugerencia de categoría (ej: "Supermercado", "Transporte"), máximo 60 caracteres, null si no estás seguro.',
   '"note" es la descripción concreta del gasto o ingreso, máximo 200 caracteres, null si no hay.',
+  'Para preguntas sobre los datos del dueño usá "query" con su "query_type": "categories" (qué categorías tiene/disponibles), "recent" (últimos movimientos), "balance" (saldo, "cuánto me queda", "cuál es mi saldo"), "month" (resumen del mes).',
+  '"query_recent", "query_balance" y "query_month" se mantienen por compatibilidad: preferí "query".',
+  '"query_type" es null para cualquier intent que no sea "query".',
   'off_topic es para mensajes sin relación con gastos: clasificalo, NUNCA lo respondas como charla general.',
 ].join(" ");
 
@@ -139,7 +150,30 @@ export const FEW_SHOTS: readonly ChatMessage[] = [
     content: '{"intent":"register_expense","amount":null,"category":"Supermercado","note":"mercaderia"}',
   },
   { role: "user", content: "cuánto gasté este mes?" },
-  { role: "assistant", content: '{"intent":"query_month","amount":null,"category":null,"note":null}' },
+  {
+    role: "assistant",
+    content: '{"intent":"query","amount":null,"category":null,"note":null,"query_type":"month"}',
+  },
+  { role: "user", content: "cuales son las categorias disponibles" },
+  {
+    role: "assistant",
+    content: '{"intent":"query","amount":null,"category":null,"note":null,"query_type":"categories"}',
+  },
+  { role: "user", content: "que categorias tengo" },
+  {
+    role: "assistant",
+    content: '{"intent":"query","amount":null,"category":null,"note":null,"query_type":"categories"}',
+  },
+  { role: "user", content: "ultimos movimientos" },
+  {
+    role: "assistant",
+    content: '{"intent":"query","amount":null,"category":null,"note":null,"query_type":"recent"}',
+  },
+  { role: "user", content: "cuanto me queda" },
+  {
+    role: "assistant",
+    content: '{"intent":"query","amount":null,"category":null,"note":null,"query_type":"balance"}',
+  },
   { role: "user", content: "hola, cómo andás?" },
   { role: "assistant", content: '{"intent":"off_topic","amount":null,"category":null,"note":null}' },
   { role: "user", content: "de ahora en más uber va a transporte" },
@@ -153,7 +187,7 @@ export const REPLY_SYSTEM_PROMPT = [
   "Recibís SOLO el JSON del resultado ejecutado y respondés con un objeto JSON: {\"reply\": string}.",
   "NUNCA afirmes un dato que no esté en el resultado: si amount es null no menciones montos.",
   "Máximo 2 oraciones, sin markdown.",
-  "Según action: registered = el movimiento se guardó o actualizó — confirmalo con los datos presentes; asked_amount = el monto es ambiguo — pedí el número exacto sin afirmar cuál es el correcto; asked_category = el movimiento quedó guardado en la categoría — ofrecé reasignarla; redirected = todavía no se puede — decilo con honestidad; none = no se ejecutó nada — guiá al dueño.",
+  "Según action: registered = el movimiento se guardó o actualizó — confirmalo con los datos presentes; asked_amount = el monto es ambiguo — pedí el número exacto sin afirmar cuál es el correcto; asked_category = el movimiento quedó guardado en la categoría — ofrecé reasignarla; answered = respondé la consulta usando SOLO los datos del campo query (query_type y sus valores), sin inventar montos, categorías ni fechas; redirected = todavía no se puede — decilo con honestidad; none = no se ejecutó nada — guiá al dueño.",
 ].join(" ");
 
 export class GroqBotBrain implements BotBrain {

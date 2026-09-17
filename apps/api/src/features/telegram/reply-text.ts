@@ -68,6 +68,14 @@ export function correctionAbandonedReply(): string {
   return `Ojo: dejé sin asignar la corrección anterior (el movimiento queda en "otro"). Ahora registro el nuevo.`;
 }
 
+export function amountConflictReply(deterministic: number, llm: number): string {
+  return `El monto no me queda claro: parseé ${formatARS(deterministic)} y también ${formatARS(llm)}. Respondé con el monto, o mandá un registro nuevo y lo descarto.`;
+}
+
+export function amountConfirmationAbandonedReply(): string {
+  return "Ojo: dejé sin asignar la pregunta del monto. Ahora registro el mensaje nuevo.";
+}
+
 export function categoryCreatedReply(name: string): string {
   return `Categoría "${name}" creada.`;
 }

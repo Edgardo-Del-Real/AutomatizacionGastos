@@ -5,7 +5,9 @@ import type { ProcessedMessageRepository } from "../messages/message.repository"
 import type { MovementService } from "../movements/movements.service";
 import type { CategoryService } from "../categories/categories.service";
 import type { BotStateRepository, BotStateRecord } from "./bot-state.repository";
-import { TelegramService } from "./telegram.service";
+import type { InterpretedNote } from "./note-interpreter";
+import { formatARS } from "./reply-text";
+import { amountConfirmationPayloadSchema, TelegramService } from "./telegram.service";
 
 const OWNER_CHAT_ID = 123456789;
 const ownerId = "default";
@@ -48,6 +50,7 @@ type Harness = {
   mockRenameCategory: ReturnType<typeof vi.fn>;
   mockEnsureOtro: ReturnType<typeof vi.fn>;
   mockSetState: ReturnType<typeof vi.fn>;
+  mockInterpret: ReturnType<typeof vi.fn>;
   mockLogger: ReturnType<typeof vi.fn>;
   replies: string[];
   reply: (text: string) => Promise<void>;
@@ -118,6 +121,9 @@ function makeHarness(): Harness {
     }),
   } as unknown as BotStateRepository;
   const mockLogger = vi.fn();
+  const interpreter = {
+    interpret: vi.fn<(note: string) => Promise<InterpretedNote | null>>(async () => null),
+  };
 
   const service = new TelegramService({
     messageRepository,
@@ -128,6 +134,7 @@ function makeHarness(): Harness {
     ownerChatId: OWNER_CHAT_ID,
     ownerId,
     logger: mockLogger,
+    interpreter,
   });
 
   return {
@@ -147,6 +154,7 @@ function makeHarness(): Harness {
     mockRenameCategory: vi.mocked(categoryService.renameCategory),
     mockEnsureOtro: vi.mocked(categoryService.ensureOtro),
     mockSetState: vi.mocked(botStateRepository.set),
+    mockInterpret: vi.mocked(interpreter.interpret),
     mockLogger,
     replies,
     reply,
@@ -164,6 +172,7 @@ describe("TelegramService state machine", () => {
     await h.service.handleUpdate(textUpdate(), h.reply);
 
     expect(h.mockCreateExpense).not.toHaveBeenCalled();
+    expect(h.mockInterpret).not.toHaveBeenCalled();
     expect(h.mockSetState).toHaveBeenCalledWith({
       ownerId,
       state: "awaiting_setup",
@@ -366,6 +375,8 @@ describe("TelegramService state machine", () => {
       expect.objectContaining({ amount: 2500, category: "Cafe" }),
       ownerId,
     );
+    // A matched keyword rule beats the interpreter: it is never invoked.
+    expect(h.mockInterpret).not.toHaveBeenCalled();
     expect(h.replies.at(-1)).toContain("Cafe");
     expect(h.mockSetState).toHaveBeenLastCalledWith({
       ownerId,
@@ -376,6 +387,9 @@ describe("TelegramService state machine", () => {
   });
 
   it("replies with help for an unparseable message and creates nothing", async () => {
+    h.mockListCategories.mockResolvedValue([
+      { id: "c1", ownerId, name: "otro", createdAt: new Date(), keywords: [] },
+    ]);
     await h.service.handleUpdate(textUpdate({ text: "hola" }), h.reply);
 
     expect(h.mockCreateExpense).not.toHaveBeenCalled();
@@ -418,6 +432,9 @@ describe("TelegramService state machine", () => {
   });
 
   it("keeps processing subsequent messages after a reply failure", async () => {
+    h.mockListCategories.mockResolvedValue([
+      { id: "c1", ownerId, name: "otro", createdAt: new Date(), keywords: [] },
+    ]);
     const failingReply = async (): Promise<void> => {
       throw new Error("telegram api down");
     };
@@ -663,5 +680,349 @@ describe("TelegramService commands", () => {
     await h.service.handleUpdate(textUpdate({ text: "$2000 supermercado", messageId: 1 }), h.reply);
 
     expect(h.mockCreateExpense).toHaveBeenCalled();
+  });
+});
+
+describe("TelegramService interpreter integration (llm-note-interpreter)", () => {
+  let h: Harness;
+
+  beforeEach(() => {
+    h = makeHarness();
+  });
+
+  function seedConfirmation(overrides?: {
+    amounts?: [number, number];
+    category?: string | null;
+    note?: string | null;
+  }): void {
+    const payload = amountConfirmationPayloadSchema.parse({
+      body: "gaste como 5 mil pesos",
+      note: overrides?.note ?? "gaste como mil pesos",
+      amounts: overrides?.amounts ?? [5, 5000],
+      category: overrides?.category ?? null,
+    });
+    h.botStateRepository.set({
+      ownerId,
+      state: "awaiting_amount_confirmation",
+      pendingMovementId: null,
+      pendingNote: JSON.stringify(payload),
+    });
+  }
+
+  it("registers a keyword-miss with a resolvable interpreter category using the owner's spelling", async () => {
+    h.mockListCategories.mockResolvedValue([
+      { id: "c1", ownerId, name: "otro", createdAt: new Date(), keywords: [] },
+      { id: "c2", ownerId, name: "Supermercado", createdAt: new Date(), keywords: [] },
+    ]);
+    h.mockInterpret.mockResolvedValue({ amount: 2000, category: "supermercado", product: null });
+
+    await h.service.handleUpdate(textUpdate({ text: "$2000 feria", messageId: 1 }), h.reply);
+
+    expect(h.mockCreateExpense).toHaveBeenCalledWith(
+      expect.objectContaining({ amount: 2000, category: "Supermercado" }),
+      ownerId,
+    );
+    // No correction round-trip: the state goes straight to idle.
+    expect(h.mockSetState).toHaveBeenLastCalledWith({
+      ownerId,
+      state: "idle",
+      pendingMovementId: null,
+      pendingNote: null,
+    });
+    expect(h.replies.at(-1)).toContain("Supermercado");
+  });
+
+  it("falls to otro and offers correction when the interpreter category is unknown, never auto-creating it", async () => {
+    h.mockListCategories.mockResolvedValue([
+      { id: "c1", ownerId, name: "otro", createdAt: new Date(), keywords: [] },
+    ]);
+    h.mockInterpret.mockResolvedValue({ amount: 2000, category: "Kiosco", product: null });
+
+    await h.service.handleUpdate(textUpdate({ text: "$2000 chucherias", messageId: 1 }), h.reply);
+
+    expect(h.mockCreateExpense).toHaveBeenCalledWith(
+      expect.objectContaining({ amount: 2000, category: "otro" }),
+      ownerId,
+    );
+    expect(h.mockCreateCategory).not.toHaveBeenCalled();
+    expect(h.mockSetState).toHaveBeenLastCalledWith({
+      ownerId,
+      state: "awaiting_category",
+      pendingMovementId: "mov-1",
+      pendingNote: "$ chucherias",
+    });
+  });
+
+  it("treats an interpreter suggestion of 'otro' as no suggestion and offers the correction", async () => {
+    h.mockListCategories.mockResolvedValue([
+      { id: "c1", ownerId, name: "otro", createdAt: new Date(), keywords: [] },
+    ]);
+    h.mockInterpret.mockResolvedValue({ amount: 2000, category: "otro", product: null });
+
+    await h.service.handleUpdate(textUpdate({ text: "$2000 feria", messageId: 1 }), h.reply);
+
+    expect(h.mockCreateExpense).toHaveBeenCalledWith(
+      expect.objectContaining({ amount: 2000, category: "otro" }),
+      ownerId,
+    );
+    expect(h.mockSetState).toHaveBeenLastCalledWith({
+      ownerId,
+      state: "awaiting_category",
+      pendingMovementId: "mov-1",
+      pendingNote: "$ feria",
+    });
+  });
+
+  it("falls back to today's otro path on a keyword miss when the interpreter returns null", async () => {
+    h.mockListCategories.mockResolvedValue([
+      { id: "c1", ownerId, name: "otro", createdAt: new Date(), keywords: [] },
+    ]);
+    h.mockInterpret.mockResolvedValue(null);
+
+    await h.service.handleUpdate(textUpdate({ text: "$2000 feria", messageId: 1 }), h.reply);
+
+    expect(h.mockCreateExpense).toHaveBeenCalledWith(
+      expect.objectContaining({ amount: 2000, category: "otro" }),
+      ownerId,
+    );
+    expect(h.mockSetState).toHaveBeenLastCalledWith({
+      ownerId,
+      state: "awaiting_category",
+      pendingMovementId: "mov-1",
+      pendingNote: "$ feria",
+    });
+  });
+
+  it("rescues an unparseable amount and registers with the resolved category", async () => {
+    h.mockListCategories.mockResolvedValue([
+      { id: "c1", ownerId, name: "otro", createdAt: new Date(), keywords: [] },
+      { id: "c2", ownerId, name: "Supermercado", createdAt: new Date(), keywords: [] },
+    ]);
+    h.mockInterpret.mockResolvedValue({ amount: 5000, category: "Supermercado", product: null });
+
+    await h.service.handleUpdate(textUpdate({ text: "compre mercaderia", messageId: 1 }), h.reply);
+
+    expect(h.mockCreateExpense).toHaveBeenCalledWith(
+      expect.objectContaining({ amount: 5000, note: "compre mercaderia", category: "Supermercado" }),
+      ownerId,
+    );
+    expect(h.mockSetState).toHaveBeenLastCalledWith({
+      ownerId,
+      state: "idle",
+      pendingMovementId: null,
+      pendingNote: null,
+    });
+  });
+
+  it("rescues an unparseable amount and registers in otro with the correction offer", async () => {
+    h.mockListCategories.mockResolvedValue([
+      { id: "c1", ownerId, name: "otro", createdAt: new Date(), keywords: [] },
+    ]);
+    h.mockInterpret.mockResolvedValue({ amount: 5000, category: null, product: null });
+
+    await h.service.handleUpdate(textUpdate({ text: "compre mercaderia", messageId: 1 }), h.reply);
+
+    expect(h.mockCreateExpense).toHaveBeenCalledWith(
+      expect.objectContaining({ amount: 5000, note: "compre mercaderia", category: "otro" }),
+      ownerId,
+    );
+    expect(h.mockSetState).toHaveBeenLastCalledWith({
+      ownerId,
+      state: "awaiting_category",
+      pendingMovementId: "mov-1",
+      pendingNote: "compre mercaderia",
+    });
+  });
+
+  it.each(["gaste cinco mil pesos", "1234,50 cafe"])(
+    "replies with help and creates nothing when the rescue returns null for %s",
+    async (body) => {
+      h.mockListCategories.mockResolvedValue([
+        { id: "c1", ownerId, name: "otro", createdAt: new Date(), keywords: [] },
+      ]);
+      h.mockInterpret.mockResolvedValue(null);
+
+      await h.service.handleUpdate(textUpdate({ text: body, messageId: 1 }), h.reply);
+
+      expect(h.mockCreateExpense).not.toHaveBeenCalled();
+      expect(h.replies.at(-1)).toContain("No entendí");
+    },
+  );
+
+  it("asks the owner on an amount conflict and persists the confirmation payload", async () => {
+    h.mockListCategories.mockResolvedValue([
+      { id: "c1", ownerId, name: "otro", createdAt: new Date(), keywords: [] },
+    ]);
+    h.mockInterpret.mockResolvedValue({ amount: 5000, category: null, product: null });
+
+    await h.service.handleUpdate(textUpdate({ text: "gaste como 5 mil pesos", messageId: 1 }), h.reply);
+
+    expect(h.mockCreateExpense).not.toHaveBeenCalled();
+    const lastCall = h.mockSetState.mock.calls.at(-1)?.[0] as BotStateRecord;
+    expect(lastCall.state).toBe("awaiting_amount_confirmation");
+    expect(lastCall.pendingMovementId).toBeNull();
+    const payload = JSON.parse(String(lastCall.pendingNote)) as {
+      amounts: number[];
+      body: string;
+      note: string | null;
+      category: string | null;
+    };
+    expect(payload.amounts).toEqual([5, 5000]);
+    expect(payload.body).toBe("gaste como 5 mil pesos");
+    expect(payload.note).toBe("gaste como mil pesos");
+    expect(payload.category).toBeNull();
+    const reply = h.replies.at(-1) ?? "";
+    expect(reply).toContain(formatARS(5));
+    expect(reply).toContain(formatARS(5000));
+  });
+
+  it("registers the chosen amount from the stored context on a matching answer", async () => {
+    h.mockListCategories.mockResolvedValue([
+      { id: "c1", ownerId, name: "otro", createdAt: new Date(), keywords: [] },
+      { id: "c2", ownerId, name: "Supermercado", createdAt: new Date(), keywords: [] },
+    ]);
+    seedConfirmation({ category: "Supermercado" });
+
+    await h.service.handleUpdate(textUpdate({ text: "5000", messageId: 2 }), h.reply);
+
+    expect(h.mockCreateExpense).toHaveBeenCalledWith(
+      expect.objectContaining({
+        amount: 5000,
+        note: "gaste como mil pesos",
+        category: "Supermercado",
+        type: "EXPENSE",
+      }),
+      ownerId,
+    );
+    expect(h.mockSetState).toHaveBeenLastCalledWith({
+      ownerId,
+      state: "idle",
+      pendingMovementId: null,
+      pendingNote: null,
+    });
+  });
+
+  it("registers the chosen amount in otro and offers correction when the stored category is null", async () => {
+    h.mockListCategories.mockResolvedValue([
+      { id: "c1", ownerId, name: "otro", createdAt: new Date(), keywords: [] },
+    ]);
+    seedConfirmation();
+
+    await h.service.handleUpdate(textUpdate({ text: "5000", messageId: 2 }), h.reply);
+
+    expect(h.mockCreateExpense).toHaveBeenCalledWith(
+      expect.objectContaining({ amount: 5000, category: "otro" }),
+      ownerId,
+    );
+    expect(h.mockSetState).toHaveBeenLastCalledWith({
+      ownerId,
+      state: "awaiting_category",
+      pendingMovementId: "mov-1",
+      pendingNote: "gaste como mil pesos",
+    });
+  });
+
+  it("abandons the confirmation on a non-matching reply and processes the text as a new registration", async () => {
+    h.mockListCategories.mockResolvedValue([
+      { id: "c1", ownerId, name: "otro", createdAt: new Date(), keywords: [] },
+    ]);
+    seedConfirmation();
+
+    await h.service.handleUpdate(textUpdate({ text: "6000", messageId: 2 }), h.reply);
+
+    // Nothing registers from the conflicting message; the new text registers 6000.
+    expect(h.mockCreateExpense).toHaveBeenCalledTimes(1);
+    expect(h.mockCreateExpense).toHaveBeenCalledWith(
+      expect.objectContaining({ amount: 6000, category: "otro" }),
+      ownerId,
+    );
+    expect(h.replies.at(-2)).toContain("monto");
+    expect(h.mockSetState).toHaveBeenLastCalledWith({
+      ownerId,
+      state: "awaiting_category",
+      pendingMovementId: "mov-1",
+      pendingNote: "6000",
+    });
+  });
+
+  it("resolves a confirmation after a restart from a payload built through the schema", async () => {
+    h.mockListCategories.mockResolvedValue([
+      { id: "c1", ownerId, name: "otro", createdAt: new Date(), keywords: [] },
+      { id: "c2", ownerId, name: "Transporte", createdAt: new Date(), keywords: [] },
+    ]);
+    const payload = amountConfirmationPayloadSchema.parse({
+      body: "gaste como 5 mil pesos en taxi",
+      note: "gaste como mil pesos en taxi",
+      amounts: [5, 5000],
+      category: "Transporte",
+    });
+    h.botStateRepository.set({
+      ownerId,
+      state: "awaiting_amount_confirmation",
+      pendingMovementId: null,
+      pendingNote: JSON.stringify(payload),
+    });
+    h.mockSetState.mockClear();
+
+    await h.service.handleUpdate(textUpdate({ text: "5 mil", messageId: 42 }), h.reply);
+
+    expect(h.mockCreateExpense).toHaveBeenCalledWith(
+      expect.objectContaining({ amount: 5000, category: "Transporte" }),
+      ownerId,
+    );
+    expect(h.mockSetState).toHaveBeenLastCalledWith({
+      ownerId,
+      state: "idle",
+      pendingMovementId: null,
+      pendingNote: null,
+    });
+  });
+
+  it("recovers from a corrupted confirmation payload by abandoning and reprocessing the text", async () => {
+    h.mockListCategories.mockResolvedValue([
+      { id: "c1", ownerId, name: "otro", createdAt: new Date(), keywords: [] },
+    ]);
+    h.botStateRepository.set({
+      ownerId,
+      state: "awaiting_amount_confirmation",
+      pendingMovementId: null,
+      pendingNote: "{not-json",
+    });
+
+    await h.service.handleUpdate(textUpdate({ text: "$3000 panaderia", messageId: 2 }), h.reply);
+
+    expect(h.mockCreateExpense).toHaveBeenCalledWith(
+      expect.objectContaining({ amount: 3000, category: "otro" }),
+      ownerId,
+    );
+    expect(h.replies.at(-2)).toContain("monto");
+  });
+
+  it("keeps the confirmation question open when movement creation fails", async () => {
+    h.mockListCategories.mockResolvedValue([
+      { id: "c1", ownerId, name: "otro", createdAt: new Date(), keywords: [] },
+    ]);
+    seedConfirmation();
+    h.mockSetState.mockClear();
+    h.mockCreateExpense.mockRejectedValue(new Error("db down"));
+
+    await h.service.handleUpdate(textUpdate({ text: "5000", messageId: 2 }), h.reply);
+
+    expect(h.mockLogger).toHaveBeenCalled();
+    expect(h.mockSetState).not.toHaveBeenCalled();
+  });
+
+  it("processes commands during a confirmation without consuming it", async () => {
+    h.mockListCategories.mockResolvedValue([
+      { id: "c1", ownerId, name: "otro", createdAt: new Date(), keywords: [] },
+    ]);
+    seedConfirmation();
+    h.mockSetState.mockClear();
+
+    await h.service.handleUpdate(textUpdate({ text: "listar categorias", messageId: 2 }), h.reply);
+
+    expect(h.mockCreateExpense).not.toHaveBeenCalled();
+    expect(h.mockSetState).not.toHaveBeenCalled();
+    expect(h.replies.at(-1)).toContain("otro");
   });
 });

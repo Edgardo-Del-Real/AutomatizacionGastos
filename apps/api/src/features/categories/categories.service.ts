@@ -43,6 +43,21 @@ export class CategoryService {
     return this.repository.rename(ownerId, from, to);
   }
 
+  async deleteCategory(ownerId: string, name: string): Promise<CategoryEntity> {
+    const trimmed = name.trim();
+    if (trimmed.length === 0) {
+      throw new ValidationFailedError("Category name must not be empty");
+    }
+    if (normalizeForMatch(trimmed) === "otro") {
+      throw new ValidationFailedError(`Cannot delete the "otro" fallback category`);
+    }
+    const deleted = await this.repository.delete(ownerId, trimmed);
+    if (deleted === null) {
+      throw new NotFoundError(`Category "${trimmed}" not found`);
+    }
+    return deleted;
+  }
+
   async associateKeyword(ownerId: string, keyword: string, categoryName: string): Promise<void> {
     const trimmedCategory = categoryName.trim();
     const category = (await this.repository.listByOwner(ownerId)).find(

@@ -1,11 +1,13 @@
 import type { PrismaClient } from "@prisma/client";
 import type { KeywordRule } from "./matcher";
+import { normalizeForMatch } from "./matcher";
 import type { CategoryEntity, CategoryWithKeywords } from "./categories.types";
 
 export interface CategoryRepository {
   create(ownerId: string, name: string): Promise<CategoryEntity>;
   listByOwner(ownerId: string): Promise<CategoryWithKeywords[]>;
   rename(ownerId: string, fromName: string, toName: string): Promise<CategoryEntity | null>;
+  delete(ownerId: string, name: string): Promise<CategoryEntity | null>;
   ensureOtro(ownerId: string): Promise<CategoryEntity>;
   associateKeyword(ownerId: string, categoryId: string, keyword: string): Promise<void>;
   listKeywordRules(ownerId: string): Promise<KeywordRule[]>;
@@ -50,6 +52,20 @@ export class PrismaCategoryRepository implements CategoryRepository {
       return tx.category.findUnique({
         where: { ownerId_name: { ownerId, name: toName } },
       });
+    });
+  }
+
+  async delete(ownerId: string, name: string): Promise<CategoryEntity | null> {
+    return this.prisma.$transaction(async (tx) => {
+      const rows = await tx.category.findMany({ where: { ownerId } });
+      const target = rows.find((row) => normalizeForMatch(row.name) === normalizeForMatch(name));
+      if (target === undefined) {
+        return null;
+      }
+      // The CategoryKeyword FK cascades: deleting the category removes its
+      // keyword rules. Movements keep the plain-string name (no FK).
+      await tx.category.delete({ where: { id: target.id } });
+      return { id: target.id, ownerId, name: target.name, createdAt: target.createdAt };
     });
   }
 

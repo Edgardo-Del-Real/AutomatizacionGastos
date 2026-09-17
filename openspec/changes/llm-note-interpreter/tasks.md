@@ -47,6 +47,6 @@ Chain strategy: pending
 
 ## Phase 5: Verification
 
-- [ ] 5.1 Full gate: `pnpm --filter @rita/api test` green (strict TDD — tests written with code), `pnpm --filter @rita/api typecheck`, `pnpm lint`. Δ ~0.
+- [x] 5.1 Full gate: `pnpm --filter @rita/api test` green (strict TDD — tests written with code), `pnpm --filter @rita/api typecheck`, `pnpm lint`. Δ ~0.
 
 > **Parser-verified input note**: spec scenario "No amount rescued by the interpreter" uses `"gaste como 5 mil pesos"`, but `parseAmount` yields **5** for it (verified against `message.parser.ts`) — that body exercises the AMOUNT-CONFLICT path (5 vs 5000), NOT rescue. Rescue tasks/tests above use genuinely unparseable bodies (`"compre mercaderia"`, `"gaste cinco mil pesos"`, `"1234,50 cafe"`, `"$ 1.234,50 supermercado"`, `"1234.5 cafe"`). Amend the spec scenario text at archive time.

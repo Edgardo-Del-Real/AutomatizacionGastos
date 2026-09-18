@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ExecutionResult } from "./bot-brain";
+import type { MovementCandidate } from "./movement-corrector";
 import {
   amountConfirmationAbandonedReply,
   amountConflictReply,
@@ -7,6 +8,7 @@ import {
   capabilitiesSummaryReply,
   categoriesQueryReply,
   categoryCommandReplyTemplate,
+  categoryCreatedReassignedReply,
   categoryCreatedReply,
   categoryDeletedReply,
   categoryErrorReply,
@@ -22,10 +24,16 @@ import {
   keywordAssociatedReply,
   missingCategoryReply,
   monthQueryReply,
+  movementAmbiguousReply,
+  movementCorrectionDoneReply,
   movementMissingReply,
+  movementNoMatchReply,
+  movementNoReferenceReply,
+  movementSelectionAbandonedReply,
   otroDeleteForbiddenReply,
   otroKeptReply,
   queryReplyTemplate,
+  questionDroppedReply,
   recentQueryReply,
   setupDoneReply,
   setupQuestionReply,
@@ -325,5 +333,74 @@ describe("category command reply templates", () => {
     );
 
     expect(text).toBe(capabilitiesSummaryReply());
+  });
+});
+
+describe("movement correction reply templates", () => {
+  const candidates: MovementCandidate[] = [
+    { id: "m1", amount: 2500, note: "uber", date: "2026-09-19", type: "EXPENSE" },
+    { id: "m2", amount: 2500, note: "super", date: "2026-09-17", type: "EXPENSE" },
+  ];
+
+  it("asks which movement to correct with numbered date, amount and note lines", () => {
+    const text = movementAmbiguousReply({ amount: 2500, note: null }, candidates);
+
+    expect(text).toContain("¿Cuál de estos movimientos corrijo?");
+    expect(text).toContain(`1) 19/09 · ${formatARS(2500)} · uber`);
+    expect(text).toContain(`2) 17/09 · ${formatARS(2500)} · super`);
+  });
+
+  it("asks which movement when no reference was extracted, listing the candidates", () => {
+    const text = movementNoReferenceReply(candidates);
+
+    expect(text).toContain("¿Qué movimiento querés corregir?");
+    expect(text).toContain(`1) 19/09 · ${formatARS(2500)} · uber`);
+    expect(text).toContain(`2) 17/09 · ${formatARS(2500)} · super`);
+  });
+
+  it("builds the no-match reply", () => {
+    expect(movementNoMatchReply()).toContain("No encontré");
+    expect(movementNoMatchReply()).toContain("movimiento");
+  });
+
+  it("builds the selection-abandoned reply without claiming a change", () => {
+    const text = movementSelectionAbandonedReply();
+
+    expect(text).toContain("corrección");
+    expect(text).not.toContain("quedó");
+    expect(text).not.toContain("registrado");
+  });
+
+  it("builds the phantom-guard dropped reply without 'now registering' wording", () => {
+    const text = questionDroppedReply();
+
+    expect(text).toContain("pregunta");
+    expect(text).not.toContain("registro");
+    expect(text).not.toContain("Ahora registro");
+  });
+
+  it("confirms a reassignment with the movement facts", () => {
+    const text = movementCorrectionDoneReply("gastos hormiga", 2500, "uber");
+
+    expect(text).toContain(formatARS(2500));
+    expect(text).toContain("uber");
+    expect(text).toContain("gastos hormiga");
+  });
+
+  it("confirms a reassignment without a note", () => {
+    expect(movementCorrectionDoneReply("Transporte", 900, null)).toContain(formatARS(900));
+  });
+
+  it("confirms the mixed create + reassign in one reply", () => {
+    expect(categoryCreatedReassignedReply("gastos hormiga")).toContain("gastos hormiga");
+    expect(categoryCreatedReassignedReply("gastos hormiga")).toContain("creada");
+  });
+
+  it("routes a created_reassigned action to the mixed confirmation template", () => {
+    const text = categoryCommandReplyTemplate(
+      categoryResult({ intent: "create_category", category: "gastos hormiga", action: "created_reassigned" }),
+    );
+
+    expect(text).toBe(categoryCreatedReassignedReply("gastos hormiga"));
   });
 });

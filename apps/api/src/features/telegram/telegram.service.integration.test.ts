@@ -763,4 +763,197 @@ describe("TelegramService (integration)", () => {
 
     expect(replies.at(-1)).toBe("Sí, puedo crear, borrar y renombrar categorías.");
   });
+
+  it("dialog: a query during awaiting_category answers without consuming the pending, then a resolve reassigns", async () => {
+    await seedCategories(["Transporte"]);
+    const replies: string[] = [];
+    const reply = async (text: string): Promise<void> => {
+      replies.push(text);
+    };
+    const stubbed = buildService(
+      () => undefined,
+      stubBrain({
+        interpret: async (message) => {
+          if (message === "decime los últimos movimientos") {
+            return { intent: "query", amount: null, category: null, note: null, query_type: "recent", dialog_action: null };
+          }
+          if (message === "Transporte") {
+            return {
+              intent: "correct_category",
+              amount: null,
+              category: "Transporte",
+              note: null,
+              dialog_action: "resolve",
+            };
+          }
+          return { intent: "register_expense", amount: 1200, category: null, note: null, dialog_action: null };
+        },
+      }),
+    );
+
+    // Register → "otro" → awaiting_category.
+    await stubbed.handleUpdate(textUpdate({ messageId: 1, text: "$1200 uber viaje" }), reply);
+    let movements = await prisma.expense.findMany({ where: { ownerId } });
+    expect(movements).toHaveLength(1);
+    expect(movements[0]?.category).toBe("otro");
+    const pendingId = movements[0]?.id;
+    expect(pendingId).toBeDefined();
+
+    // Query during the dialog: answered from real data, pending intact.
+    await stubbed.handleUpdate(textUpdate({ messageId: 2, text: "decime los últimos movimientos" }), reply);
+    let state = await prisma.botState.findUnique({ where: { ownerId } });
+    expect(state?.state).toBe("awaiting_category");
+    expect(state?.pendingMovementId).toBe(pendingId);
+    expect(replies.at(-1)).toContain("uber viaje");
+
+    // Resolve: reassigns the pending movement and closes the dialog.
+    await stubbed.handleUpdate(textUpdate({ messageId: 3, text: "Transporte" }), reply);
+    movements = await prisma.expense.findMany({ where: { ownerId } });
+    expect(movements[0]?.category).toBe("Transporte");
+    state = await prisma.botState.findUnique({ where: { ownerId } });
+    expect(state?.state).toBe("idle");
+  });
+
+  it("correction: an ambiguous correct_category asks, and the pick survives a restart", async () => {
+    await seedCategories(["gastos hormiga"]);
+    const now = Date.now();
+    await prisma.expense.createMany({
+      data: [
+        {
+          ownerId,
+          amount: 2500,
+          currency: "ARS",
+          category: "otro",
+          note: "super",
+          occurredAt: new Date(now - 24 * 60 * 60 * 1000),
+          type: "EXPENSE",
+        },
+        {
+          ownerId,
+          amount: 2500,
+          currency: "ARS",
+          category: "otro",
+          note: "uber",
+          occurredAt: new Date(now - 6 * 60 * 60 * 1000),
+          type: "EXPENSE",
+        },
+      ],
+    });
+    const replies: string[] = [];
+    const reply = async (text: string): Promise<void> => {
+      replies.push(text);
+    };
+    const stubbed = buildService(
+      () => undefined,
+      stubBrain({
+        interpret: async () => ({
+          intent: "correct_category",
+          amount: 2500,
+          category: "gastos hormiga",
+          note: null,
+          dialog_action: null,
+        }),
+      }),
+    );
+
+    await stubbed.handleUpdate(textUpdate({ messageId: 1, text: "esos 2500 a gastos hormiga" }), reply);
+
+    const state = await prisma.botState.findUnique({ where: { ownerId } });
+    expect(state?.state).toBe("awaiting_movement_selection");
+    expect(state?.pendingMovementId).toBeNull();
+    const stored = JSON.parse(state?.pendingNote ?? "{}") as { category: string; candidates: { id: string }[] };
+    expect(stored.category).toBe("gastos hormiga");
+    expect(stored.candidates).toHaveLength(2);
+    expect(replies.at(-1)).toContain("¿Cuál de estos movimientos corrijo?");
+
+    // Restart: a fresh service resolves the pick deterministically, no brain.
+    const restarted = buildService();
+    await restarted.handleUpdate(textUpdate({ messageId: 2, text: "2" }), async () => undefined);
+
+    const movements = await prisma.expense.findMany({ where: { ownerId }, orderBy: { occurredAt: "asc" } });
+    // Candidates are listed recency-descending: [uber (6h), super (24h)]. The
+    // pick "2" selects the second candidate (super) and reassigns it.
+    expect(movements.map((movement) => movement.category)).toEqual(["gastos hormiga", "otro"]);
+    const after = await prisma.botState.findUnique({ where: { ownerId } });
+    expect(after?.state).toBe("idle");
+  });
+
+  it("dialog: create_category with then_reassign creates and reassigns the pending in one cycle", async () => {
+    await seedCategories([]);
+    // The deterministic service enters awaiting_category with a pending movement.
+    const deterministic = buildService();
+    await deterministic.handleUpdate(textUpdate({ messageId: 1, text: "$1200 uber viaje" }), async () => undefined);
+
+    const pending = await prisma.botState.findUnique({ where: { ownerId } });
+    expect(pending?.state).toBe("awaiting_category");
+    expect(pending?.pendingMovementId).toBeDefined();
+
+    const replies: string[] = [];
+    const stubbed = buildService(
+      () => undefined,
+      stubBrain({
+        interpret: async () => ({
+          intent: "create_category",
+          amount: null,
+          category: "mascotas",
+          note: null,
+          dialog_action: null,
+          then_reassign: true,
+        }),
+      }),
+    );
+    await stubbed.handleUpdate(textUpdate({ messageId: 2, text: "creá mascotas y guardalo ahí" }), async (text) => {
+      replies.push(text);
+    });
+
+    const categories = await categoryService.listCategories(ownerId);
+    expect(categories.some((category) => category.name === "mascotas")).toBe(true);
+    const movements = await prisma.expense.findMany({ where: { ownerId } });
+    expect(movements[0]?.category).toBe("mascotas");
+    const state = await prisma.botState.findUnique({ where: { ownerId } });
+    expect(state?.state).toBe("idle");
+    // Exactly one confirmation reply.
+    expect(replies).toHaveLength(1);
+    expect(replies[0]).toContain("mascotas");
+  });
+
+  it("correction: a free-form correct_category reassigns a unique recent movement", async () => {
+    await seedCategories(["gastos hormiga"]);
+    const now = Date.now();
+    await prisma.expense.createMany({
+      data: [
+        {
+          ownerId,
+          amount: 2500,
+          currency: "ARS",
+          category: "otro",
+          note: "uber",
+          occurredAt: new Date(now - 6 * 60 * 60 * 1000),
+          type: "EXPENSE",
+        },
+      ],
+    });
+    const replies: string[] = [];
+    const stubbed = buildService(
+      () => undefined,
+      stubBrain({
+        interpret: async () => ({
+          intent: "correct_category",
+          amount: 2500,
+          category: "gastos hormiga",
+          note: null,
+          dialog_action: null,
+        }),
+      }),
+    );
+
+    await stubbed.handleUpdate(textUpdate({ messageId: 1, text: "esos 2500 a gastos hormiga" }), async (text) => {
+      replies.push(text);
+    });
+
+    const movements = await prisma.expense.findMany({ where: { ownerId } });
+    expect(movements[0]?.category).toBe("gastos hormiga");
+    expect(replies.at(-1)).toContain(formatARS(2500));
+    expect(replies.at(-1)).toContain("gastos hormiga");
+  });
 });

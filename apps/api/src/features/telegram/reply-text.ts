@@ -1,5 +1,6 @@
 import type { QueryExecutionResult, RecentMovementResult } from "./query.types";
 import type { ExecutionResult } from "./bot-brain";
+import type { MovementCandidate } from "./movement-corrector";
 
 const arsFormatter = new Intl.NumberFormat("es-AR", {
   style: "currency",
@@ -213,6 +214,49 @@ export function movementMissingReply(): string {
   return "Ese movimiento ya no existe.";
 }
 
+/** Numbered candidates list: `n) DD/MM · $ monto · nota` (design D8: fixed-only). */
+export function movementCandidatesList(candidates: MovementCandidate[]): string {
+  return candidates
+    .map((candidate, index) => {
+      const note = candidate.note !== null ? ` · ${truncateNote(candidate.note)}` : "";
+      return `${index + 1}) ${formatDateShort(candidate.date)} · ${formatARS(candidate.amount)}${note}`;
+    })
+    .join("\n");
+}
+
+export function movementAmbiguousReply(
+  _reference: { amount: number | null; note: string | null },
+  candidates: MovementCandidate[],
+): string {
+  return `¿Cuál de estos movimientos corrijo?\n${movementCandidatesList(candidates)}`;
+}
+
+export function movementNoReferenceReply(candidates: MovementCandidate[]): string {
+  return `¿Qué movimiento querés corregir?\n${movementCandidatesList(candidates)}`;
+}
+
+export function movementNoMatchReply(): string {
+  return "No encontré ningún movimiento que coincida con eso.";
+}
+
+export function movementSelectionAbandonedReply(): string {
+  return "Dale, dejé la corrección. No cambié ningún movimiento.";
+}
+
+/** Phantom-guard abandon: nothing was resolved, nothing was reprocessed. */
+export function questionDroppedReply(): string {
+  return "Ojo: dejé la pregunta anterior sin responder. No registré ni modifiqué nada.";
+}
+
+export function movementCorrectionDoneReply(category: string, amount: number, note: string | null): string {
+  const notePart = note === null ? "" : ` (${truncateNote(note)})`;
+  return `Listo, el movimiento de ${formatARS(amount)}${notePart} quedó en "${category}".`;
+}
+
+export function categoryCreatedReassignedReply(category: string): string {
+  return `Categoría "${category}" creada y el movimiento pendiente quedó guardado ahí.`;
+}
+
 export function categoryErrorReply(message: string): string {
   return `Error: ${message}`;
 }
@@ -224,6 +268,9 @@ export function categoryErrorReply(message: string): string {
 export function categoryCommandReplyTemplate(result: ExecutionResult): string {
   switch (result.intent) {
     case "create_category":
+      if (result.ok && result.action === "created_reassigned") {
+        return categoryCreatedReassignedReply(result.category ?? "");
+      }
       if (result.ok) {
         return categoryCreatedReply(result.category ?? "");
       }

@@ -1,0 +1,26 @@
+[
+  {
+    "role": "user",
+    "content": "5000"
+  },
+  {
+    "role": "assistant",
+    "content": "{\"intent\":\"register_expense\",\"amount\":5000,\"category\":null,\"note\":null,\"query_type\":null,\"new_name\":null,\"dialog_action\":\"resolve\",\"then_reassign\":false}"
+  },
+  {
+    "role": "user",
+    "content": "si"
+  },
+  {
+    "role": "assistant",
+    "content": "{\"intent\":\"register_expense\",\"amount\":null,\"category\":null,\"note\":null,\"query_type\":null,\"new_name\":null,\"dialog_action\":null,\"then_reassign\":false}"
+  },
+  {
+    "role": "user",
+    "content": "6000"
+  },
+  {
+    "role": "assistant",
+    "content": "{\"intent\":\"register_expense\",\"amount\":6000,\"category\":null,\"note\":null,\"query_type\":null,\"new_name\":null,\"dialog_action\":null,\"then_reassign\":false}"
+  }
+]

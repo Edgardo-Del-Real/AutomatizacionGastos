@@ -6,7 +6,7 @@ import type { MovementService } from "../movements/movements.service";
 import type { CategoryService } from "../categories/categories.service";
 import type { BotStateRepository, BotStateRecord } from "./bot-state.repository";
 import type { ConversationEnvelope, ExecutionResult } from "./bot-brain";
-import { ValidationFailedError } from "../../infra/errors";
+import { NotFoundError, ValidationFailedError } from "../../infra/errors";
 import {
   associateKeywordRedirectReply,
   formatARS,
@@ -1546,16 +1546,27 @@ describe("TelegramService brain orchestration (llm-conversational-bot)", () => {
     );
   });
 
-  it("does not call interpret for dialog answers but routes branch replies through reply", async () => {
+  it("routes a dialog answer through interpret with context and reassigns on resolve", async () => {
     seedHarnessCategories(h, ["otro", "Transporte"]);
     h.mockBrainReply.mockResolvedValue("Listo, el movimiento quedó en Transporte.");
 
     await h.service.handleUpdate(textUpdate({ text: "$1200 uber viaje", messageId: 1 }), h.reply);
     h.mockBrainInterpret.mockClear();
+    h.mockBrainInterpret.mockResolvedValue({
+      intent: "correct_category",
+      amount: null,
+      category: "Transporte",
+      note: null,
+      dialog_action: "resolve",
+    });
 
     await h.service.handleUpdate(textUpdate({ text: "Transporte", messageId: 2 }), h.reply);
 
-    expect(h.mockBrainInterpret).not.toHaveBeenCalled();
+    expect(h.mockBrainInterpret).toHaveBeenCalledWith(
+      "Transporte",
+      expect.objectContaining({ state: "awaiting_category", openQuestion: expect.stringContaining("uber viaje") }),
+    );
+    expect(h.mockUpdateMovement).toHaveBeenCalledWith(ownerId, "mov-1", { category: "Transporte" });
     expect(h.mockBrainReply).toHaveBeenCalledWith({
       intent: "correct_category",
       ok: true,
@@ -1567,15 +1578,28 @@ describe("TelegramService brain orchestration (llm-conversational-bot)", () => {
     expect(h.replies.at(-1)).toBe("Listo, el movimiento quedó en Transporte.");
   });
 
-  it("routes an amount-confirmation answer through the brain reply without calling interpret", async () => {
+  it("routes an amount-confirmation answer through interpret and registers the chosen amount on resolve", async () => {
     seedHarnessCategories(h, ["otro"]);
     seedConfirmation();
     h.mockBrainInterpret.mockClear();
+    h.mockBrainInterpret.mockResolvedValue({
+      intent: "register_expense",
+      amount: 5000,
+      category: null,
+      note: null,
+      dialog_action: "resolve",
+    });
     h.mockBrainReply.mockResolvedValue("Listo, quedó registrado 5000.");
 
     await h.service.handleUpdate(textUpdate({ text: "5000", messageId: 2 }), h.reply);
 
-    expect(h.mockBrainInterpret).not.toHaveBeenCalled();
+    expect(h.mockBrainInterpret).toHaveBeenCalledWith(
+      "5000",
+      expect.objectContaining({
+        state: "awaiting_amount_confirmation",
+        pending: expect.objectContaining({ amounts: [4800, 5000] }),
+      }),
+    );
     // The stored category is null, so the answer registers in "otro" and the
     // branch result reports the correction offer.
     expect(h.mockBrainReply).toHaveBeenCalledWith(
@@ -1757,5 +1781,684 @@ describe("TelegramService brain orchestration (llm-conversational-bot)", () => {
       expect.objectContaining({ intent: "capabilities", ok: true, action: "capabilities" }),
     );
     expect(h.replies.at(-1)).toBe("Sí, puedo crear, borrar y renombrar categorías.");
+  });
+});
+
+describe("TelegramService dialog controller (brain-routed)", () => {
+  let h: Harness;
+
+  beforeEach(() => {
+    h = makeHarness();
+    h.mockListCategories.mockResolvedValue([
+      { id: "c1", ownerId, name: "otro", createdAt: new Date(), keywords: [] },
+      { id: "c2", ownerId, name: "Transporte", createdAt: new Date(), keywords: [] },
+    ]);
+  });
+
+  async function seedAwaitingCategory(pendingMovementId: string | null, note = "uber viaje"): Promise<void> {
+    await h.botStateRepository.set({
+      ownerId,
+      state: "awaiting_category",
+      pendingMovementId,
+      pendingNote: note,
+    });
+  }
+
+  it("reassigns the pending movement on a resolve answer with an exact category", async () => {
+    await seedAwaitingCategory("mov-9");
+    h.mockBrainInterpret.mockResolvedValue({
+      intent: "correct_category",
+      amount: null,
+      category: "Transporte",
+      note: null,
+      dialog_action: "resolve",
+    });
+
+    await h.service.handleUpdate(textUpdate({ text: "Transporte", messageId: 2 }), h.reply);
+
+    expect(h.mockUpdateMovement).toHaveBeenCalledWith(ownerId, "mov-9", { category: "Transporte" });
+    expect(h.mockSetState).toHaveBeenLastCalledWith({
+      ownerId,
+      state: "idle",
+      pendingMovementId: null,
+      pendingNote: null,
+    });
+    expect(h.replies.at(-1)).toBe('Listo, el movimiento quedó en "Transporte".');
+  });
+
+  it("routes an explicit abandon to today's D6 rules verbatim", async () => {
+    await seedAwaitingCategory("mov-9");
+    h.mockBrainInterpret.mockResolvedValue({
+      intent: "correct_category",
+      amount: null,
+      category: null,
+      note: null,
+      dialog_action: "abandon",
+    });
+
+    await h.service.handleUpdate(textUpdate({ text: "no", messageId: 2 }), h.reply);
+
+    expect(h.mockUpdateMovement).not.toHaveBeenCalled();
+    expect(h.mockSetState).toHaveBeenLastCalledWith({
+      ownerId,
+      state: "idle",
+      pendingMovementId: null,
+      pendingNote: null,
+    });
+    expect(h.replies.at(-1)).toBe('Listo, quedó en "otro".');
+  });
+
+  it("answers a query during a dialog without consuming the pending", async () => {
+    await seedAwaitingCategory("mov-9");
+    h.mockSetState.mockClear();
+    h.mockBrainInterpret.mockResolvedValue({
+      intent: "query",
+      amount: null,
+      category: null,
+      note: null,
+      query_type: "recent",
+      dialog_action: null,
+    });
+    h.mockListMovements.mockResolvedValue([
+      {
+        id: "m1",
+        ownerId,
+        amount: 2500,
+        currency: "ARS",
+        category: "Cafe",
+        note: "cafe con leche",
+        occurredAt: new Date("2026-09-17T12:00:00.000Z"),
+        createdAt: new Date(),
+        type: "EXPENSE",
+      },
+    ]);
+
+    await h.service.handleUpdate(textUpdate({ text: "decime los últimos movimientos", messageId: 2 }), h.reply);
+
+    expect(h.mockListMovements).toHaveBeenCalledWith(ownerId, {});
+    expect(h.mockSetState).not.toHaveBeenCalled();
+    expect(h.mockUpdateMovement).not.toHaveBeenCalled();
+    expect(h.replies.at(-1)).toContain("cafe con leche");
+  });
+
+  it("creates a category during a dialog without consuming the pending", async () => {
+    await seedAwaitingCategory("mov-9");
+    h.mockSetState.mockClear();
+    h.mockBrainInterpret.mockResolvedValue({
+      intent: "create_category",
+      amount: null,
+      category: "Mascotas",
+      note: null,
+      dialog_action: null,
+    });
+
+    await h.service.handleUpdate(textUpdate({ text: "creá una categoría mascotas", messageId: 2 }), h.reply);
+
+    expect(h.mockCreateCategory).toHaveBeenCalledWith(ownerId, "Mascotas");
+    expect(h.mockSetState).not.toHaveBeenCalled();
+    expect(h.mockUpdateMovement).not.toHaveBeenCalled();
+    const state = await h.botStateRepository.get(ownerId);
+    expect(state?.state).toBe("awaiting_category");
+    expect(state?.pendingMovementId).toBe("mov-9");
+  });
+
+  it("registers a new message during a dialog with a single interpret call", async () => {
+    await seedAwaitingCategory("mov-9", "uber viaje");
+    h.mockBrainInterpret.mockResolvedValue({
+      intent: "register_expense",
+      amount: 8000,
+      category: null,
+      note: null,
+      dialog_action: null,
+    });
+
+    await h.service.handleUpdate(textUpdate({ text: "$8000 supermercado", messageId: 2 }), h.reply);
+
+    expect(h.mockBrainInterpret).toHaveBeenCalledTimes(1);
+    expect(h.mockCreateExpense).toHaveBeenCalledWith(
+      expect.objectContaining({ amount: 8000, category: "otro" }),
+      ownerId,
+    );
+    expect(h.replies.at(-2)).toContain("corrección anterior");
+    // The pending correction was abandoned; the new movement re-enters the loop.
+    expect(h.mockSetState).toHaveBeenLastCalledWith({
+      ownerId,
+      state: "awaiting_category",
+      pendingMovementId: "mov-1",
+      pendingNote: "$ supermercado",
+    });
+  });
+
+  it("creates and reassigns in one reply when create_category carries then_reassign", async () => {
+    await seedAwaitingCategory("mov-9");
+    h.mockBrainInterpret.mockResolvedValue({
+      intent: "create_category",
+      amount: null,
+      category: "gastos hormiga",
+      note: null,
+      dialog_action: null,
+      then_reassign: true,
+    });
+
+    await h.service.handleUpdate(textUpdate({ text: "creá gastos hormiga y guardalo ahí", messageId: 2 }), h.reply);
+
+    expect(h.mockCreateCategory).toHaveBeenCalledWith(ownerId, "gastos hormiga");
+    expect(h.mockUpdateMovement).toHaveBeenCalledWith(ownerId, "mov-9", { category: "gastos hormiga" });
+    expect(h.mockSetState).toHaveBeenLastCalledWith({
+      ownerId,
+      state: "idle",
+      pendingMovementId: null,
+      pendingNote: null,
+    });
+    expect(h.mockBrainReply).toHaveBeenCalledWith(
+      expect.objectContaining({ intent: "create_category", ok: true, action: "created_reassigned" }),
+    );
+    expect(h.replies).toHaveLength(1);
+  });
+
+  it("ignores then_reassign when no pending movement exists", async () => {
+    h.mockBrainInterpret.mockResolvedValue({
+      intent: "create_category",
+      amount: null,
+      category: "gastos hormiga",
+      note: null,
+      dialog_action: null,
+      then_reassign: true,
+    });
+
+    await h.service.handleUpdate(textUpdate({ text: "creá gastos hormiga y guardalo ahí", messageId: 1 }), h.reply);
+
+    expect(h.mockCreateCategory).toHaveBeenCalledWith(ownerId, "gastos hormiga");
+    expect(h.mockUpdateMovement).not.toHaveBeenCalled();
+  });
+
+  it("replies with both the created and the missing-movement notices when the reassign fails", async () => {
+    await seedAwaitingCategory("mov-9");
+    h.mockBrainInterpret.mockResolvedValue({
+      intent: "create_category",
+      amount: null,
+      category: "gastos hormiga",
+      note: null,
+      dialog_action: null,
+      then_reassign: true,
+    });
+    h.mockUpdateMovement.mockRejectedValue(new NotFoundError("Movement mov-9 not found"));
+
+    await h.service.handleUpdate(textUpdate({ text: "creá gastos hormiga y guardalo ahí", messageId: 2 }), h.reply);
+
+    expect(h.mockCreateCategory).toHaveBeenCalledWith(ownerId, "gastos hormiga");
+    expect(h.replies.at(-2)).toBe('Categoría "gastos hormiga" creada.');
+    expect(h.replies.at(-1)).toBe("Ese movimiento ya no existe.");
+    expect(h.mockSetState).toHaveBeenLastCalledWith({
+      ownerId,
+      state: "idle",
+      pendingMovementId: null,
+      pendingNote: null,
+    });
+  });
+
+  it("phantom: a bare affirmation classified resolve registers nothing and is not reprocessed", async () => {
+    const payload = amountConfirmationPayloadSchema.parse({
+      body: "gaste 4800 en el kiosco",
+      note: "gaste en el kiosco",
+      amounts: [4800, 5000],
+      category: null,
+    });
+    await h.botStateRepository.set({
+      ownerId,
+      state: "awaiting_amount_confirmation",
+      pendingMovementId: null,
+      pendingNote: JSON.stringify(payload),
+    });
+    h.mockBrainInterpret.mockResolvedValue({
+      intent: "register_expense",
+      amount: 5000,
+      category: null,
+      note: null,
+      dialog_action: "resolve",
+    });
+
+    await h.service.handleUpdate(textUpdate({ text: "si", messageId: 2 }), h.reply);
+
+    expect(h.mockCreateExpense).not.toHaveBeenCalled();
+    expect(h.mockBrainInterpret).toHaveBeenCalledTimes(1);
+    expect(h.mockSetState).toHaveBeenLastCalledWith({
+      ownerId,
+      state: "idle",
+      pendingMovementId: null,
+      pendingNote: null,
+    });
+    expect(h.replies.at(-1)).toContain("pregunta");
+  });
+
+  it("phantom: a resolve with a missing pending movement drops the question", async () => {
+    await seedAwaitingCategory(null);
+    h.mockBrainInterpret.mockResolvedValue({
+      intent: "correct_category",
+      amount: null,
+      category: "Transporte",
+      note: null,
+      dialog_action: "resolve",
+    });
+
+    await h.service.handleUpdate(textUpdate({ text: "Transporte", messageId: 2 }), h.reply);
+
+    expect(h.mockUpdateMovement).not.toHaveBeenCalled();
+    expect(h.mockCreateExpense).not.toHaveBeenCalled();
+    expect(h.replies.at(-1)).toContain("pregunta");
+    expect(h.mockSetState).toHaveBeenLastCalledWith({
+      ownerId,
+      state: "idle",
+      pendingMovementId: null,
+      pendingNote: null,
+    });
+  });
+
+  it("phantom: a resolve with a corrupt amount-confirmation payload degrades to the D6 abandon path", async () => {
+    await h.botStateRepository.set({
+      ownerId,
+      state: "awaiting_amount_confirmation",
+      pendingMovementId: null,
+      pendingNote: "{not-json",
+    });
+    h.mockBrainInterpret.mockResolvedValue(null);
+    h.mockListCategories.mockResolvedValue([
+      { id: "c1", ownerId, name: "otro", createdAt: new Date(), keywords: [] },
+    ]);
+
+    await h.service.handleUpdate(textUpdate({ text: "$3000 panaderia", messageId: 2 }), h.reply);
+
+    // No context can be built from a corrupt payload: the brain is never called
+    // for the dialog and today's abandon-and-reprocess rules own the message.
+    expect(h.mockCreateExpense).toHaveBeenCalledWith(
+      expect.objectContaining({ amount: 3000, category: "otro" }),
+      ownerId,
+    );
+  });
+
+  it("phantom: never reads envelope.amount when the reply matches no payload amount", async () => {
+    const payload = amountConfirmationPayloadSchema.parse({
+      body: "gaste 4800 en el kiosco",
+      note: "gaste en el kiosco",
+      amounts: [4800, 5000],
+      category: null,
+    });
+    await h.botStateRepository.set({
+      ownerId,
+      state: "awaiting_amount_confirmation",
+      pendingMovementId: null,
+      pendingNote: JSON.stringify(payload),
+    });
+    h.mockBrainInterpret.mockResolvedValue({
+      intent: "register_expense",
+      amount: 5000,
+      category: null,
+      note: null,
+      dialog_action: "resolve",
+    });
+
+    await h.service.handleUpdate(textUpdate({ text: "6000", messageId: 2 }), h.reply);
+
+    // The envelope carries 5000, but the message says 6000: nothing registers.
+    expect(h.mockCreateExpense).not.toHaveBeenCalled();
+    expect(h.replies.at(-1)).toContain("pregunta");
+  });
+
+  it("resolves an amount confirmation with the chosen amount from the stored payload", async () => {
+    const payload = amountConfirmationPayloadSchema.parse({
+      body: "gaste 4800 en el kiosco",
+      note: "gaste en el kiosco",
+      amounts: [4800, 5000],
+      category: "Supermercado",
+    });
+    await h.botStateRepository.set({
+      ownerId,
+      state: "awaiting_amount_confirmation",
+      pendingMovementId: null,
+      pendingNote: JSON.stringify(payload),
+    });
+    h.mockBrainInterpret.mockResolvedValue({
+      intent: "register_expense",
+      amount: 5000,
+      category: null,
+      note: null,
+      dialog_action: "resolve",
+    });
+
+    await h.service.handleUpdate(textUpdate({ text: "5 mil", messageId: 2 }), h.reply);
+
+    expect(h.mockCreateExpense).toHaveBeenCalledWith(
+      expect.objectContaining({ amount: 5000, note: "gaste en el kiosco", category: "Supermercado" }),
+      ownerId,
+    );
+    expect(h.mockSetState).toHaveBeenLastCalledWith({
+      ownerId,
+      state: "idle",
+      pendingMovementId: null,
+      pendingNote: null,
+    });
+  });
+
+  it("keeps the D6 fallback verbatim when the brain is null in a dialog", async () => {
+    await seedAwaitingCategory("mov-9");
+    h.mockSetState.mockClear();
+    h.mockBrainInterpret.mockResolvedValue(null);
+
+    await h.service.handleUpdate(textUpdate({ text: "no se qué categoria", messageId: 2 }), h.reply);
+
+    expect(h.mockBrainInterpret).toHaveBeenCalledWith(
+      "no se qué categoria",
+      expect.objectContaining({ state: "awaiting_category" }),
+    );
+    expect(h.mockUpdateMovement).not.toHaveBeenCalled();
+    expect(h.mockSetState).not.toHaveBeenCalled();
+    expect(h.replies.at(-1)).toContain("No encontré la categoría");
+  });
+});
+
+describe("TelegramService movement selection (awaiting_movement_selection)", () => {
+  let h: Harness;
+
+  beforeEach(() => {
+    h = makeHarness();
+    h.mockListCategories.mockResolvedValue([
+      { id: "c1", ownerId, name: "otro", createdAt: new Date(), keywords: [] },
+    ]);
+  });
+
+  const payload = {
+    category: "gastos hormiga",
+    candidates: [
+      { id: "m1", amount: 2500, note: "super", date: "2026-09-19" },
+      { id: "m2", amount: 2500, note: "uber", date: "2026-09-17" },
+    ],
+  };
+
+  async function seedSelection(overrides?: { category?: string; candidates?: typeof payload.candidates }): Promise<void> {
+    await h.botStateRepository.set({
+      ownerId,
+      state: "awaiting_movement_selection",
+      pendingMovementId: null,
+      pendingNote: JSON.stringify({
+        category: overrides?.category ?? payload.category,
+        candidates: overrides?.candidates ?? payload.candidates,
+      }),
+    });
+  }
+
+  it("picks a candidate by number and reassigns it deterministically", async () => {
+    await seedSelection();
+
+    await h.service.handleUpdate(textUpdate({ text: "2", messageId: 2 }), h.reply);
+
+    expect(h.mockUpdateMovement).toHaveBeenCalledWith(ownerId, "m2", { category: "gastos hormiga" });
+    expect(h.mockSetState).toHaveBeenLastCalledWith({
+      ownerId,
+      state: "idle",
+      pendingMovementId: null,
+      pendingNote: null,
+    });
+    expect(h.replies.at(-1)).toBe('Listo, el movimiento quedó en "gastos hormiga".');
+  });
+
+  it("picks a candidate by normalized note containment", async () => {
+    await seedSelection();
+
+    await h.service.handleUpdate(textUpdate({ text: "uber", messageId: 2 }), h.reply);
+
+    expect(h.mockUpdateMovement).toHaveBeenCalledWith(ownerId, "m2", { category: "gastos hormiga" });
+  });
+
+  it("picks a candidate by a unique amount", async () => {
+    await seedSelection({
+      candidates: [
+        { id: "m1", amount: 2500, note: "super", date: "2026-09-19" },
+        { id: "m2", amount: 900, note: "pan", date: "2026-09-17" },
+      ],
+    });
+
+    await h.service.handleUpdate(textUpdate({ text: "900", messageId: 2 }), h.reply);
+
+    expect(h.mockUpdateMovement).toHaveBeenCalledWith(ownerId, "m2", { category: "gastos hormiga" });
+  });
+
+  it("abandons a non-answer and processes the text normally, changing nothing", async () => {
+    await seedSelection();
+    h.mockBrainInterpret.mockResolvedValue(null);
+
+    await h.service.handleUpdate(textUpdate({ text: "cualquier cosa", messageId: 2 }), h.reply);
+
+    expect(h.mockUpdateMovement).not.toHaveBeenCalled();
+    expect(h.replies.at(-2)).toContain("corrección");
+    expect(h.replies.at(-1)).toContain("No entendí");
+  });
+
+  it("drops a corrupt selection payload and processes the text normally", async () => {
+    await h.botStateRepository.set({
+      ownerId,
+      state: "awaiting_movement_selection",
+      pendingMovementId: null,
+      pendingNote: "{not-json",
+    });
+    h.mockBrainInterpret.mockResolvedValue(null);
+
+    await h.service.handleUpdate(textUpdate({ text: "hola", messageId: 2 }), h.reply);
+
+    expect(h.mockUpdateMovement).not.toHaveBeenCalled();
+    expect(h.replies.at(-2)).toContain("pregunta");
+  });
+
+  it("replies with the missing-movement notice when the picked movement was deleted", async () => {
+    await seedSelection();
+    h.mockUpdateMovement.mockRejectedValue(new NotFoundError("Movement m2 not found"));
+
+    await h.service.handleUpdate(textUpdate({ text: "2", messageId: 2 }), h.reply);
+
+    expect(h.replies.at(-1)).toBe("Ese movimiento ya no existe.");
+    expect(h.mockSetState).toHaveBeenLastCalledWith({
+      ownerId,
+      state: "idle",
+      pendingMovementId: null,
+      pendingNote: null,
+    });
+  });
+});
+
+describe("TelegramService movement correction (correct_category)", () => {
+  let h: Harness;
+
+  beforeEach(() => {
+    h = makeHarness();
+    h.mockListCategories.mockResolvedValue([
+      { id: "c1", ownerId, name: "otro", createdAt: new Date(), keywords: [] },
+    ]);
+  });
+
+  it("reassigns a unique movement from an idle correct_category envelope", async () => {
+    h.mockListMovements.mockResolvedValue([
+      {
+        id: "m1",
+        ownerId,
+        amount: 2500,
+        currency: "ARS",
+        category: "otro",
+        note: "uber",
+        occurredAt: new Date("2026-09-19T12:00:00.000Z"),
+        createdAt: new Date(),
+        type: "EXPENSE",
+      },
+    ]);
+    h.mockBrainInterpret.mockResolvedValue({
+      intent: "correct_category",
+      amount: 2500,
+      category: "gastos hormiga",
+      note: null,
+      dialog_action: null,
+    });
+
+    await h.service.handleUpdate(textUpdate({ text: "esos 2500 a gastos hormiga", messageId: 1 }), h.reply);
+
+    expect(h.mockCreateCategory).toHaveBeenCalledWith(ownerId, "gastos hormiga");
+    expect(h.mockUpdateMovement).toHaveBeenCalledWith(ownerId, "m1", { category: "gastos hormiga" });
+    expect(h.replies.at(-1)).toContain("gastos hormiga");
+    expect(h.replies.at(-1)).toContain(formatARS(2500));
+  });
+
+  it("asks with a persisted selection question when the reference is ambiguous", async () => {
+    const now = Date.now();
+    h.mockListMovements.mockResolvedValue([
+      {
+        id: "m1",
+        ownerId,
+        amount: 2500,
+        currency: "ARS",
+        category: "otro",
+        note: "super",
+        occurredAt: new Date(now - 24 * 60 * 60 * 1000),
+        createdAt: new Date(),
+        type: "EXPENSE",
+      },
+      {
+        id: "m2",
+        ownerId,
+        amount: 2500,
+        currency: "ARS",
+        category: "otro",
+        note: "uber",
+        occurredAt: new Date(now - 6 * 60 * 60 * 1000),
+        createdAt: new Date(),
+        type: "EXPENSE",
+      },
+    ]);
+    h.mockBrainInterpret.mockResolvedValue({
+      intent: "correct_category",
+      amount: 2500,
+      category: "gastos hormiga",
+      note: null,
+      dialog_action: null,
+    });
+
+    await h.service.handleUpdate(textUpdate({ text: "esos 2500 a gastos hormiga", messageId: 1 }), h.reply);
+
+    expect(h.mockUpdateMovement).not.toHaveBeenCalled();
+    const lastState = h.mockSetState.mock.calls.at(-1)?.[0] as BotStateRecord;
+    expect(lastState.state).toBe("awaiting_movement_selection");
+    expect(lastState.pendingMovementId).toBeNull();
+    const stored = JSON.parse(String(lastState.pendingNote)) as {
+      category: string;
+      candidates: { id: string }[];
+    };
+    expect(stored.category).toBe("gastos hormiga");
+    expect(stored.candidates.map((candidate) => candidate.id)).toEqual(["m1", "m2"]);
+    expect(h.replies.at(-1)).toContain("¿Cuál de estos movimientos corrijo?");
+    expect(h.replies.at(-1)).toContain("1)");
+  });
+
+  it("asks for a reference when the envelope carries no amount and no note", async () => {
+    h.mockListMovements.mockResolvedValue([
+      {
+        id: "m1",
+        ownerId,
+        amount: 2500,
+        currency: "ARS",
+        category: "otro",
+        note: "super",
+        occurredAt: new Date("2026-09-19T12:00:00.000Z"),
+        createdAt: new Date(),
+        type: "EXPENSE",
+      },
+    ]);
+    h.mockBrainInterpret.mockResolvedValue({
+      intent: "correct_category",
+      amount: null,
+      category: "gastos hormiga",
+      note: null,
+      dialog_action: null,
+    });
+
+    await h.service.handleUpdate(textUpdate({ text: "corregime eso", messageId: 1 }), h.reply);
+
+    expect(h.mockUpdateMovement).not.toHaveBeenCalled();
+    expect(h.replies.at(-1)).toContain("¿Qué movimiento querés corregir?");
+  });
+
+  it("replies no_match for an empty window without changing state", async () => {
+    h.mockBrainInterpret.mockResolvedValue({
+      intent: "correct_category",
+      amount: 2500,
+      category: "gastos hormiga",
+      note: null,
+      dialog_action: null,
+    });
+
+    await h.service.handleUpdate(textUpdate({ text: "esos 2500 a gastos hormiga", messageId: 1 }), h.reply);
+
+    expect(h.mockUpdateMovement).not.toHaveBeenCalled();
+    expect(h.mockSetState).not.toHaveBeenCalled();
+    expect(h.replies.at(-1)).toContain("No encontré");
+  });
+
+  it("replies help when correct_category has no target category and never runs the matcher", async () => {
+    h.mockBrainInterpret.mockResolvedValue({
+      intent: "correct_category",
+      amount: 2500,
+      category: null,
+      note: null,
+      dialog_action: null,
+    });
+
+    await h.service.handleUpdate(textUpdate({ text: "corregime", messageId: 1 }), h.reply);
+
+    expect(h.mockListMovements).not.toHaveBeenCalled();
+    expect(h.mockUpdateMovement).not.toHaveBeenCalled();
+    expect(h.replies.at(-1)).toBe(helpReply());
+  });
+
+  it("a selection ask during a dialog supersedes the pending correction", async () => {
+    await h.botStateRepository.set({
+      ownerId,
+      state: "awaiting_category",
+      pendingMovementId: "mov-9",
+      pendingNote: "uber viaje",
+    });
+    h.mockSetState.mockClear();
+    const now = Date.now();
+    h.mockListMovements.mockResolvedValue([
+      {
+        id: "m1",
+        ownerId,
+        amount: 2500,
+        currency: "ARS",
+        category: "otro",
+        note: "super",
+        occurredAt: new Date(now - 24 * 60 * 60 * 1000),
+        createdAt: new Date(),
+        type: "EXPENSE",
+      },
+      {
+        id: "m2",
+        ownerId,
+        amount: 2500,
+        currency: "ARS",
+        category: "otro",
+        note: "uber",
+        occurredAt: new Date(now - 6 * 60 * 60 * 1000),
+        createdAt: new Date(),
+        type: "EXPENSE",
+      },
+    ]);
+    h.mockBrainInterpret.mockResolvedValue({
+      intent: "correct_category",
+      amount: 2500,
+      category: "gastos hormiga",
+      note: null,
+      dialog_action: null,
+    });
+
+    await h.service.handleUpdate(textUpdate({ text: "esos 2500 a gastos hormiga", messageId: 2 }), h.reply);
+
+    const lastState = h.mockSetState.mock.calls.at(-1)?.[0] as BotStateRecord;
+    expect(lastState.state).toBe("awaiting_movement_selection");
+    expect(h.mockUpdateMovement).not.toHaveBeenCalled();
   });
 });

@@ -29,6 +29,18 @@ export type ConversationEnvelope = {
   query_type?: QueryType | null;
   /** Target name for `rename_category`; null for every other intent. */
   new_name?: string | null;
+  /**
+   * Dialog-state classification: "resolve" answers the open question, "abandon"
+   * explicitly closes it, null/absent means intent routing. Only meaningful in
+   * dialog states; idle ignores it. The zod schema defaults it to null.
+   */
+  dialog_action?: "resolve" | "abandon" | null;
+  /**
+   * Mixed-intent flag: with `create_category`, reassign the pending correction
+   * movement to the created category. Schema-permissive boolean (default false);
+   * the controller reads it only for create_category with a pending movement.
+   */
+  then_reassign?: boolean;
 };
 
 export type BotAction =
@@ -41,7 +53,9 @@ export type BotAction =
   | "created"
   | "deleted"
   | "renamed"
-  | "capabilities";
+  | "capabilities"
+  | "asked_movement"
+  | "created_reassigned";
 
 export type CategoryCommandErrorCode = "duplicate" | "not_found" | "otro_forbidden" | "unknown";
 
@@ -61,8 +75,22 @@ export type ExecutionResult = {
   error?: CategoryCommandErrorCode | null;
 };
 
-/** Fase-2 stub: category-blind this slice — callers pass nothing, client ignores it. */
-export type InterpretContext = { categories?: readonly string[] };
+/**
+ * Context passed to `interpret` for dialog-state messages: the bot state, the
+ * persisted pending payload, and the reconstructed open-question text. The
+ * prompt stays category-blind — it never embeds the owner's category names.
+ */
+export type InterpretContext =
+  | {
+      state: "awaiting_category";
+      pending: { movementId: string | null; note: string | null };
+      openQuestion: string;
+    }
+  | {
+      state: "awaiting_amount_confirmation";
+      pending: { amounts: [number, number]; note: string | null; category: string | null };
+      openQuestion: string;
+    };
 
 export interface BotBrain {
   /** Never throws. null = degrade to the deterministic flow. */
@@ -135,6 +163,8 @@ export const conversationEnvelopeSchema = z
     note: z.string().trim().min(1).max(200).nullable(),
     query_type: z.enum(QUERY_TYPES).nullable().default(null),
     new_name: z.string().trim().min(1).max(60).nullable().default(null),
+    dialog_action: z.enum(["resolve", "abandon"]).nullable().default(null),
+    then_reassign: z.boolean().default(false),
   })
   .refine(
     (data) =>
@@ -147,7 +177,7 @@ export const replyEnvelopeSchema = z.object({ reply: z.string().trim().min(1).ma
 export type ChatMessage = { role: "user" | "assistant"; content: string };
 
 export const INTERPRET_SYSTEM_PROMPT = [
-  'Respondé SOLO con un objeto JSON con exactamente estas claves: {"intent": string, "amount": number|null, "category": string|null, "note": string|null, "query_type": string|null, "new_name": string|null}.',
+  'Respondé SOLO con un objeto JSON con exactamente estas claves: {"intent": string, "amount": number|null, "category": string|null, "note": string|null, "query_type": string|null, "new_name": string|null, "dialog_action": string|null, "then_reassign": boolean}.',
   "No agregues texto ni campos extra.",
   '"intent" es exactamente UNA de: "register_expense" (cualquier movimiento de dinero, gasto o ingreso), "correct_amount", "correct_category", "query", "query_recent", "query_balance", "query_month", "associate_keyword", "create_category", "delete_category", "rename_category", "capabilities", "help", "off_topic".',
   "Si el mensaje tiene señal de gasto (verbo de gasto, $ o un monto) usá register_expense, aunque no tenga monto.",
@@ -162,6 +192,9 @@ export const INTERPRET_SYSTEM_PROMPT = [
   'Para crear, borrar o renombrar categorías usá "create_category", "delete_category" o "rename_category": "create_category" y "delete_category" llevan el nombre en "category"; "rename_category" lleva el nombre actual en "category" y el nuevo en "new_name". "new_name" es null salvo en "rename_category".',
   'Para preguntas sobre lo que el bot SABE hacer (¿podes borrar categorías?, ¿qué sabés hacer?, ¿qué podes hacer?) usá "capabilities": es una pregunta de capacidades, NUNCA la trates como off_topic ni dejes la acción vacía.',
   'off_topic es para mensajes sin relación con gastos: clasificalo, NUNCA lo respondas como charla general.',
+  '"dialog_action" se usa SOLO cuando hay un diálogo abierto (pregunta pendiente del bot): "resolve" si el mensaje responde la pregunta con un valor presentado, "abandon" si el dueño abandona explícitamente ("no, dejalo"), null en cualquier otro caso. Fuera de diálogo siempre null.',
+  'Para "correct_category": "category" es la categoría DESTINO; "amount" y/o "note" identifican el movimiento a corregir.',
+  '"then_reassign" es true SOLO cuando "create_category" pide guardar el movimiento pendiente en la categoría nueva (ej: "creá X y guardalo ahí"); en cualquier otro caso false.',
 ].join(" ");
 
 export const FEW_SHOTS: readonly ChatMessage[] = [
@@ -237,9 +270,90 @@ export const REPLY_SYSTEM_PROMPT = [
   "Recibís SOLO el JSON del resultado ejecutado y respondés con un objeto JSON: {\"reply\": string}.",
   "NUNCA afirmes un dato que no esté en el resultado: si amount es null no menciones montos.",
   "Máximo 2 oraciones, sin markdown.",
-  "Según action: registered = el movimiento se guardó o actualizó — confirmalo con los datos presentes; asked_amount = el monto es ambiguo — pedí el número exacto sin afirmar cuál es el correcto; asked_category = el movimiento quedó guardado en la categoría — ofrecé reasignarla; answered = respondé la consulta usando SOLO los datos del campo query (query_type y sus valores), sin inventar montos, categorías ni fechas; redirected = todavía no se puede — decilo con honestidad; none = no se ejecutó nada — guiá al dueño; created = la categoría se creó — confirmalo con category; deleted = la categoría se borró — confirmalo con category; renamed = la categoría se renombró — confirmá category a new_name; capabilities = enumerá lo que el bot puede hacer (registrar gastos, corregir, consultar categorías/últimos movimientos/saldo/resumen del mes, crear/borrar/renombrar categorías, asociar palabras, ayuda).",
+  "Según action: registered = el movimiento se guardó o actualizó — confirmalo con los datos presentes; asked_amount = el monto es ambiguo — pedí el número exacto sin afirmar cuál es el correcto; asked_category = el movimiento quedó guardado en la categoría — ofrecé reasignarla; answered = respondé la consulta usando SOLO los datos del campo query (query_type y sus valores), sin inventar montos, categorías ni fechas; redirected = todavía no se puede — decilo con honestidad; none = no se ejecutó nada — guiá al dueño; created = la categoría se creó — confirmalo con category; deleted = la categoría se borró — confirmalo con category; renamed = la categoría se renombró — confirmá category a new_name; capabilities = enumerá lo que el bot puede hacer (registrar gastos, corregir, consultar categorías/últimos movimientos/saldo/resumen del mes, crear/borrar/renombrar categorías, asociar palabras, ayuda); asked_movement = el bot preguntó qué movimiento corregir — enumerá SOLO los candidatos recibidos, sin inventar datos; created_reassigned = la categoría se creó y el movimiento pendiente se reasignó — confirmá ambos hechos.",
   "Si ok es false y viene message, transmití ese error de forma amable y honesta sin inventar causas.",
 ].join(" ");
+
+/**
+ * Per-state dialog instructions appended to the interpret system prompt. These
+ * teach the `dialog_action` classification for each open question.
+ */
+export const DIALOG_INTERPRET_ADDENDUM: Record<InterpretContext["state"], string> = {
+  awaiting_category: [
+    "Estás en un diálogo de corrección: el dueño debe elegir la categoría del movimiento pendiente.",
+    '"dialog_action" es "resolve" SOLO para una respuesta que nombra una categoría ("Transporte", "Gastos fijos").',
+    '"dialog_action" es "abandon" SOLO para un abandono explícito ("no", "no, dejalo", "dejalo").',
+    'Cualquier otra cosa (consulta, registro nuevo, crear categoría) es "dialog_action" null con su intent real.',
+    'En "resolve", "category" es el nombre exacto de la categoría elegida; nunca inventes una.',
+  ].join(" "),
+  awaiting_amount_confirmation: [
+    "Estás en un diálogo de confirmación de monto: se presentaron dos montos y el dueño debe elegir uno.",
+    '"dialog_action" es "resolve" SOLO cuando el mensaje repite UNO de los montos presentados ("5000", "5 mil" para 5000).',
+    'Una afirmación sin monto ("si", "sí", "dale") NUNCA es "resolve": usá "dialog_action" null y "amount" null.',
+    'Un monto distinto a los presentados es un registro NUEVO: "dialog_action" null con intent register_expense y ese monto.',
+    '"dialog_action" es "abandon" para un abandono explícito ("no, dejalo").',
+  ].join(" "),
+};
+
+/** Per-state dialog few-shots appended after the base few-shots. */
+export const DIALOG_FEW_SHOTS: Record<InterpretContext["state"], readonly ChatMessage[]> = {
+  awaiting_category: [
+    { role: "user", content: "Transporte" },
+    {
+      role: "assistant",
+      content:
+        '{"intent":"correct_category","amount":null,"category":"Transporte","note":null,"query_type":null,"new_name":null,"dialog_action":"resolve","then_reassign":false}',
+    },
+    { role: "user", content: "no, dejalo" },
+    {
+      role: "assistant",
+      content:
+        '{"intent":"correct_category","amount":null,"category":null,"note":null,"query_type":null,"new_name":null,"dialog_action":"abandon","then_reassign":false}',
+    },
+    { role: "user", content: "decime los últimos movimientos" },
+    {
+      role: "assistant",
+      content:
+        '{"intent":"query","amount":null,"category":null,"note":null,"query_type":"recent","new_name":null,"dialog_action":null,"then_reassign":false}',
+    },
+    { role: "user", content: "creá gastos hormiga y guardalo ahí" },
+    {
+      role: "assistant",
+      content:
+        '{"intent":"create_category","amount":null,"category":"gastos hormiga","note":null,"query_type":null,"new_name":null,"dialog_action":null,"then_reassign":true}',
+    },
+  ],
+  awaiting_amount_confirmation: [
+    { role: "user", content: "5000" },
+    {
+      role: "assistant",
+      content:
+        '{"intent":"register_expense","amount":5000,"category":null,"note":null,"query_type":null,"new_name":null,"dialog_action":"resolve","then_reassign":false}',
+    },
+    { role: "user", content: "si" },
+    {
+      role: "assistant",
+      content:
+        '{"intent":"register_expense","amount":null,"category":null,"note":null,"query_type":null,"new_name":null,"dialog_action":null,"then_reassign":false}',
+    },
+    { role: "user", content: "6000" },
+    {
+      role: "assistant",
+      content:
+        '{"intent":"register_expense","amount":6000,"category":null,"note":null,"query_type":null,"new_name":null,"dialog_action":null,"then_reassign":false}',
+    },
+  ],
+};
+
+/** Renders the dialog context into a deterministic prompt fragment. */
+export function renderDialogContext(context: InterpretContext): string {
+  switch (context.state) {
+    case "awaiting_category":
+      return `Contexto del diálogo: estado ${context.state}; movimiento pendiente ${context.pending.movementId ?? "ninguno"} (nota: ${context.pending.note ?? "sin nota"}); pregunta abierta: "${context.openQuestion}".`;
+    case "awaiting_amount_confirmation":
+      return `Contexto del diálogo: estado ${context.state}; montos presentados: ${context.pending.amounts.join(" / ")}; nota: ${context.pending.note ?? "sin nota"}; categoría: ${context.pending.category ?? "sin categoría"}; pregunta abierta: "${context.openQuestion}".`;
+  }
+}
 
 export class GroqBotBrain implements BotBrain {
   private readonly apiKey: string;
@@ -303,8 +417,16 @@ export class GroqBotBrain implements BotBrain {
     }
   }
 
-  async interpret(message: string): Promise<ConversationEnvelope | null> {
-    const payload = await this.chat(INTERPRET_SYSTEM_PROMPT, [...FEW_SHOTS, { role: "user", content: message }]);
+  async interpret(message: string, context?: InterpretContext): Promise<ConversationEnvelope | null> {
+    let system = INTERPRET_SYSTEM_PROMPT;
+    let messages: ChatMessage[] = [...FEW_SHOTS];
+    if (context !== undefined) {
+      system = `${INTERPRET_SYSTEM_PROMPT} ${DIALOG_INTERPRET_ADDENDUM[context.state]} ${renderDialogContext(context)}`;
+      messages = [...messages, ...DIALOG_FEW_SHOTS[context.state], { role: "user", content: message }];
+    } else {
+      messages = [...messages, { role: "user", content: message }];
+    }
+    const payload = await this.chat(system, messages);
     if (payload === null) {
       return null;
     }

@@ -1,0 +1,1 @@
+Contexto del diálogo: estado awaiting_category; movimiento pendiente mov-1 (nota: uber viaje); pregunta abierta: "¿Querés asignarle otra categoría al movimiento "uber viaje"? Escribí el nombre o "no".".

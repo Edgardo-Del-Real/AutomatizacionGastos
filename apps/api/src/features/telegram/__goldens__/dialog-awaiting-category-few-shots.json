@@ -1,0 +1,34 @@
+[
+  {
+    "role": "user",
+    "content": "Transporte"
+  },
+  {
+    "role": "assistant",
+    "content": "{\"intent\":\"correct_category\",\"amount\":null,\"category\":\"Transporte\",\"note\":null,\"query_type\":null,\"new_name\":null,\"dialog_action\":\"resolve\",\"then_reassign\":false}"
+  },
+  {
+    "role": "user",
+    "content": "no, dejalo"
+  },
+  {
+    "role": "assistant",
+    "content": "{\"intent\":\"correct_category\",\"amount\":null,\"category\":null,\"note\":null,\"query_type\":null,\"new_name\":null,\"dialog_action\":\"abandon\",\"then_reassign\":false}"
+  },
+  {
+    "role": "user",
+    "content": "decime los últimos movimientos"
+  },
+  {
+    "role": "assistant",
+    "content": "{\"intent\":\"query\",\"amount\":null,\"category\":null,\"note\":null,\"query_type\":\"recent\",\"new_name\":null,\"dialog_action\":null,\"then_reassign\":false}"
+  },
+  {
+    "role": "user",
+    "content": "creá gastos hormiga y guardalo ahí"
+  },
+  {
+    "role": "assistant",
+    "content": "{\"intent\":\"create_category\",\"amount\":null,\"category\":\"gastos hormiga\",\"note\":null,\"query_type\":null,\"new_name\":null,\"dialog_action\":null,\"then_reassign\":true}"
+  }
+]

@@ -2,13 +2,17 @@ import { describe, expect, it } from "vitest";
 import {
   BOT_INTENTS,
   conversationEnvelopeSchema,
+  DIALOG_FEW_SHOTS,
+  DIALOG_INTERPRET_ADDENDUM,
   FEW_SHOTS,
   GroqBotBrain,
   INTERPRET_SYSTEM_PROMPT,
   normalizeAmountString,
+  renderDialogContext,
   replyEnvelopeSchema,
   REPLY_SYSTEM_PROMPT,
   type ExecutionResult,
+  type InterpretContext,
 } from "./bot-brain";
 
 function jsonResponse(body: unknown, status = 200): Response {
@@ -285,6 +289,123 @@ describe("conversationEnvelopeSchema", () => {
       expect(result.success).toBe(true);
     }
   });
+
+  it.each(["resolve", "abandon"] as const)("accepts the dialog_action %s value", (dialogAction) => {
+    const result = conversationEnvelopeSchema.safeParse({
+      intent: "correct_category",
+      amount: null,
+      category: "Transporte",
+      note: null,
+      dialog_action: dialogAction,
+    });
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.dialog_action).toBe(dialogAction);
+    }
+  });
+
+  it("defaults dialog_action to null when the key is omitted", () => {
+    const result = conversationEnvelopeSchema.safeParse({
+      intent: "off_topic",
+      amount: null,
+      category: null,
+      note: null,
+    });
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.dialog_action).toBeNull();
+    }
+  });
+
+  it("accepts an explicit null dialog_action", () => {
+    const result = conversationEnvelopeSchema.safeParse({
+      intent: "query",
+      amount: null,
+      category: null,
+      note: null,
+      query_type: "recent",
+      dialog_action: null,
+    });
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.dialog_action).toBeNull();
+    }
+  });
+
+  it("rejects an invalid dialog_action value", () => {
+    const result = conversationEnvelopeSchema.safeParse({
+      intent: "correct_category",
+      amount: null,
+      category: "Transporte",
+      note: null,
+      dialog_action: "confirm",
+    });
+
+    expect(result.success).toBe(false);
+  });
+
+  it("defaults then_reassign to false when the key is omitted", () => {
+    const result = conversationEnvelopeSchema.safeParse({
+      intent: "create_category",
+      amount: null,
+      category: "Mascotas",
+      note: null,
+    });
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.then_reassign).toBe(false);
+    }
+  });
+
+  it("decodes a mixed-intent envelope with then_reassign true (create + reassign)", () => {
+    const result = conversationEnvelopeSchema.safeParse({
+      intent: "create_category",
+      amount: null,
+      category: "Gastos Hormiga",
+      note: null,
+      then_reassign: true,
+    });
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.category).toBe("Gastos Hormiga");
+      expect(result.data.then_reassign).toBe(true);
+    }
+  });
+
+  it("keeps a stray then_reassign true on a non-create intent (schema-permissive)", () => {
+    const result = conversationEnvelopeSchema.safeParse({
+      intent: "register_expense",
+      amount: 5000,
+      category: null,
+      note: null,
+      then_reassign: true,
+    });
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.then_reassign).toBe(true);
+    }
+  });
+
+  it("carries dialog_action and then_reassign on every parsed envelope", () => {
+    const result = conversationEnvelopeSchema.safeParse({
+      intent: "register_expense",
+      amount: "5 mil",
+      category: "Supermercado",
+      note: "gaste en el super",
+    });
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.dialog_action).toBeNull();
+      expect(result.data.then_reassign).toBe(false);
+    }
+  });
 });
 
 describe("replyEnvelopeSchema", () => {
@@ -343,6 +464,8 @@ describe("GroqBotBrain.interpret", () => {
       note: "gaste en el super",
       query_type: null,
       new_name: null,
+      dialog_action: null,
+      then_reassign: false,
     });
     expect(calls).toHaveLength(1);
   });
@@ -362,6 +485,8 @@ describe("GroqBotBrain.interpret", () => {
       note: null,
       query_type: null,
       new_name: null,
+      dialog_action: null,
+      then_reassign: false,
     });
   });
 
@@ -387,6 +512,8 @@ describe("GroqBotBrain.interpret", () => {
       note: null,
       query_type: "categories",
       new_name: null,
+      dialog_action: null,
+      then_reassign: false,
     });
   });
 
@@ -496,6 +623,8 @@ describe("GroqBotBrain.interpret", () => {
       note: null,
       query_type: null,
       new_name: "supermercado",
+      dialog_action: null,
+      then_reassign: false,
     });
   });
 
@@ -521,6 +650,8 @@ describe("GroqBotBrain.interpret", () => {
       note: null,
       query_type: null,
       new_name: null,
+      dialog_action: null,
+      then_reassign: false,
     });
   });
 
@@ -572,6 +703,79 @@ describe("GroqBotBrain.interpret", () => {
     await brain.interpret("compre mercaderia");
 
     expect(calls).toHaveLength(1);
+  });
+});
+
+describe("GroqBotBrain.interpret with dialog context", () => {
+  const categoryContext: InterpretContext = {
+    state: "awaiting_category",
+    pending: { movementId: "mov-1", note: "uber viaje" },
+    openQuestion: '¿Querés asignarle otra categoría al movimiento "uber viaje"? Escribí el nombre o "no".',
+  };
+
+  it("embeds the dialog addendum, the rendered context and the dialog few-shots when a context is supplied", async () => {
+    const { fetchImpl, calls } = makeFetch(() => jsonResponse(OPENAI_SHAPE));
+    const brain = brainWith(fetchImpl);
+
+    await brain.interpret("Transporte", categoryContext);
+
+    const call = calls[0];
+    const body = JSON.parse(String(call?.init?.body)) as {
+      messages: { role: string; content: string }[];
+    };
+    const system = body.messages[0]?.content ?? "";
+    expect(system).toBe(
+      `${INTERPRET_SYSTEM_PROMPT} ${DIALOG_INTERPRET_ADDENDUM["awaiting_category"]} ${renderDialogContext(categoryContext)}`,
+    );
+    expect(body.messages).toHaveLength(1 + FEW_SHOTS.length + DIALOG_FEW_SHOTS["awaiting_category"].length + 1);
+    expect(body.messages.at(-1)).toEqual({ role: "user", content: "Transporte" });
+  });
+
+  it("returns a resolve envelope when the LLM answers with an exact category", async () => {
+    const { fetchImpl } = makeFetch(() =>
+      jsonResponse({
+        choices: [
+          {
+            message: {
+              content:
+                '{"intent":"correct_category","amount":null,"category":"Transporte","note":null,"query_type":null,"new_name":null,"dialog_action":"resolve","then_reassign":false}',
+            },
+          },
+        ],
+      }),
+    );
+    const brain = brainWith(fetchImpl);
+
+    const result = await brain.interpret("Transporte", categoryContext);
+
+    expect(result).toEqual({
+      intent: "correct_category",
+      amount: null,
+      category: "Transporte",
+      note: null,
+      query_type: null,
+      new_name: null,
+      dialog_action: "resolve",
+      then_reassign: false,
+    });
+  });
+
+  it("degrades to null when the LLM returns an invalid dialog_action", async () => {
+    const { fetchImpl } = makeFetch(() =>
+      jsonResponse({
+        choices: [
+          {
+            message: {
+              content:
+                '{"intent":"correct_category","amount":null,"category":"Transporte","note":null,"query_type":null,"new_name":null,"dialog_action":"confirm","then_reassign":false}',
+            },
+          },
+        ],
+      }),
+    );
+    const brain = brainWith(fetchImpl);
+
+    await expect(brain.interpret("Transporte", categoryContext)).resolves.toBeNull();
   });
 });
 
@@ -663,6 +867,39 @@ describe("prompt goldens", () => {
   it("pins the reply system prompt", async () => {
     await expect(REPLY_SYSTEM_PROMPT).toMatchFileSnapshot("./__goldens__/reply-system-prompt.txt");
   });
+
+  it("pins the awaiting_category dialog addendum", async () => {
+    await expect(DIALOG_INTERPRET_ADDENDUM["awaiting_category"]).toMatchFileSnapshot(
+      "./__goldens__/dialog-awaiting-category-addendum.txt",
+    );
+  });
+
+  it("pins the awaiting_amount_confirmation dialog addendum", async () => {
+    await expect(DIALOG_INTERPRET_ADDENDUM["awaiting_amount_confirmation"]).toMatchFileSnapshot(
+      "./__goldens__/dialog-awaiting-amount-confirmation-addendum.txt",
+    );
+  });
+
+  it("pins the awaiting_category dialog few-shots", async () => {
+    await expect(JSON.stringify(DIALOG_FEW_SHOTS["awaiting_category"], null, 2)).toMatchFileSnapshot(
+      "./__goldens__/dialog-awaiting-category-few-shots.json",
+    );
+  });
+
+  it("pins the awaiting_amount_confirmation dialog few-shots", async () => {
+    await expect(JSON.stringify(DIALOG_FEW_SHOTS["awaiting_amount_confirmation"], null, 2)).toMatchFileSnapshot(
+      "./__goldens__/dialog-awaiting-amount-confirmation-few-shots.json",
+    );
+  });
+
+  it("pins the rendered dialog context fixture", async () => {
+    const context: InterpretContext = {
+      state: "awaiting_category",
+      pending: { movementId: "mov-1", note: "uber viaje" },
+      openQuestion: '¿Querés asignarle otra categoría al movimiento "uber viaje"? Escribí el nombre o "no".',
+    };
+    await expect(renderDialogContext(context)).toMatchFileSnapshot("./__goldens__/dialog-context-rendered.txt");
+  });
 });
 
 describe("prompt contracts", () => {
@@ -728,5 +965,67 @@ describe("prompt contracts", () => {
     expect(REPLY_SYSTEM_PROMPT).toContain("renamed");
     expect(REPLY_SYSTEM_PROMPT).toContain("capabilities");
     expect(REPLY_SYSTEM_PROMPT).toContain("message");
+  });
+
+  it("documents dialog_action semantics and the then_reassign flag in the interpret prompt", () => {
+    expect(INTERPRET_SYSTEM_PROMPT).toContain("dialog_action");
+    expect(INTERPRET_SYSTEM_PROMPT).toContain("resolve");
+    expect(INTERPRET_SYSTEM_PROMPT).toContain("abandon");
+    expect(INTERPRET_SYSTEM_PROMPT).toContain("then_reassign");
+  });
+
+  it("documents correct_category reference extraction in the interpret prompt", () => {
+    expect(INTERPRET_SYSTEM_PROMPT).toContain("correct_category");
+    expect(INTERPRET_SYSTEM_PROMPT).toContain("identifican");
+    expect(INTERPRET_SYSTEM_PROMPT).toContain("DESTINO");
+  });
+
+  it("teaches the reply to confirm asked_movement and created_reassigned actions", () => {
+    expect(REPLY_SYSTEM_PROMPT).toContain("asked_movement");
+    expect(REPLY_SYSTEM_PROMPT).toContain("created_reassigned");
+  });
+
+  it("teaches the amount-confirmation addendum that a bare affirmation never resolves", () => {
+    const addendum = DIALOG_INTERPRET_ADDENDUM["awaiting_amount_confirmation"];
+    expect(addendum).toContain("resolve");
+    expect(addendum).toContain("NUNCA");
+    expect(addendum).toContain("si");
+  });
+
+  it("teaches the category addendum the resolve/abandon/null classification", () => {
+    const addendum = DIALOG_INTERPRET_ADDENDUM["awaiting_category"];
+    expect(addendum).toContain("resolve");
+    expect(addendum).toContain("abandon");
+    expect(addendum).toContain("null");
+  });
+
+  it("models a bare affirmation as dialog_action null in the amount-confirmation few-shots", () => {
+    const shots = DIALOG_FEW_SHOTS["awaiting_amount_confirmation"];
+    const siIndex = shots.findIndex((message) => message.role === "user" && message.content === "si");
+    expect(siIndex).toBeGreaterThan(-1);
+    const answer = shots[siIndex + 1];
+    expect(answer?.role).toBe("assistant");
+    const parsed = JSON.parse(answer?.content ?? "{}") as {
+      dialog_action: string | null;
+      amount: number | null;
+    };
+    expect(parsed.dialog_action).toBeNull();
+    expect(parsed.amount).toBeNull();
+  });
+
+  it("models an exact category answer as resolve and an explicit out as abandon in the category few-shots", () => {
+    const shots = DIALOG_FEW_SHOTS["awaiting_category"];
+    const resolve = shots.find((message) => {
+      if (message.role !== "assistant") return false;
+      const parsed = JSON.parse(message.content) as { dialog_action?: string };
+      return parsed.dialog_action === "resolve";
+    });
+    const abandon = shots.find((message) => {
+      if (message.role !== "assistant") return false;
+      const parsed = JSON.parse(message.content) as { dialog_action?: string };
+      return parsed.dialog_action === "abandon";
+    });
+    expect(resolve).toBeDefined();
+    expect(abandon).toBeDefined();
   });
 });

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { normalizeTelegramMessage } from "./telegram.parser";
+import { normalizeTelegramMessage, parseSharedPrefix } from "./telegram.parser";
 import type { TelegramMessage } from "./telegram.types";
 
 const OWNER_ID = 123456789;
@@ -93,5 +93,21 @@ describe("normalizeTelegramMessage", () => {
   it("returns null for a non-object update", () => {
     expect(normalizeTelegramMessage(null)).toBeNull();
     expect(normalizeTelegramMessage("nope")).toBeNull();
+  });
+});
+
+describe("parseSharedPrefix", () => {
+  it("detects the compartido: prefix case-insensitively and strips it, trimming the rest", () => {
+    expect(parseSharedPrefix("compartido: $2000 super")).toEqual({ text: "$2000 super", shared: true });
+    expect(parseSharedPrefix("COMPARTIDO: $2000 super")).toEqual({ text: "$2000 super", shared: true });
+    expect(parseSharedPrefix("Compartido:   $2000  super  ")).toEqual({ text: "$2000  super", shared: true });
+  });
+
+  it("returns the text untouched with shared=false when the prefix is absent", () => {
+    expect(parseSharedPrefix("$2000 super")).toEqual({ text: "$2000 super", shared: false });
+  });
+
+  it("does not treat plain words starting with 'compartido' without the colon as a prefix", () => {
+    expect(parseSharedPrefix("compartido el gasto")).toEqual({ text: "compartido el gasto", shared: false });
   });
 });

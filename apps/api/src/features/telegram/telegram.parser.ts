@@ -1,5 +1,19 @@
 import type { TelegramMessage } from "./telegram.types";
 
+/**
+ * AD6 — the `compartido:` prefix is parsed ONCE at arrival and is
+ * authoritative: it works without the bot brain and wins over the brain's
+ * `shared` flag by construction (the stripped text the brain sees never
+ * carries the prefix). Strips the prefix (case-insensitive) and trims the rest.
+ */
+export function parseSharedPrefix(text: string): { text: string; shared: boolean } {
+  const match = /^compartido\s*:\s*/i.exec(text);
+  if (match === null) {
+    return { text, shared: false };
+  }
+  return { text: text.slice(match[0].length).trim(), shared: true };
+}
+
 export function normalizeTelegramMessage(update: unknown): TelegramMessage | null {
   if (!isRecord(update)) return null;
   if ("edited_message" in update) return null;

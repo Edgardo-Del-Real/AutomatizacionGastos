@@ -6,6 +6,7 @@ import type { CategoryService } from "../categories/categories.service";
 import type { ExpenseService } from "../expenses/expenses.service";
 import type { ProcessedMessageRepository } from "../messages/message.repository";
 import type { MovementService } from "../movements/movements.service";
+import type { HouseholdService } from "../household/household.service";
 import type { BotStateRepository } from "./bot-state.repository";
 import {
   createTelegramBot,
@@ -125,8 +126,11 @@ function makeBotHarness(): BotHarness {
     movementService,
     categoryService,
     botStateRepository,
-    ownerChatId: OWNER_CHAT_ID,
-    ownerId,
+    household: {
+      resolveOwnerByChatId: (chatId: number) => (chatId === OWNER_CHAT_ID ? ownerId : null),
+      partnerOf: () => null,
+      getMembers: () => [{ ownerId, name: "default" }],
+    } as unknown as HouseholdService,
     logger: () => undefined,
   });
   const bot = buildOfflineBot(service, recorded);
@@ -195,6 +199,7 @@ describe("createTelegramBot (offline reply recording)", () => {
     expect(h.mockCreateExpense).toHaveBeenCalledWith(
       expect.objectContaining({ amount: 2500, currency: "ARS", note: "café", category: "otro" }),
       ownerId,
+      { visibility: "INDIVIDUAL" },
     );
   });
 

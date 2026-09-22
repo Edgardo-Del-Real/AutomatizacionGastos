@@ -1,9 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 import type { CategoryService } from "../categories/categories.service";
 import type { MovementService } from "../movements/movements.service";
+import type { ViewerScope } from "../movements/movements.types";
 import { deriveQueryType, QueryExecutor } from "./query-executor";
 
 const ownerId = "default";
+const scope: ViewerScope = { viewerId: ownerId, partnerId: "edgardo", visibility: "all" };
 
 function makeHarness() {
   const movementService = {
@@ -53,9 +55,9 @@ describe("QueryExecutor.execute", () => {
       { id: "c2", ownerId, name: "otro", createdAt: new Date(), keywords: [] },
     ]);
 
-    const result = await executor.execute(ownerId, "categories");
+    const result = await executor.execute(scope, "categories");
 
-    expect(mockListCategories).toHaveBeenCalledWith(ownerId);
+    expect(mockListCategories).toHaveBeenCalledWith(scope.viewerId);
     expect(result).toEqual({
       query_type: "categories",
       categories: [
@@ -80,9 +82,9 @@ describe("QueryExecutor.execute", () => {
     }));
     mockListMovements.mockResolvedValue(movements);
 
-    const result = await executor.execute(ownerId, "recent");
+    const result = await executor.execute(scope, "recent");
 
-    expect(mockListMovements).toHaveBeenCalledWith({ viewerId: ownerId, partnerId: null, visibility: "all" }, {});
+    expect(mockListMovements).toHaveBeenCalledWith(scope, {});
     expect(result.query_type).toBe("recent");
     if (result.query_type !== "recent") return;
     expect(result.movements).toHaveLength(5);
@@ -121,9 +123,9 @@ describe("QueryExecutor.execute", () => {
       top: { expenses: [], income: [] },
     });
 
-    const result = await executor.execute(ownerId, "balance");
+    const result = await executor.execute(scope, "balance");
 
-    expect(mockGetSummary).toHaveBeenCalledWith({ viewerId: ownerId, partnerId: null, visibility: "all" });
+    expect(mockGetSummary).toHaveBeenCalledWith(scope);
     expect(result).toEqual({
       query_type: "balance",
       balance: 3000,
@@ -156,9 +158,9 @@ describe("QueryExecutor.execute", () => {
       top: { expenses: [], income: [] },
     });
 
-    const result = await executor.execute(ownerId, "month");
+    const result = await executor.execute(scope, "month");
 
-    expect(mockGetSummary).toHaveBeenCalledWith({ viewerId: ownerId, partnerId: null, visibility: "all" });
+    expect(mockGetSummary).toHaveBeenCalledWith(scope);
     expect(result).toEqual({
       query_type: "month",
       month: "2026-09",
@@ -187,7 +189,7 @@ describe("QueryExecutor.execute", () => {
       top: { expenses: [], income: [] },
     });
 
-    const result = await executor.execute(ownerId, "month");
+    const result = await executor.execute(scope, "month");
 
     expect(result).toEqual({
       query_type: "month",

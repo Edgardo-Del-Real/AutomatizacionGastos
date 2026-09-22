@@ -8,10 +8,11 @@ export { deriveQueryType } from "./query.types";
 const RECENT_LIMIT = 5;
 
 /**
- * Deterministic query executors: fetch the owner's REAL data for each
+ * Deterministic query executors: fetch the viewer's REAL data for each
  * query_type and shape it for the LLM reply. The result is passed to
  * `brain.reply(result)` so the conversational answer is always grounded in the
  * executed data; the fixed `reply-text.ts` templates render the same shape.
+ * Movement reads go through the same viewer-scoped predicate as the dashboard.
  */
 export class QueryExecutor {
   constructor(
@@ -19,30 +20,21 @@ export class QueryExecutor {
     private readonly categoryService: CategoryService,
   ) {}
 
-  async execute(ownerId: string, queryType: QueryType): Promise<QueryExecutionResult> {
+  async execute(scope: ViewerScope, queryType: QueryType): Promise<QueryExecutionResult> {
     switch (queryType) {
       case "categories":
-        return this.categories(ownerId);
+        return this.categories(scope);
       case "recent":
-        return this.recent(ownerId);
+        return this.recent(scope);
       case "balance":
-        return this.balance(ownerId);
+        return this.balance(scope);
       case "month":
-        return this.month(ownerId);
+        return this.month(scope);
     }
   }
 
-  /**
-   * Viewer scope for bot queries: the owner is the viewer; no partner context
-   * is available here (single-owner bot reads). The household-aware scope is
-   * threaded by the TelegramService caller (AD9).
-   */
-  private scopeOf(ownerId: string): ViewerScope {
-    return { viewerId: ownerId, partnerId: null, visibility: "all" };
-  }
-
-  private async categories(ownerId: string): Promise<QueryExecutionResult> {
-    const categories = await this.categoryService.listCategories(ownerId);
+  private async categories(scope: ViewerScope): Promise<QueryExecutionResult> {
+    const categories = await this.categoryService.listCategories(scope.viewerId);
     return {
       query_type: "categories",
       categories: categories.map((category) => ({
@@ -52,8 +44,8 @@ export class QueryExecutor {
     };
   }
 
-  private async recent(ownerId: string): Promise<QueryExecutionResult> {
-    const movements = await this.movementService.listMovements(this.scopeOf(ownerId), {});
+  private async recent(scope: ViewerScope): Promise<QueryExecutionResult> {
+    const movements = await this.movementService.listMovements(scope, {});
     return {
       query_type: "recent",
       movements: movements.slice(0, RECENT_LIMIT).map((movement) => ({
@@ -66,8 +58,8 @@ export class QueryExecutor {
     };
   }
 
-  private async balance(ownerId: string): Promise<QueryExecutionResult> {
-    const summary = await this.movementService.getSummary(this.scopeOf(ownerId));
+  private async balance(scope: ViewerScope): Promise<QueryExecutionResult> {
+    const summary = await this.movementService.getSummary(scope);
     return {
       query_type: "balance",
       balance: summary.kpis.balance,
@@ -76,8 +68,8 @@ export class QueryExecutor {
     };
   }
 
-  private async month(ownerId: string): Promise<QueryExecutionResult> {
-    const summary = await this.movementService.getSummary(this.scopeOf(ownerId));
+  private async month(scope: ViewerScope): Promise<QueryExecutionResult> {
+    const summary = await this.movementService.getSummary(scope);
     // The mom series always ends with the current Buenos Aires month bucket.
     const current = summary.mom.months.at(-1);
     return {

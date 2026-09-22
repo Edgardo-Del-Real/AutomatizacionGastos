@@ -3,6 +3,8 @@ import type { CategoryService } from "../categories/categories.service";
 import { normalizeForMatch } from "../categories/matcher";
 import type { CategoryWithKeywords } from "../categories/categories.types";
 import type { ExpenseService } from "../expenses/expenses.service";
+import type { HouseholdService } from "../household/household.service";
+import type { ViewerScope } from "../movements/movements.types";
 import {
   classifyMovementType,
   extractNote,
@@ -27,7 +29,7 @@ import { MovementCorrector } from "./movement-corrector";
 import { QueryExecutor } from "./query-executor";
 import { deriveQueryType, type QueryExecutionResult } from "./query.types";
 import { parseCommand, type TelegramCommand } from "./telegram.commands";
-import { normalizeTelegramMessage } from "./telegram.parser";
+import { normalizeTelegramMessage, parseSharedPrefix } from "./telegram.parser";
 import {
   amountConfirmationAbandonedReply,
   amountConflictReply,
@@ -75,8 +77,12 @@ export type TelegramServiceDeps = {
   movementService: MovementService;
   categoryService: CategoryService;
   botStateRepository: BotStateRepository;
-  ownerChatId: number;
-  ownerId: string;
+  /**
+   * AD9 — the household registry replaces the single `ownerChatId`/`ownerId`:
+   * `resolveOwnerByChatId` gates and attributes each message to its member,
+   * and `partnerOf` feeds the viewer scope for movement queries.
+   */
+  household: HouseholdService;
   logger?: (message: string) => void;
   /** Optional LLM brain; when absent the bot runs deterministic-only. */
   brain?: BotBrain;
@@ -90,13 +96,16 @@ const AWAITING_MOVEMENT_SELECTION = "awaiting_movement_selection";
 
 /**
  * Stored payload of an open amount-conflict question. Lives in
- * `BotState.pendingNote` (a String column) so it survives restarts.
+ * `BotState.pendingNote` (a String column) so it survives restarts. The
+ * `shared` bit is persisted so a dialog-created registration keeps the
+ * shared signal of the message that opened the question (AD6).
  */
 export const amountConfirmationPayloadSchema = z.object({
   body: z.string().min(1),
   note: z.string().nullable(),
   amounts: z.tuple([z.number().positive(), z.number().positive()]),
   category: z.string().min(1).nullable(),
+  shared: z.boolean().default(false),
 });
 
 export type AmountConfirmationPayload = z.infer<typeof amountConfirmationPayloadSchema>;
@@ -146,19 +155,23 @@ export class TelegramService {
       return;
     }
 
+    // Order: resolve → gate → record (spec "Message Deduplication"). The chat
+    // gate runs BEFORE recording: unknown chats produce no record and no reply.
+    const ownerId = this.deps.household.resolveOwnerByChatId(message.fromId);
+    if (ownerId === null) {
+      // chatId secrecy (threat model): the log line must NOT contain the chatId.
+      this.deps.logger?.(`Telegram: ignoring message ${message.messageId} from an unknown chat`);
+      return;
+    }
+
     try {
-      await this.deps.messageRepository.recordProcessed(message.chatId, message.messageId, this.deps.ownerId);
+      await this.deps.messageRepository.recordProcessed(message.chatId, message.messageId, ownerId);
     } catch (error) {
       if (isUniqueConstraintViolation(error)) {
         this.deps.logger?.(`Telegram: message ${message.messageId} already processed, skipping`);
         return;
       }
       throw error;
-    }
-
-    if (message.fromId !== this.deps.ownerChatId) {
-      this.deps.logger?.(`Telegram: ignoring message ${message.messageId} from non-owner ${message.fromId}`);
-      return;
     }
 
     const body = message.text;
@@ -169,33 +182,35 @@ export class TelegramService {
     // Commands are checked before state consumption in every state (D6).
     const command = parseCommand(body);
     if (command !== null) {
-      await this.handleCommand(command, reply);
+      await this.handleCommand(command, ownerId, reply);
       return;
     }
 
-    const ownerId = this.deps.ownerId;
+    // AD6 — the `compartido:` prefix is parsed ONCE at arrival; the stripped
+    // text flows to the brain/parser and the shared bit is threaded down.
+    const { text: stripped, shared: sharedByPrefix } = parseSharedPrefix(body);
+
     const state = await this.deps.botStateRepository.get(ownerId);
 
     if (state?.state === AWAITING_SETUP) {
-      await this.handleSetupReply(body, reply);
+      await this.handleSetupReply(stripped, ownerId, reply);
       return;
     }
 
     if (state?.state === AWAITING_CATEGORY || state?.state === AWAITING_AMOUNT_CONFIRMATION) {
-      await this.handleDialogMessage(state, body, reply);
+      await this.handleDialogMessage(state, stripped, ownerId, sharedByPrefix, reply);
       return;
     }
 
     if (state?.state === AWAITING_MOVEMENT_SELECTION) {
-      await this.handleMovementSelection(state, body, reply);
+      await this.handleMovementSelection(state, stripped, ownerId, sharedByPrefix, reply);
       return;
     }
 
-    await this.handleRegistration(body, reply);
+    await this.handleRegistration(stripped, ownerId, sharedByPrefix, reply);
   }
 
-  private async handleRegistration(body: string, reply?: ReplyPort): Promise<void> {
-    const ownerId = this.deps.ownerId;
+  private async handleRegistration(body: string, ownerId: string, shared: boolean, reply?: ReplyPort): Promise<void> {
     const categories = await this.deps.categoryService.listCategories(ownerId);
 
     // The setup gate wins BEFORE any brain call: the brain never fires for
@@ -214,11 +229,11 @@ export class TelegramService {
     const envelope = await this.tryBrainInterpret(body);
     if (envelope === null) {
       // D5: interpret-null → full deterministic path, fixed replies, no reply call.
-      await this.deterministicRegistration(body, parseAmountAndNote(body), categories, reply);
+      await this.deterministicRegistration(body, parseAmountAndNote(body), categories, ownerId, shared, reply);
       return;
     }
 
-    await this.routeEnvelopeIntent(envelope, body, reply);
+    await this.routeEnvelopeIntent(envelope, body, ownerId, shared, reply);
   }
 
   private async sendRedirect(intent: ConversationEnvelope["intent"], fixed: string, reply?: ReplyPort): Promise<void> {
@@ -234,8 +249,8 @@ export class TelegramService {
    * falling back to the fixed template that mirrors the same facts. Errors are
    * carried in the result — the executor never throws for domain failures.
    */
-  private async executeCategoryCommand(envelope: ConversationEnvelope, reply?: ReplyPort): Promise<void> {
-    const result = await this.categoryExecutor.execute(this.deps.ownerId, envelope);
+  private async executeCategoryCommand(envelope: ConversationEnvelope, ownerId: string, reply?: ReplyPort): Promise<void> {
+    const result = await this.categoryExecutor.execute(ownerId, envelope);
     await this.makeSender(true, reply)(result, categoryCommandReplyTemplate(result));
   }
 
@@ -262,7 +277,7 @@ export class TelegramService {
    * reply (falling back to the fixed template). Malformed envelopes and fetch
    * failures degrade to the honest redirect — never invent data.
    */
-  private async executeQuery(envelope: ConversationEnvelope, reply?: ReplyPort): Promise<void> {
+  private async executeQuery(envelope: ConversationEnvelope, ownerId: string, reply?: ReplyPort): Promise<void> {
     const send = this.makeSender(true, reply);
     const queryType = deriveQueryType(envelope.intent, envelope.query_type ?? null);
 
@@ -276,7 +291,7 @@ export class TelegramService {
 
     let result: QueryExecutionResult;
     try {
-      result = await this.queryExecutor.execute(this.deps.ownerId, queryType);
+      result = await this.queryExecutor.execute(this.scopeFor(ownerId), queryType);
     } catch (error) {
       this.deps.logger?.(`Telegram: query ${queryType} failed: ${String(error)}`);
       await send(
@@ -314,9 +329,10 @@ export class TelegramService {
     body: string,
     parsed: ParsedAmount | null,
     categories: CategoryWithKeywords[],
+    ownerId: string,
+    shared: boolean,
     reply?: ReplyPort,
   ): Promise<void> {
-    const ownerId = this.deps.ownerId;
     if (parsed === null) {
       await this.safeReply(reply, helpReply());
       return;
@@ -327,11 +343,11 @@ export class TelegramService {
 
     // A user-authored keyword rule beats any brain suggestion.
     if (matched !== null) {
-      await this.registerWithCategory(body, parsed.amount, parsed.note, matched, this.makeSender(false, reply));
+      await this.registerWithCategory(body, parsed.amount, parsed.note, matched, ownerId, shared, this.makeSender(false, reply));
       return;
     }
 
-    await this.registerOtroWithCorrection(body, parsed.amount, parsed.note, this.makeSender(false, reply));
+    await this.registerOtroWithCorrection(body, parsed.amount, parsed.note, ownerId, shared, this.makeSender(false, reply));
   }
 
   /** register_expense envelope: amount → note → category, then register. */
@@ -340,12 +356,16 @@ export class TelegramService {
     parsed: ParsedAmount | null,
     envelope: ConversationEnvelope,
     categories: CategoryWithKeywords[],
+    ownerId: string,
+    sharedByPrefix: boolean,
     reply?: ReplyPort,
   ): Promise<void> {
     const send = this.makeSender(true, reply);
-    const ownerId = this.deps.ownerId;
     const detAmount = parsed?.amount ?? null;
     const brainAmount = envelope.amount;
+    // AD6 — the deterministic prefix is authoritative and wins over the brain
+    // flag: visibility = prefixShared OR envelope.shared === true.
+    const shared = sharedByPrefix || envelope.shared === true;
 
     if (detAmount === null && brainAmount === null) {
       await send(
@@ -368,7 +388,7 @@ export class TelegramService {
       amount = brainAmount as number;
     } else {
       // Genuine disagreement: ask the owner, nothing registers silently.
-      await this.askAmountConfirmation(body, detAmount, brainAmount, parsed, envelope, categories, send);
+      await this.askAmountConfirmation(body, detAmount, brainAmount, parsed, envelope, categories, ownerId, shared, send);
       return;
     }
 
@@ -380,10 +400,10 @@ export class TelegramService {
     const matched = await this.deps.categoryService.matchNote(ownerId, note ?? body);
     const category = matched ?? this.resolveSuggestion(envelope.category, categories);
     if (category !== null) {
-      await this.registerWithCategory(body, amount, note, category, send);
+      await this.registerWithCategory(body, amount, note, category, ownerId, shared, send);
       return;
     }
-    await this.registerOtroWithCorrection(body, amount, note, send);
+    await this.registerOtroWithCorrection(body, amount, note, ownerId, shared, send);
   }
 
   /** Amounts differ: persist the question and ask; nothing registers silently. */
@@ -394,6 +414,8 @@ export class TelegramService {
     parsed: ParsedAmount | null,
     envelope: ConversationEnvelope,
     categories: CategoryWithKeywords[],
+    ownerId: string,
+    shared: boolean,
     send: Sender,
   ): Promise<void> {
     const note = parsed !== null ? (parsed.note ?? envelope.note) : (envelope.note ?? extractNote(body));
@@ -402,9 +424,10 @@ export class TelegramService {
       note,
       amounts: [detAmount, brainAmount],
       category: this.resolveSuggestion(envelope.category, categories),
+      shared,
     };
     await this.deps.botStateRepository.set({
-      ownerId: this.deps.ownerId,
+      ownerId,
       state: AWAITING_AMOUNT_CONFIRMATION,
       pendingMovementId: null,
       pendingNote: JSON.stringify(payload),
@@ -418,9 +441,10 @@ export class TelegramService {
   private async d6AwaitingAmountConfirmation(
     state: BotStateRecord,
     body: string,
+    ownerId: string,
+    shared: boolean,
     reply?: ReplyPort,
   ): Promise<void> {
-    const ownerId = this.deps.ownerId;
     const send = this.makeSender(this.brainAvailable, reply);
     const payload = this.decodeConfirmationPayload(state.pendingNote);
 
@@ -436,7 +460,7 @@ export class TelegramService {
         { intent: "register_expense", ok: false, action: "none", amount: null, category: null, note: body },
         amountConfirmationAbandonedReply(),
       );
-      await this.handleRegistration(body, reply);
+      await this.handleRegistration(body, ownerId, shared, reply);
       return;
     }
 
@@ -457,15 +481,16 @@ export class TelegramService {
         { intent: "register_expense", ok: false, action: "none", amount: null, category: null, note: body },
         amountConfirmationAbandonedReply(),
       );
-      await this.handleRegistration(body, reply);
+      await this.handleRegistration(body, ownerId, shared, reply);
       return;
     }
 
-    // Register from the STORED context; a creation failure leaves the question open.
+    // Register from the STORED context (payload.shared persists the bit, AD6);
+    // a creation failure leaves the question open.
     if (payload.category !== null) {
-      await this.registerWithCategory(payload.body, chosen, payload.note, payload.category, send);
+      await this.registerWithCategory(payload.body, chosen, payload.note, payload.category, ownerId, payload.shared, send);
     } else {
-      await this.registerOtroWithCorrection(payload.body, chosen, payload.note, send);
+      await this.registerOtroWithCorrection(payload.body, chosen, payload.note, ownerId, payload.shared, send);
     }
   }
 
@@ -543,8 +568,7 @@ export class TelegramService {
     return match === undefined ? null : match.name;
   }
 
-  private async handleSetupReply(body: string, reply?: ReplyPort): Promise<void> {
-    const ownerId = this.deps.ownerId;
+  private async handleSetupReply(body: string, ownerId: string, reply?: ReplyPort): Promise<void> {
     const names = this.extractCategoryNames(body);
     if (names.length === 0) {
       await this.safeReply(reply, setupRetryReply());
@@ -592,9 +616,10 @@ export class TelegramService {
   private async d6AwaitingCategory(
     state: BotStateRecord,
     body: string,
+    ownerId: string,
+    shared: boolean,
     reply?: ReplyPort,
   ): Promise<void> {
-    const ownerId = this.deps.ownerId;
     const send = this.makeSender(this.brainAvailable, reply);
     const categories = await this.deps.categoryService.listCategories(ownerId);
     const normalizedText = normalizeForMatch(body);
@@ -619,7 +644,7 @@ export class TelegramService {
     // (multi-word names; a category named "500" beats an amount).
     const exactCategory = categories.find((category) => normalizeForMatch(category.name) === normalizedText);
     if (exactCategory !== undefined) {
-      await this.answerCorrection(state, exactCategory.name, send, reply);
+      await this.answerCorrection(state, exactCategory.name, ownerId, send, reply);
       return;
     }
 
@@ -629,14 +654,14 @@ export class TelegramService {
         { intent: "correct_category", ok: false, action: "none", amount: null, category: null, note: body },
         correctionAbandonedReply(),
       );
-      await this.handleRegistration(body, reply);
+      await this.handleRegistration(body, ownerId, shared, reply);
       return;
     }
 
     // D6 rule 3: a single token → ANSWER + auto-create.
     if (trimmed.split(/\s+/).length === 1) {
       const created = await this.deps.categoryService.createCategory(ownerId, trimmed);
-      await this.answerCorrection(state, created.name, send, reply);
+      await this.answerCorrection(state, created.name, ownerId, send, reply);
       return;
     }
 
@@ -652,11 +677,10 @@ export class TelegramService {
   private async answerCorrection(
     state: BotStateRecord,
     category: string,
+    ownerId: string,
     send: Sender,
     reply?: ReplyPort,
   ): Promise<void> {
-    const ownerId = this.deps.ownerId;
-
     if (state.pendingMovementId !== null) {
       try {
         await this.deps.movementService.updateMovement(ownerId, state.pendingMovementId, { category });
@@ -693,40 +717,52 @@ export class TelegramService {
    * message in a dialog state is interpreted WITH dialog context and routed on
    * `dialog_action`. The deterministic rules run only as the D6 fallback.
    */
-  private async handleDialogMessage(state: BotStateRecord, body: string, reply?: ReplyPort): Promise<void> {
+  private async handleDialogMessage(
+    state: BotStateRecord,
+    body: string,
+    ownerId: string,
+    shared: boolean,
+    reply?: ReplyPort,
+  ): Promise<void> {
     const context = this.buildInterpretContext(state);
     if (context === null) {
       // A corrupt amount-confirmation payload cannot be contextualized: today's
       // deterministic rules own the message.
-      await this.d6DialogFallback(state, body, reply);
+      await this.d6DialogFallback(state, body, ownerId, shared, reply);
       return;
     }
 
     const envelope = await this.tryBrainInterpret(body, context);
     if (envelope === null || envelope.dialog_action === "abandon") {
       // D1: brain-absent / brain-null / explicit abandon → D6 rules verbatim.
-      await this.d6DialogFallback(state, body, reply);
+      await this.d6DialogFallback(state, body, ownerId, shared, reply);
       return;
     }
 
     if (envelope.dialog_action === "resolve") {
       // Phantom guard: the acted-on value comes from the message matched against
       // the persisted payload, never from the envelope.
-      await this.resolveDialog(state, envelope, body, reply);
+      await this.resolveDialog(state, envelope, body, ownerId, reply);
       return;
     }
 
     // dialog_action null → shared intent routing; the pending stays untouched.
-    await this.routeEnvelopeIntent(envelope, body, reply, { state });
+    await this.routeEnvelopeIntent(envelope, body, ownerId, shared, reply, { state });
   }
 
   /** D1: the single D6 fallback path, dispatching to today's verbatim handlers. */
-  private async d6DialogFallback(state: BotStateRecord, body: string, reply?: ReplyPort): Promise<void> {
+  private async d6DialogFallback(
+    state: BotStateRecord,
+    body: string,
+    ownerId: string,
+    shared: boolean,
+    reply?: ReplyPort,
+  ): Promise<void> {
     if (state.state === AWAITING_CATEGORY) {
-      await this.d6AwaitingCategory(state, body, reply);
+      await this.d6AwaitingCategory(state, body, ownerId, shared, reply);
       return;
     }
-    await this.d6AwaitingAmountConfirmation(state, body, reply);
+    await this.d6AwaitingAmountConfirmation(state, body, ownerId, shared, reply);
   }
 
   /**
@@ -758,13 +794,14 @@ export class TelegramService {
     state: BotStateRecord,
     envelope: ConversationEnvelope,
     body: string,
+    ownerId: string,
     reply?: ReplyPort,
   ): Promise<void> {
     if (state.state === AWAITING_CATEGORY) {
-      await this.resolveAwaitingCategory(state, envelope, reply);
+      await this.resolveAwaitingCategory(state, envelope, ownerId, reply);
       return;
     }
-    await this.resolveAwaitingAmountConfirmation(state, envelope, body, reply);
+    await this.resolveAwaitingAmountConfirmation(state, envelope, body, ownerId, reply);
   }
 
   /**
@@ -776,9 +813,9 @@ export class TelegramService {
   private async resolveAwaitingCategory(
     state: BotStateRecord,
     envelope: ConversationEnvelope,
+    ownerId: string,
     reply?: ReplyPort,
   ): Promise<void> {
-    const ownerId = this.deps.ownerId;
     // Phantom guard rule 1: the pending movement must exist.
     if (state.pendingMovementId === null) {
       await this.deps.botStateRepository.set({ ownerId, state: IDLE, pendingMovementId: null, pendingNote: null });
@@ -815,14 +852,14 @@ export class TelegramService {
     // D6 answer cascade with the envelope category as the candidate answer.
     const exactCategory = categories.find((category) => normalizeForMatch(category.name) === normalizedAnswer);
     if (exactCategory !== undefined) {
-      await this.answerCorrection(state, exactCategory.name, send, reply);
+      await this.answerCorrection(state, exactCategory.name, ownerId, send, reply);
       return;
     }
 
     // A single token is a new category: auto-create and apply (D6 rule 3).
     if (answer.split(/\s+/).length === 1) {
       const created = await this.deps.categoryService.createCategory(ownerId, answer);
-      await this.answerCorrection(state, created.name, send, reply);
+      await this.answerCorrection(state, created.name, ownerId, send, reply);
       return;
     }
 
@@ -843,9 +880,9 @@ export class TelegramService {
     state: BotStateRecord,
     envelope: ConversationEnvelope,
     body: string,
+    ownerId: string,
     reply?: ReplyPort,
   ): Promise<void> {
-    const ownerId = this.deps.ownerId;
     const send = this.makeSender(true, reply);
     const payload = this.decodeConfirmationPayload(state.pendingNote);
 
@@ -872,11 +909,12 @@ export class TelegramService {
       return;
     }
 
-    // Register from the STORED context; a creation failure leaves the question open.
+    // Register from the STORED context (payload.shared persists the bit, AD6);
+    // a creation failure leaves the question open.
     if (payload.category !== null) {
-      await this.registerWithCategory(payload.body, chosen, payload.note, payload.category, send);
+      await this.registerWithCategory(payload.body, chosen, payload.note, payload.category, ownerId, payload.shared, send);
     } else {
-      await this.registerOtroWithCorrection(payload.body, chosen, payload.note, send);
+      await this.registerOtroWithCorrection(payload.body, chosen, payload.note, ownerId, payload.shared, send);
     }
   }
 
@@ -889,6 +927,8 @@ export class TelegramService {
   private async routeEnvelopeIntent(
     envelope: ConversationEnvelope,
     body: string,
+    ownerId: string,
+    shared: boolean,
     reply?: ReplyPort,
     dialog?: DialogContext,
   ): Promise<void> {
@@ -897,7 +937,7 @@ export class TelegramService {
       case "query_recent":
       case "query_balance":
       case "query_month":
-        await this.executeQuery(envelope, reply);
+        await this.executeQuery(envelope, ownerId, reply);
         return;
       case "associate_keyword":
         await this.sendRedirect("associate_keyword", associateKeywordRedirectReply(), reply);
@@ -905,7 +945,7 @@ export class TelegramService {
       case "create_category":
       case "delete_category":
       case "rename_category":
-        await this.executeCategoryCommandWithReassign(envelope, reply, dialog);
+        await this.executeCategoryCommandWithReassign(envelope, ownerId, reply, dialog);
         return;
       case "capabilities":
         await this.sendCapabilities(reply);
@@ -921,13 +961,13 @@ export class TelegramService {
         );
         return;
       case "correct_category":
-        await this.runMovementCorrection(envelope, reply);
+        await this.runMovementCorrection(envelope, ownerId, reply);
         return;
       case "register_expense":
         if (dialog !== undefined) {
           // A new registration abandons the pending correction/question first.
           await this.deps.botStateRepository.set({
-            ownerId: this.deps.ownerId,
+            ownerId,
             state: IDLE,
             pendingMovementId: null,
             pendingNote: null,
@@ -938,7 +978,7 @@ export class TelegramService {
               : correctionAbandonedReply();
           await this.safeReply(reply, abandoned);
         }
-        await this.executeRegistration(body, parseAmountAndNote(body), envelope, await this.deps.categoryService.listCategories(this.deps.ownerId), reply);
+        await this.executeRegistration(body, parseAmountAndNote(body), envelope, await this.deps.categoryService.listCategories(ownerId), ownerId, shared, reply);
         return;
     }
   }
@@ -950,10 +990,10 @@ export class TelegramService {
    */
   private async executeCategoryCommandWithReassign(
     envelope: ConversationEnvelope,
+    ownerId: string,
     reply?: ReplyPort,
     dialog?: DialogContext,
   ): Promise<void> {
-    const ownerId = this.deps.ownerId;
     const result = await this.categoryExecutor.execute(ownerId, envelope);
     const pendingMovementId = dialog?.state.pendingMovementId ?? null;
     const shouldReassign =
@@ -985,9 +1025,9 @@ export class TelegramService {
    */
   private async runMovementCorrection(
     envelope: ConversationEnvelope,
+    ownerId: string,
     reply?: ReplyPort,
   ): Promise<void> {
-    const ownerId = this.deps.ownerId;
     if (envelope.category === null) {
       await this.makeSender(true, reply)(
         { intent: "correct_category", ok: true, action: "none", amount: null, category: null, note: null },
@@ -1056,14 +1096,19 @@ export class TelegramService {
    * candidate, or an amount matching exactly one candidate. Anything else is a
    * non-answer that abandons the question and reprocesses the text normally.
    */
-  private async handleMovementSelection(state: BotStateRecord, body: string, reply?: ReplyPort): Promise<void> {
-    const ownerId = this.deps.ownerId;
+  private async handleMovementSelection(
+    state: BotStateRecord,
+    body: string,
+    ownerId: string,
+    shared: boolean,
+    reply?: ReplyPort,
+  ): Promise<void> {
     const payload = this.decodeMovementSelectionPayload(state.pendingNote);
 
     if (payload === null) {
       await this.deps.botStateRepository.set({ ownerId, state: IDLE, pendingMovementId: null, pendingNote: null });
       await this.safeReply(reply, questionDroppedReply());
-      await this.handleRegistration(body, reply);
+      await this.handleRegistration(body, ownerId, shared, reply);
       return;
     }
 
@@ -1071,7 +1116,7 @@ export class TelegramService {
     if (picked === null) {
       await this.deps.botStateRepository.set({ ownerId, state: IDLE, pendingMovementId: null, pendingNote: null });
       await this.safeReply(reply, movementSelectionAbandonedReply());
-      await this.handleRegistration(body, reply);
+      await this.handleRegistration(body, ownerId, shared, reply);
       return;
     }
 
@@ -1132,9 +1177,7 @@ export class TelegramService {
     }
   }
 
-  private async handleCommand(command: TelegramCommand, reply?: ReplyPort): Promise<void> {
-    const ownerId = this.deps.ownerId;
-
+  private async handleCommand(command: TelegramCommand, ownerId: string, reply?: ReplyPort): Promise<void> {
     switch (command.type) {
       case "register": {
         try {
@@ -1206,6 +1249,8 @@ export class TelegramService {
     amount: number,
     note: string | null,
     category: string,
+    ownerId: string,
+    visibility: "INDIVIDUAL" | "SHARED",
   ): Promise<{ id: string } | null> {
     try {
       return await this.deps.expenseService.createExpense(
@@ -1217,7 +1262,8 @@ export class TelegramService {
           type: classifyMovementType(body),
           category,
         },
-        this.deps.ownerId,
+        ownerId,
+        { visibility },
       );
     } catch (error) {
       this.deps.logger?.(`Telegram: failed to create movement: ${String(error)}`);
@@ -1231,14 +1277,16 @@ export class TelegramService {
     amount: number,
     note: string | null,
     category: string,
+    ownerId: string,
+    shared: boolean,
     send: Sender,
   ): Promise<boolean> {
-    const movement = await this.createMovement(body, amount, note, category);
+    const movement = await this.createMovement(body, amount, note, category, ownerId, shared ? "SHARED" : "INDIVIDUAL");
     if (movement === null) {
       return false;
     }
     await this.deps.botStateRepository.set({
-      ownerId: this.deps.ownerId,
+      ownerId,
       state: IDLE,
       pendingMovementId: null,
       pendingNote: null,
@@ -1255,10 +1303,12 @@ export class TelegramService {
     body: string,
     amount: number,
     note: string | null,
+    ownerId: string,
+    shared: boolean,
     send: Sender,
   ): Promise<boolean> {
-    await this.deps.categoryService.ensureOtro(this.deps.ownerId);
-    const movement = await this.createMovement(body, amount, note, "otro");
+    await this.deps.categoryService.ensureOtro(ownerId);
+    const movement = await this.createMovement(body, amount, note, "otro", ownerId, shared ? "SHARED" : "INDIVIDUAL");
     if (movement === null) {
       return false;
     }
@@ -1266,7 +1316,7 @@ export class TelegramService {
     // whole body when no note was parsed (today's behavior).
     const displayNote = note ?? body;
     await this.deps.botStateRepository.set({
-      ownerId: this.deps.ownerId,
+      ownerId,
       state: AWAITING_CATEGORY,
       pendingMovementId: movement.id,
       pendingNote: displayNote,
@@ -1277,6 +1327,15 @@ export class TelegramService {
       correctionOfferReply(amount, displayNote, "otro"),
     );
     return true;
+  }
+
+  /**
+   * Viewer scope for bot movement reads (queries): the member is the viewer and
+   * the household answers the partner lookup, so SHARED movements from the
+   * partner are visible under the same predicate the dashboard uses.
+   */
+  private scopeFor(ownerId: string): ViewerScope {
+    return { viewerId: ownerId, partnerId: this.deps.household.partnerOf(ownerId), visibility: "all" };
   }
 
   private async safeReply(reply: ReplyPort | undefined, text: string): Promise<void> {

@@ -4,6 +4,7 @@ import type { ExpenseService } from "../expenses/expenses.service";
 import type { ProcessedMessageRepository } from "../messages/message.repository";
 import type { MovementService } from "../movements/movements.service";
 import type { CategoryService } from "../categories/categories.service";
+import type { HouseholdService } from "../household/household.service";
 import type { BotStateRepository, BotStateRecord } from "./bot-state.repository";
 import type { ConversationEnvelope, ExecutionResult } from "./bot-brain";
 import { NotFoundError, ValidationFailedError } from "../../infra/errors";
@@ -144,6 +145,11 @@ function makeHarness(): Harness {
     interpret: vi.fn<(message: string) => Promise<ConversationEnvelope | null>>(async () => null),
     reply: vi.fn<(result: ExecutionResult) => Promise<string | null>>(async () => null),
   };
+  const household = {
+    resolveOwnerByChatId: vi.fn((chatId: number) => (chatId === OWNER_CHAT_ID ? ownerId : null)),
+    partnerOf: vi.fn(() => null),
+    getMembers: vi.fn(() => [{ ownerId, name: "default" }]),
+  };
 
   const service = new TelegramService({
     messageRepository,
@@ -151,8 +157,7 @@ function makeHarness(): Harness {
     movementService,
     categoryService,
     botStateRepository,
-    ownerChatId: OWNER_CHAT_ID,
-    ownerId,
+    household: household as unknown as HouseholdService,
     logger: mockLogger,
     brain,
   });
@@ -330,6 +335,7 @@ describe("TelegramService state machine", () => {
     expect(h.mockCreateExpense).toHaveBeenCalledWith(
       expect.objectContaining({ amount: 2000, category: "otro", type: "EXPENSE" }),
       ownerId,
+      { visibility: "INDIVIDUAL" },
     );
     expect(h.mockSetState).toHaveBeenLastCalledWith({
       ownerId,
@@ -432,6 +438,7 @@ describe("TelegramService state machine", () => {
     expect(h.mockCreateExpense).toHaveBeenCalledWith(
       expect.objectContaining({ amount: 2500, category: "Cafe" }),
       ownerId,
+      { visibility: "INDIVIDUAL" },
     );
     expect(h.mockCreateExpense).not.toHaveBeenCalledWith(
       expect.objectContaining({ category: "Kiosco" }),
@@ -456,11 +463,15 @@ describe("TelegramService state machine", () => {
     expect(h.replies.at(-1)).toContain("No entendí");
   });
 
-  it("does not reply to a non-owner sender", async () => {
+  it("ignores an unknown chat silently: no record, no movement, no reply, and the log line contains no chatId", async () => {
     await h.service.handleUpdate(textUpdate({ fromId: 987654321 }), h.reply);
 
+    expect(h.mockRecord).not.toHaveBeenCalled();
     expect(h.mockCreateExpense).not.toHaveBeenCalled();
     expect(h.replies).toHaveLength(0);
+    const secretLog = h.mockLogger.mock.calls.find((call) => String(call[0]).includes("ignoring"));
+    expect(secretLog).toBeTruthy();
+    expect(String(secretLog?.[0])).not.toContain("987654321");
   });
 
   it("skips a duplicate message without replying", async () => {
@@ -515,6 +526,7 @@ describe("TelegramService state machine", () => {
     expect(h.mockCreateExpense).toHaveBeenCalledWith(
       expect.objectContaining({ amount: 50000, category: "otro", type: "INCOME" }),
       ownerId,
+      { visibility: "INDIVIDUAL" },
     );
   });
 });
@@ -539,6 +551,7 @@ describe("TelegramService ambiguity rules (awaiting_category, D6)", () => {
     expect(h.mockCreateExpense).toHaveBeenCalledWith(
       expect.objectContaining({ amount: 8000, note: null, category: "otro" }),
       ownerId,
+      { visibility: "INDIVIDUAL" },
     );
     expect(h.replies.at(-2)).toContain("corrección anterior");
     // Re-enters the correction loop with the NEW pending movement.
@@ -602,6 +615,7 @@ describe("TelegramService ambiguity rules (awaiting_category, D6)", () => {
     expect(h.mockCreateExpense).toHaveBeenCalledWith(
       expect.objectContaining({ amount: 8000, note: "$ super", category: "otro" }),
       ownerId,
+      { visibility: "INDIVIDUAL" },
     );
     expect(h.replies.at(-2)).toContain("corrección anterior");
     expect(h.mockSetState).toHaveBeenLastCalledWith({
@@ -786,6 +800,7 @@ describe("TelegramService brain orchestration (llm-conversational-bot)", () => {
     expect(h.mockCreateExpense).toHaveBeenCalledWith(
       expect.objectContaining({ amount: 2000, category: "Supermercado" }),
       ownerId,
+      { visibility: "INDIVIDUAL" },
     );
     // No correction round-trip: the state goes straight to idle.
     expect(h.mockSetState).toHaveBeenLastCalledWith({
@@ -813,6 +828,7 @@ describe("TelegramService brain orchestration (llm-conversational-bot)", () => {
     expect(h.mockCreateExpense).toHaveBeenCalledWith(
       expect.objectContaining({ amount: 2000, category: "otro" }),
       ownerId,
+      { visibility: "INDIVIDUAL" },
     );
     expect(h.mockCreateCategory).not.toHaveBeenCalled();
     expect(h.mockSetState).toHaveBeenLastCalledWith({
@@ -839,6 +855,7 @@ describe("TelegramService brain orchestration (llm-conversational-bot)", () => {
     expect(h.mockCreateExpense).toHaveBeenCalledWith(
       expect.objectContaining({ amount: 2000, category: "otro" }),
       ownerId,
+      { visibility: "INDIVIDUAL" },
     );
     expect(h.mockSetState).toHaveBeenLastCalledWith({
       ownerId,
@@ -859,6 +876,7 @@ describe("TelegramService brain orchestration (llm-conversational-bot)", () => {
     expect(h.mockCreateExpense).toHaveBeenCalledWith(
       expect.objectContaining({ amount: 2000, category: "otro" }),
       ownerId,
+      { visibility: "INDIVIDUAL" },
     );
     expect(h.mockSetState).toHaveBeenLastCalledWith({
       ownerId,
@@ -878,6 +896,7 @@ describe("TelegramService brain orchestration (llm-conversational-bot)", () => {
     expect(h.mockCreateExpense).toHaveBeenCalledWith(
       expect.objectContaining({ amount: 2000, category: "otro" }),
       ownerId,
+      { visibility: "INDIVIDUAL" },
     );
     expect(h.mockBrainReply).not.toHaveBeenCalled();
   });
@@ -899,6 +918,7 @@ describe("TelegramService brain orchestration (llm-conversational-bot)", () => {
     expect(h.mockCreateExpense).toHaveBeenCalledWith(
       expect.objectContaining({ amount: 5000, note: "compre mercaderia", category: "Supermercado" }),
       ownerId,
+      { visibility: "INDIVIDUAL" },
     );
     expect(h.mockSetState).toHaveBeenLastCalledWith({
       ownerId,
@@ -924,6 +944,7 @@ describe("TelegramService brain orchestration (llm-conversational-bot)", () => {
     expect(h.mockCreateExpense).toHaveBeenCalledWith(
       expect.objectContaining({ amount: 5000, note: "compre mercaderia", category: "otro" }),
       ownerId,
+      { visibility: "INDIVIDUAL" },
     );
     expect(h.mockSetState).toHaveBeenLastCalledWith({
       ownerId,
@@ -996,6 +1017,7 @@ describe("TelegramService brain orchestration (llm-conversational-bot)", () => {
     expect(h.mockCreateExpense).toHaveBeenCalledWith(
       expect.objectContaining({ amount: 5000, category: "otro" }),
       ownerId,
+      { visibility: "INDIVIDUAL" },
     );
     // Registered directly: the conflict question and its state never fire.
     expect(h.mockSetState).toHaveBeenLastCalledWith(
@@ -1022,6 +1044,7 @@ describe("TelegramService brain orchestration (llm-conversational-bot)", () => {
         type: "EXPENSE",
       }),
       ownerId,
+      { visibility: "INDIVIDUAL" },
     );
     expect(h.mockSetState).toHaveBeenLastCalledWith({
       ownerId,
@@ -1042,6 +1065,7 @@ describe("TelegramService brain orchestration (llm-conversational-bot)", () => {
     expect(h.mockCreateExpense).toHaveBeenCalledWith(
       expect.objectContaining({ amount: 5000, category: "otro" }),
       ownerId,
+      { visibility: "INDIVIDUAL" },
     );
     expect(h.mockSetState).toHaveBeenLastCalledWith({
       ownerId,
@@ -1064,6 +1088,7 @@ describe("TelegramService brain orchestration (llm-conversational-bot)", () => {
     expect(h.mockCreateExpense).toHaveBeenCalledWith(
       expect.objectContaining({ amount: 6000, category: "otro" }),
       ownerId,
+      { visibility: "INDIVIDUAL" },
     );
     expect(h.replies.at(-2)).toContain("monto");
     expect(h.mockSetState).toHaveBeenLastCalledWith({
@@ -1098,6 +1123,7 @@ describe("TelegramService brain orchestration (llm-conversational-bot)", () => {
     expect(h.mockCreateExpense).toHaveBeenCalledWith(
       expect.objectContaining({ amount: 5000, category: "Transporte" }),
       ownerId,
+      { visibility: "INDIVIDUAL" },
     );
     expect(h.mockSetState).toHaveBeenLastCalledWith({
       ownerId,
@@ -1123,6 +1149,7 @@ describe("TelegramService brain orchestration (llm-conversational-bot)", () => {
     expect(h.mockCreateExpense).toHaveBeenCalledWith(
       expect.objectContaining({ amount: 3000, category: "otro" }),
       ownerId,
+      { visibility: "INDIVIDUAL" },
     );
     expect(h.replies.at(-2)).toContain("monto");
   });
@@ -1170,6 +1197,7 @@ describe("TelegramService brain orchestration (llm-conversational-bot)", () => {
     expect(h.mockCreateExpense).toHaveBeenCalledWith(
       expect.objectContaining({ amount: 5000, category: "Supermercado", note: "compre mercaderia" }),
       ownerId,
+      { visibility: "INDIVIDUAL" },
     );
     expect(h.mockBrainReply).toHaveBeenCalledWith({
       intent: "register_expense",
@@ -1237,7 +1265,7 @@ describe("TelegramService brain orchestration (llm-conversational-bot)", () => {
 
     expect(h.mockCreateExpense).not.toHaveBeenCalled();
     expect(h.mockSetState).not.toHaveBeenCalled();
-    expect(h.mockGetSummary).toHaveBeenCalledWith(ownerId);
+    expect(h.mockGetSummary).toHaveBeenCalledWith({ viewerId: ownerId, partnerId: null, visibility: "all" });
     expect(h.mockBrainReply).toHaveBeenCalledWith({
       intent: "query_balance",
       ok: true,
@@ -1384,7 +1412,7 @@ describe("TelegramService brain orchestration (llm-conversational-bot)", () => {
 
     await h.service.handleUpdate(textUpdate({ text: "ultimos movimientos", messageId: 1 }), h.reply);
 
-    expect(h.mockListMovements).toHaveBeenCalledWith(ownerId, {});
+    expect(h.mockListMovements).toHaveBeenCalledWith({ viewerId: ownerId, partnerId: null, visibility: "all" }, {});
     expect(h.mockBrainReply).toHaveBeenCalledWith(
       expect.objectContaining({
         intent: "query_recent",
@@ -1526,6 +1554,7 @@ describe("TelegramService brain orchestration (llm-conversational-bot)", () => {
     expect(h.mockCreateExpense).toHaveBeenCalledWith(
       expect.objectContaining({ amount: 2500, note: "cafe" }),
       ownerId,
+      { visibility: "INDIVIDUAL" },
     );
   });
 
@@ -1543,6 +1572,7 @@ describe("TelegramService brain orchestration (llm-conversational-bot)", () => {
     expect(h.mockCreateExpense).toHaveBeenCalledWith(
       expect.objectContaining({ amount: 2500, note: "cafe" }),
       ownerId,
+      { visibility: "INDIVIDUAL" },
     );
   });
 
@@ -1875,7 +1905,7 @@ describe("TelegramService dialog controller (brain-routed)", () => {
 
     await h.service.handleUpdate(textUpdate({ text: "decime los últimos movimientos", messageId: 2 }), h.reply);
 
-    expect(h.mockListMovements).toHaveBeenCalledWith(ownerId, {});
+    expect(h.mockListMovements).toHaveBeenCalledWith({ viewerId: ownerId, partnerId: null, visibility: "all" }, {});
     expect(h.mockSetState).not.toHaveBeenCalled();
     expect(h.mockUpdateMovement).not.toHaveBeenCalled();
     expect(h.replies.at(-1)).toContain("cafe con leche");
@@ -1918,6 +1948,7 @@ describe("TelegramService dialog controller (brain-routed)", () => {
     expect(h.mockCreateExpense).toHaveBeenCalledWith(
       expect.objectContaining({ amount: 8000, category: "otro" }),
       ownerId,
+      { visibility: "INDIVIDUAL" },
     );
     expect(h.replies.at(-2)).toContain("corrección anterior");
     // The pending correction was abandoned; the new movement re-enters the loop.
@@ -2073,6 +2104,7 @@ describe("TelegramService dialog controller (brain-routed)", () => {
     expect(h.mockCreateExpense).toHaveBeenCalledWith(
       expect.objectContaining({ amount: 3000, category: "otro" }),
       ownerId,
+      { visibility: "INDIVIDUAL" },
     );
   });
 
@@ -2130,6 +2162,7 @@ describe("TelegramService dialog controller (brain-routed)", () => {
     expect(h.mockCreateExpense).toHaveBeenCalledWith(
       expect.objectContaining({ amount: 5000, note: "gaste en el kiosco", category: "Supermercado" }),
       ownerId,
+      { visibility: "INDIVIDUAL" },
     );
     expect(h.mockSetState).toHaveBeenLastCalledWith({
       ownerId,

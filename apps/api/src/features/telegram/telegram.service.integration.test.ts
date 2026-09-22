@@ -11,6 +11,7 @@ import { PrismaMovementRepository } from "../movements/movements.repository";
 import { MovementService } from "../movements/movements.service";
 import { PrismaBotStateRepository } from "./bot-state.repository";
 import type { BotBrain, ConversationEnvelope } from "./bot-brain";
+import { HouseholdService } from "../household/household.service";
 import { formatARS } from "./reply-text";
 import { TelegramService } from "./telegram.service";
 
@@ -85,8 +86,8 @@ describe("TelegramService (integration)", () => {
       movementService,
       categoryService,
       botStateRepository,
-      ownerChatId: OWNER_CHAT_ID,
-      ownerId,
+      // Single-user degraded mode: only the owner chat resolves, to `default`.
+      household: new HouseholdService([{ ownerId, name: "default", chatId: OWNER_CHAT_ID }]),
       logger,
       // Default: no brain → deterministic-only; tests inject stubs.
       ...(brain === undefined ? {} : { brain }),
@@ -317,18 +318,23 @@ describe("TelegramService (integration)", () => {
     expect(replies.at(-1)).toContain("almacen");
   });
 
-  it("a non-owner sender is recorded but never creates a movement or receives a reply", async () => {
+  it("an unknown chat is ignored silently: NOT recorded, no movement, no reply (spec Owner Filtering)", async () => {
     const replies: string[] = [];
-    await service.handleUpdate(
+    const logs: string[] = [];
+    const logged = buildService((message) => logs.push(message));
+    await logged.handleUpdate(
       textUpdate({ messageId: 1, fromId: 987654321, text: "café 2500" }),
       async (text) => {
         replies.push(text);
       },
     );
 
-    expect(await prisma.processedMessage.count()).toBe(1);
+    expect(await prisma.processedMessage.count()).toBe(0);
     expect(await prisma.expense.count()).toBe(0);
     expect(replies).toHaveLength(0);
+    const secretLog = logs.find((line) => line.includes("ignoring"));
+    expect(secretLog).toBeTruthy();
+    expect(secretLog).not.toContain("987654321");
   });
 
   it("brain: a keyword-miss suggestion resolving to an owner category registers without a correction round-trip", async () => {

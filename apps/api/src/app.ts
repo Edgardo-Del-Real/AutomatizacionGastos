@@ -48,10 +48,9 @@ export function buildApp(options: AppOptions = {}): FastifyInstance {
     movementService,
     categoryService,
     botStateRepository,
-    // 0 matches no real chat: in household mode the bot is not chat-wired yet
-    // (AD9 lands in slice 2), so it safely ignores all chats meanwhile.
-    ownerChatId: env.TELEGRAM_OWNER_CHAT_ID ?? 0,
-    ownerId: env.OWNER_ID,
+    // AD9: the household registry gates and attributes every chat; in
+    // single-user mode it holds only the `default` member with the owner chat.
+    household: householdService,
     logger: (message: string) => console.log(message),
     // Deterministic-only when no key: no brain is constructed and
     // `interpret`/`reply` are never invoked (spec "Missing key means no brain").

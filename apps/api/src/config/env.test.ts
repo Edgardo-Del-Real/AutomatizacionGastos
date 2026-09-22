@@ -58,6 +58,36 @@ describe("env schema", () => {
     }
   });
 
+  it("makes TELEGRAM_OWNER_CHAT_ID optional when HOUSEHOLD_MEMBERS is set", () => {
+    const result = envSchema.safeParse({
+      ...base,
+      TELEGRAM_OWNER_CHAT_ID: undefined,
+      HOUSEHOLD_MEMBERS: "rita:Rita:111;edgardo:Edgardo:222",
+    });
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.HOUSEHOLD_MEMBERS).toBe("rita:Rita:111;edgardo:Edgardo:222");
+      expect(result.data.TELEGRAM_OWNER_CHAT_ID).toBeUndefined();
+    }
+  });
+
+  it("still requires TELEGRAM_OWNER_CHAT_ID when HOUSEHOLD_MEMBERS is blank", () => {
+    const result = envSchema.safeParse({ ...base, TELEGRAM_OWNER_CHAT_ID: undefined, HOUSEHOLD_MEMBERS: "   " });
+
+    expect(result.success).toBe(false);
+  });
+
+  it("fails startup on malformed HOUSEHOLD_MEMBERS", () => {
+    const result = envSchema.safeParse({ ...base, HOUSEHOLD_MEMBERS: "rita:Rita:abc" });
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      const issue = result.error.issues.find((i) => i.path.join(".") === "HOUSEHOLD_MEMBERS");
+      expect(issue).toBeDefined();
+    }
+  });
+
   it("exposes no WHATSAPP_* keys after telegram cutover", () => {
     const result = envSchema.safeParse(base);
 

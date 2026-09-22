@@ -82,7 +82,7 @@ describe("QueryExecutor.execute", () => {
 
     const result = await executor.execute(ownerId, "recent");
 
-    expect(mockListMovements).toHaveBeenCalledWith(ownerId, {});
+    expect(mockListMovements).toHaveBeenCalledWith({ viewerId: ownerId, partnerId: null, visibility: "all" }, {});
     expect(result.query_type).toBe("recent");
     if (result.query_type !== "recent") return;
     expect(result.movements).toHaveLength(5);
@@ -123,7 +123,7 @@ describe("QueryExecutor.execute", () => {
 
     const result = await executor.execute(ownerId, "balance");
 
-    expect(mockGetSummary).toHaveBeenCalledWith(ownerId);
+    expect(mockGetSummary).toHaveBeenCalledWith({ viewerId: ownerId, partnerId: null, visibility: "all" });
     expect(result).toEqual({
       query_type: "balance",
       balance: 3000,
@@ -158,7 +158,7 @@ describe("QueryExecutor.execute", () => {
 
     const result = await executor.execute(ownerId, "month");
 
-    expect(mockGetSummary).toHaveBeenCalledWith(ownerId);
+    expect(mockGetSummary).toHaveBeenCalledWith({ viewerId: ownerId, partnerId: null, visibility: "all" });
     expect(result).toEqual({
       query_type: "month",
       month: "2026-09",

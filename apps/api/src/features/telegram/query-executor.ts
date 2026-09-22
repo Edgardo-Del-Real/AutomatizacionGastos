@@ -1,5 +1,6 @@
 import type { CategoryService } from "../categories/categories.service";
 import type { MovementService } from "../movements/movements.service";
+import type { ViewerScope } from "../movements/movements.types";
 import type { QueryExecutionResult, QueryType } from "./query.types";
 
 export { deriveQueryType } from "./query.types";
@@ -31,6 +32,15 @@ export class QueryExecutor {
     }
   }
 
+  /**
+   * Viewer scope for bot queries: the owner is the viewer; no partner context
+   * is available here (single-owner bot reads). The household-aware scope is
+   * threaded by the TelegramService caller (AD9).
+   */
+  private scopeOf(ownerId: string): ViewerScope {
+    return { viewerId: ownerId, partnerId: null, visibility: "all" };
+  }
+
   private async categories(ownerId: string): Promise<QueryExecutionResult> {
     const categories = await this.categoryService.listCategories(ownerId);
     return {
@@ -43,7 +53,7 @@ export class QueryExecutor {
   }
 
   private async recent(ownerId: string): Promise<QueryExecutionResult> {
-    const movements = await this.movementService.listMovements(ownerId, {});
+    const movements = await this.movementService.listMovements(this.scopeOf(ownerId), {});
     return {
       query_type: "recent",
       movements: movements.slice(0, RECENT_LIMIT).map((movement) => ({
@@ -57,7 +67,7 @@ export class QueryExecutor {
   }
 
   private async balance(ownerId: string): Promise<QueryExecutionResult> {
-    const summary = await this.movementService.getSummary(ownerId);
+    const summary = await this.movementService.getSummary(this.scopeOf(ownerId));
     return {
       query_type: "balance",
       balance: summary.kpis.balance,
@@ -67,7 +77,7 @@ export class QueryExecutor {
   }
 
   private async month(ownerId: string): Promise<QueryExecutionResult> {
-    const summary = await this.movementService.getSummary(ownerId);
+    const summary = await this.movementService.getSummary(this.scopeOf(ownerId));
     // The mom series always ends with the current Buenos Aires month bucket.
     const current = summary.mom.months.at(-1);
     return {

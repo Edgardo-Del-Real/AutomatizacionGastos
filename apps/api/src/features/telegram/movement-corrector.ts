@@ -64,7 +64,12 @@ export class MovementCorrector {
     now: Date = new Date(),
   ): Promise<CorrectionResult> {
     const category = await this.resolveTargetCategory(ownerId, targetCategory);
-    const movements = await this.movementService.listMovements(ownerId, {});
+    // Correction candidates are ALWAYS the owner's own movements (registrant-only
+    // mutation, AD4): a mine-scope with no partner keeps partner rows out.
+    const movements = await this.movementService.listMovements(
+      { viewerId: ownerId, partnerId: null, visibility: "mine" },
+      {},
+    );
     const window = movements.slice(0, WINDOW_SIZE).map(toCandidate);
 
     // No reference: the bot must ask which movement (spec "No reference asks").

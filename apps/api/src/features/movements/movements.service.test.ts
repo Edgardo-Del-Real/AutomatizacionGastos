@@ -3,6 +3,10 @@ import { NotFoundError, ValidationFailedError } from "../../infra/errors";
 import type { CategoryService } from "../categories/categories.service";
 import { MovementService } from "./movements.service";
 import type { MovementRepository } from "./movements.repository";
+import type { ViewerScope } from "./movements.types";
+
+const ritaScope: ViewerScope = { viewerId: "rita", partnerId: "edgardo", visibility: "all" };
+const edgardoScope: ViewerScope = { viewerId: "edgardo", partnerId: "rita", visibility: "mine" };
 
 function makeHarness() {
   const repository = {
@@ -102,6 +106,32 @@ describe("MovementService.updateMovement", () => {
   });
 });
 
+describe("MovementService.listMovements", () => {
+  function makeListHarness() {
+    const repository = {
+      listByOwner: vi.fn(async () => []),
+    } as unknown as MovementRepository;
+    const service = new MovementService(repository, {} as CategoryService);
+    return { service, listByOwner: vi.mocked(repository.listByOwner) };
+  }
+
+  it("forwards the viewer scope and the filters to the repository (mine vs all)", async () => {
+    const { service, listByOwner } = makeListHarness();
+
+    await service.listMovements(edgardoScope, { type: "EXPENSE" });
+
+    expect(listByOwner).toHaveBeenCalledWith(edgardoScope, { type: "EXPENSE" });
+  });
+
+  it("forwards an all-scope with the partner for the default visibility", async () => {
+    const { service, listByOwner } = makeListHarness();
+
+    await service.listMovements(ritaScope, {});
+
+    expect(listByOwner).toHaveBeenCalledWith(ritaScope, {});
+  });
+});
+
 describe("MovementService.getSummary", () => {
   function makeSummaryHarness() {
     const repository = {
@@ -112,8 +142,44 @@ describe("MovementService.getSummary", () => {
       topByType: vi.fn(async () => []),
     } as unknown as MovementRepository;
     const service = new MovementService(repository, {} as CategoryService);
-    return { service, summaryKpis: vi.mocked(repository.summaryKpis) };
+    return {
+      service,
+      summaryKpis: vi.mocked(repository.summaryKpis),
+      summaryMonths: vi.mocked(repository.summaryMonths),
+      summaryDaily: vi.mocked(repository.summaryDaily),
+      summaryCategories: vi.mocked(repository.summaryCategories),
+      topByType: vi.mocked(repository.topByType),
+    };
   }
+
+  it("threads the viewer scope into every repository feed", async () => {
+    const { service, summaryKpis, summaryMonths, summaryDaily, summaryCategories, topByType } =
+      makeSummaryHarness();
+    summaryKpis.mockResolvedValue({
+      income: 3000,
+      expenses: 1000,
+      count: 3,
+      maxAmount: 1200,
+      monthsWithData: 2,
+    });
+    summaryKpis.mockResolvedValueOnce({
+      income: 1000,
+      expenses: 400,
+      count: 2,
+      maxAmount: 500,
+      monthsWithData: 1,
+    });
+
+    await service.getSummary(ritaScope);
+
+    expect(summaryKpis).toHaveBeenNthCalledWith(1, ritaScope, { from: undefined, to: undefined });
+    expect(summaryKpis).toHaveBeenNthCalledWith(2, ritaScope, expect.any(Object));
+    expect(summaryMonths).toHaveBeenCalledWith(ritaScope);
+    expect(summaryDaily).toHaveBeenCalledWith(ritaScope);
+    expect(summaryCategories).toHaveBeenCalledWith(ritaScope, { from: undefined, to: undefined });
+    expect(topByType).toHaveBeenCalledWith(ritaScope, "EXPENSE", 5, { from: undefined, to: undefined });
+    expect(topByType).toHaveBeenCalledWith(ritaScope, "INCOME", 5, { from: undefined, to: undefined });
+  });
 
   it("exposes countThisMonth from a current-month summaryKpis call alongside the all-time kpis", async () => {
     const { service, summaryKpis } = makeSummaryHarness();
@@ -132,10 +198,9 @@ describe("MovementService.getSummary", () => {
       monthsWithData: 1,
     });
 
-    const summary = await service.getSummary("default");
+    const summary = await service.getSummary(ritaScope);
 
     expect(summaryKpis).toHaveBeenCalledTimes(2);
-    expect(summaryKpis).toHaveBeenNthCalledWith(1, "default", { from: undefined, to: undefined });
     expect(summary.kpis.count).toBe(3);
     expect(summary.kpis.countThisMonth).toBe(2);
 

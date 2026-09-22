@@ -2,7 +2,7 @@ import { updateMovementSchema, type Movement, type MovementSummary } from "@rita
 import { NotFoundError, ValidationFailedError } from "../../infra/errors";
 import type { CategoryService } from "../categories/categories.service";
 import type { MovementRepository } from "./movements.repository";
-import type { MovementListFilters, SummaryPeriod } from "./movements.types";
+import type { MovementListFilters, SummaryPeriod, ViewerScope } from "./movements.types";
 
 const BA_OFFSET_MS = 3 * 60 * 60 * 1000;
 const MONTHS_WINDOW = 6;
@@ -15,8 +15,8 @@ export class MovementService {
     private readonly categoryService: CategoryService,
   ) {}
 
-  async listMovements(ownerId: string, filters: MovementListFilters): Promise<Movement[]> {
-    return this.repository.listByOwner(ownerId, filters);
+  async listMovements(scope: ViewerScope, filters: MovementListFilters): Promise<Movement[]> {
+    return this.repository.listByOwner(scope, filters);
   }
 
   /**
@@ -46,18 +46,18 @@ export class MovementService {
     }
   }
 
-  async getSummary(ownerId: string, from?: string, to?: string): Promise<MovementSummary> {
+  async getSummary(scope: ViewerScope, from?: string, to?: string): Promise<MovementSummary> {
     const period: SummaryPeriod = { from, to };
     const thisMonthPeriod = currentMonthPeriod();
     const [kpis, thisMonthKpis, months, daily, categories, topExpenses, topIncome] =
       await Promise.all([
-        this.repository.summaryKpis(ownerId, period),
-        this.repository.summaryKpis(ownerId, thisMonthPeriod),
-        this.repository.summaryMonths(ownerId),
-        this.repository.summaryDaily(ownerId),
-        this.repository.summaryCategories(ownerId, period),
-        this.repository.topByType(ownerId, "EXPENSE", TOP_LIMIT, period),
-        this.repository.topByType(ownerId, "INCOME", TOP_LIMIT, period),
+        this.repository.summaryKpis(scope, period),
+        this.repository.summaryKpis(scope, thisMonthPeriod),
+        this.repository.summaryMonths(scope),
+        this.repository.summaryDaily(scope),
+        this.repository.summaryCategories(scope, period),
+        this.repository.topByType(scope, "EXPENSE", TOP_LIMIT, period),
+        this.repository.topByType(scope, "INCOME", TOP_LIMIT, period),
       ]);
 
     const balance = kpis.income - kpis.expenses;

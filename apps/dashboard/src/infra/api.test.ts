@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type {
+  HouseholdMember,
   Movement,
   MovementSummary,
   OwnerCategory,
@@ -10,6 +11,7 @@ import {
   ApiError,
   deleteMovement,
   fetchCategories,
+  fetchHouseholdMembers,
   fetchMovements,
   fetchMovementSummary,
   patchMovement,
@@ -92,6 +94,39 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.unstubAllGlobals();
+});
+
+describe("fetchHouseholdMembers", () => {
+  it("resolves the members from GET /household/members", async () => {
+    const members: HouseholdMember[] = [
+      { ownerId: "rita", name: "Rita" },
+      { ownerId: "edgardo", name: "Edgardo" },
+    ];
+    fetchMock.mockResolvedValue(jsonResponse(members));
+
+    const result = await fetchHouseholdMembers();
+
+    expect(fetchMock).toHaveBeenCalledWith("/api/household/members");
+    expect(result).toEqual(members);
+  });
+
+  it("throws ApiError validation when a member carries a chatId", async () => {
+    fetchMock.mockResolvedValue(
+      jsonResponse([{ ownerId: "rita", name: "Rita", chatId: 111 }]),
+    );
+
+    await expect(fetchHouseholdMembers()).rejects.toMatchObject({
+      kind: "validation",
+    });
+  });
+
+  it("throws ApiError network when fetch rejects", async () => {
+    fetchMock.mockRejectedValue(new TypeError("Network request failed"));
+
+    await expect(fetchHouseholdMembers()).rejects.toMatchObject({
+      kind: "network",
+    });
+  });
 });
 
 describe("fetchMovementSummary", () => {

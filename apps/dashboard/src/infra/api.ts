@@ -1,10 +1,12 @@
 import {
   categoryListSchema,
+  householdMembersSchema,
   listMovementsSchema,
   movementSchema,
   movementSummarySchema,
 } from "@rita/contracts";
 import type {
+  HouseholdMember,
   Movement,
   MovementSummary,
   OwnerCategory,
@@ -127,6 +129,20 @@ async function request<T>(
     throw new ApiError("validation", { issues: parsed.error.issues });
   }
   return parsed.data;
+}
+
+/**
+ * Household members for the viewer selector. The proxy rewrites `/api/*` to the
+ * API root, so this hits `GET /household/members` (chatIds never travel).
+ */
+export function fetchHouseholdMembers(): Promise<HouseholdMember[]> {
+  return request(
+    "GET",
+    "/api/household/members",
+    undefined,
+    {},
+    householdMembersSchema,
+  );
 }
 
 export function fetchMovementSummary(ownerId: string): Promise<MovementSummary> {

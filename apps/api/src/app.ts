@@ -16,6 +16,9 @@ import { CategoryService } from "./features/categories/categories.service";
 import { PrismaBotStateRepository } from "./features/telegram/bot-state.repository";
 import { GroqBotBrain } from "./features/telegram/bot-brain";
 import { TelegramService } from "./features/telegram/telegram.service";
+import { parseHouseholdMembers } from "./features/household/household.config";
+import { HouseholdService } from "./features/household/household.service";
+import { householdRoute } from "./features/household/household.route";
 
 export type AppOptions = {
   prisma?: PrismaClient;
@@ -32,13 +35,22 @@ export function buildApp(options: AppOptions = {}): FastifyInstance {
   const movementService = new MovementService(movementRepository, categoryService);
   const messageRepository = new PrismaProcessedMessageRepository(prisma);
   const botStateRepository = new PrismaBotStateRepository(prisma);
+  const householdMembers = parseHouseholdMembers(env.HOUSEHOLD_MEMBERS, {
+    ownerId: env.OWNER_ID,
+    // Env validation guarantees TELEGRAM_OWNER_CHAT_ID is present whenever
+    // HOUSEHOLD_MEMBERS is unset (degraded single-user mode).
+    chatId: env.TELEGRAM_OWNER_CHAT_ID!,
+  });
+  const householdService = new HouseholdService(householdMembers);
   const telegramService = new TelegramService({
     messageRepository,
     expenseService,
     movementService,
     categoryService,
     botStateRepository,
-    ownerChatId: env.TELEGRAM_OWNER_CHAT_ID,
+    // 0 matches no real chat: in household mode the bot is not chat-wired yet
+    // (AD9 lands in slice 2), so it safely ignores all chats meanwhile.
+    ownerChatId: env.TELEGRAM_OWNER_CHAT_ID ?? 0,
     ownerId: env.OWNER_ID,
     logger: (message: string) => console.log(message),
     // Deterministic-only when no key: no brain is constructed and
@@ -61,6 +73,7 @@ export function buildApp(options: AppOptions = {}): FastifyInstance {
   void app.register(cors, { origin: true });
   void app.register(expensesRoute, { expenseService });
   void app.register(movementsRoute, { movementService, categoryService });
+  void app.register(householdRoute, { householdService });
   app.decorate("telegramService", telegramService);
 
   return app;

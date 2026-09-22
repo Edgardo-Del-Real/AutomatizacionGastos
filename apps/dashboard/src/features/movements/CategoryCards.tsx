@@ -1,7 +1,7 @@
 import type { MovementSummary } from "@rita/contracts";
 
 import { formatARS } from "../../infra/currency";
-import { OWNER_ID } from "../../infra/env";
+import { useViewer } from "../household/ViewerContext";
 import { useCategories } from "./useCategories";
 
 type Categories = MovementSummary["categories"];
@@ -15,7 +15,8 @@ const STATUS_CARD_CLASS =
   "rounded-card border border-border bg-surface p-10 text-center text-sm text-ink-soft shadow-card";
 
 export function CategoryCards({ categories, refreshToken }: CategoryCardsProps) {
-  const state = useCategories(OWNER_ID, refreshToken);
+  const { viewerId } = useViewer();
+  const state = useCategories(viewerId, refreshToken);
 
   if (state.status === "error") {
     return (

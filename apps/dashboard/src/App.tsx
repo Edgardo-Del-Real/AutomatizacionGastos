@@ -1,6 +1,9 @@
 import { useCallback, useState } from "react";
 
-import { OWNER_ID } from "./infra/env";
+import type { VisibilityFilter } from "@rita/contracts";
+
+import { ViewerProvider, useViewer } from "./features/household/ViewerContext";
+import { ViewerSelector } from "./features/household/ViewerSelector";
 import { BalanceTrendChart } from "./features/movements/BalanceTrendChart";
 import { CategoryCards } from "./features/movements/CategoryCards";
 import { CategoryPieChart } from "./features/movements/CategoryPieChart";
@@ -23,15 +26,20 @@ const NAV_BUTTON_CLASS =
 const NAV_ACTIVE_CLASS = "border-accent/30 bg-accent/10 text-accent";
 const NAV_IDLE_CLASS = "text-ink-soft hover:bg-white/5 hover:text-ink";
 
-export default function App() {
+function Dashboard() {
+  const { viewerId } = useViewer();
   // Single App-level refresh token (D11): bumping it re-fetches both the
   // movement list and the summary in place after any successful mutation.
   const [refreshKey, setRefreshKey] = useState(0);
   const bumpRefresh = useCallback(() => setRefreshKey((key) => key + 1), []);
 
+  // Hoisted visibility filter (AD8): one state drives BOTH the summary and the
+  // list requests so the charts and the table always agree.
+  const [visibility, setVisibility] = useState<VisibilityFilter>("all");
+
   const [activeSection, setActiveSection] =
     useState<DashboardSection>("kpis");
-  const summaryState = useMovementSummary(OWNER_ID, "all", refreshKey);
+  const summaryState = useMovementSummary(viewerId, visibility, refreshKey);
 
   const changeSection = useCallback((next: DashboardSection) => {
     setActiveSection(next);
@@ -71,6 +79,7 @@ export default function App() {
                 </p>
               </div>
             </div>
+            <ViewerSelector />
             <nav
               aria-label="Secciones del dashboard"
               className="flex flex-wrap items-center gap-1.5"
@@ -122,9 +131,22 @@ export default function App() {
           </SummarySection>
         )}
         {activeSection === "movements" && (
-          <MovementList refreshToken={refreshKey} onMutated={bumpRefresh} />
+          <MovementList
+            refreshToken={refreshKey}
+            onMutated={bumpRefresh}
+            visibility={visibility}
+            onVisibilityChange={setVisibility}
+          />
         )}
       </div>
     </main>
+  );
+}
+
+export default function App() {
+  return (
+    <ViewerProvider>
+      <Dashboard />
+    </ViewerProvider>
   );
 }

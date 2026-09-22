@@ -2,7 +2,7 @@ import { useCallback, useState } from "react";
 
 import { ApiError, deleteMovement, patchMovement } from "../../infra/api";
 import type { MovementPatch } from "../../infra/api";
-import { OWNER_ID } from "../../infra/env";
+import { useViewer } from "../household/ViewerContext";
 
 export type MovementMutations = {
   /** PATCHes the movement; resolves true on success, false on failure. */
@@ -20,6 +20,7 @@ export type MovementMutations = {
  * the list and summary in place.
  */
 export function useMovementMutations(onSuccess?: () => void): MovementMutations {
+  const { viewerId } = useViewer();
   const [patchError, setPatchError] = useState<ApiError | null>(null);
   const [deleteError, setDeleteError] = useState<ApiError | null>(null);
   const [busy, setBusy] = useState<"patch" | "delete" | null>(null);
@@ -29,7 +30,7 @@ export function useMovementMutations(onSuccess?: () => void): MovementMutations 
       setBusy("patch");
       setPatchError(null);
       try {
-        await patchMovement(id, OWNER_ID, patch);
+        await patchMovement(id, viewerId, patch);
         onSuccess?.();
         return true;
       } catch (error) {
@@ -41,7 +42,7 @@ export function useMovementMutations(onSuccess?: () => void): MovementMutations 
         setBusy(null);
       }
     },
-    [onSuccess],
+    [onSuccess, viewerId],
   );
 
   const removeMovement = useCallback(
@@ -49,7 +50,7 @@ export function useMovementMutations(onSuccess?: () => void): MovementMutations 
       setBusy("delete");
       setDeleteError(null);
       try {
-        await deleteMovement(id, OWNER_ID);
+        await deleteMovement(id, viewerId);
         onSuccess?.();
         return true;
       } catch (error) {
@@ -61,7 +62,7 @@ export function useMovementMutations(onSuccess?: () => void): MovementMutations 
         setBusy(null);
       }
     },
-    [onSuccess],
+    [onSuccess, viewerId],
   );
 
   return { updateMovement, removeMovement, patchError, deleteError, busy };

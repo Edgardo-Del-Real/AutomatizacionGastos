@@ -4,7 +4,7 @@ import type { FormEvent } from "react";
 import type { Movement } from "@rita/contracts";
 
 import type { MovementPatch } from "../../infra/api";
-import { OWNER_ID } from "../../infra/env";
+import { useViewer } from "../household/ViewerContext";
 import { useCategories } from "./useCategories";
 import { useMovementMutations } from "./useMovementMutations";
 
@@ -25,7 +25,8 @@ export function MovementEditForm({
   onSaved,
   onCancel,
 }: MovementEditFormProps) {
-  const categories = useCategories(OWNER_ID, refreshToken);
+  const { viewerId } = useViewer();
+  const categories = useCategories(viewerId, refreshToken);
   const { updateMovement, patchError, busy } = useMovementMutations(onSaved);
   const [amount, setAmount] = useState(String(movement.amount));
   const [note, setNote] = useState(movement.note ?? "");

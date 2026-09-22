@@ -1,6 +1,6 @@
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { Movement, MovementSummary } from "@rita/contracts";
 
@@ -8,6 +8,7 @@ import {
   ApiError,
   deleteMovement,
   fetchCategories,
+  fetchHouseholdMembers,
   fetchMovementSummary,
   fetchMovements,
   patchMovement,
@@ -19,6 +20,7 @@ vi.mock("./infra/api", async (importOriginal) => ({
   fetchMovementSummary: vi.fn(),
   fetchMovements: vi.fn(),
   fetchCategories: vi.fn(),
+  fetchHouseholdMembers: vi.fn(),
   patchMovement: vi.fn(),
   deleteMovement: vi.fn(),
 }));
@@ -116,8 +118,16 @@ const movements: Movement[] = [
 const fetchMovementSummaryMock = vi.mocked(fetchMovementSummary);
 const fetchMovementsMock = vi.mocked(fetchMovements);
 const fetchCategoriesMock = vi.mocked(fetchCategories);
+const fetchHouseholdMembersMock = vi.mocked(fetchHouseholdMembers);
 const patchMovementMock = vi.mocked(patchMovement);
 const deleteMovementMock = vi.mocked(deleteMovement);
+
+beforeEach(() => {
+  // Single-member household: existing tests keep the fixed "default" viewer.
+  fetchHouseholdMembersMock.mockResolvedValue([
+    { ownerId: "default", name: "Rita" },
+  ]);
+});
 
 afterEach(() => {
   vi.clearAllMocks();
@@ -325,6 +335,108 @@ describe("App", () => {
     await waitFor(() => expect(fetchMovementsMock).toHaveBeenCalledTimes(2));
     await waitFor(() =>
       expect(fetchMovementSummaryMock).toHaveBeenCalledTimes(2),
+    );
+  });
+
+  it("renders no viewer selector for a single-member household", async () => {
+    fetchMovementSummaryMock.mockResolvedValue(summary);
+    fetchCategoriesMock.mockResolvedValue([]);
+
+    render(<App />);
+
+    await waitFor(() =>
+      expect(fetchMovementSummaryMock).toHaveBeenLastCalledWith(
+        "default",
+        "all",
+      ),
+    );
+    expect(screen.queryByLabelText("Ver como")).toBeNull();
+  });
+
+  it("switching the viewer re-queries the list and the summary with the new owner", async () => {
+    const user = userEvent.setup();
+    fetchHouseholdMembersMock.mockResolvedValue([
+      { ownerId: "rita", name: "Rita" },
+      { ownerId: "edgardo", name: "Edgardo" },
+    ]);
+    fetchMovementSummaryMock.mockResolvedValue(summary);
+    fetchMovementsMock.mockResolvedValue(movements);
+    fetchCategoriesMock.mockResolvedValue([]);
+
+    render(<App />);
+
+    // No persisted viewer and VITE_OWNER_ID ("default") is not a member, so the
+    // viewer falls back to the first member.
+    await waitFor(() =>
+      expect(fetchMovementSummaryMock).toHaveBeenLastCalledWith("rita", "all"),
+    );
+
+    await user.click(screen.getByRole("button", { name: "Movimientos" }));
+    await waitFor(() =>
+      expect(fetchMovementsMock).toHaveBeenLastCalledWith("rita", {}, "all"),
+    );
+
+    await user.selectOptions(screen.getByLabelText("Ver como"), "edgardo");
+
+    await waitFor(() =>
+      expect(fetchMovementSummaryMock).toHaveBeenLastCalledWith(
+        "edgardo",
+        "all",
+      ),
+    );
+    await waitFor(() =>
+      expect(fetchMovementsMock).toHaveBeenLastCalledWith(
+        "edgardo",
+        {},
+        "all",
+      ),
+    );
+    expect(window.localStorage.getItem("rita.viewer")).toBe("edgardo");
+  });
+
+  it("the hoisted visibility filter re-queries the list and the summary together", async () => {
+    const user = userEvent.setup();
+    fetchMovementSummaryMock.mockResolvedValue(summary);
+    fetchMovementsMock.mockResolvedValue(movements);
+    fetchCategoriesMock.mockResolvedValue([]);
+
+    render(<App />);
+    await waitFor(() =>
+      expect(fetchMovementSummaryMock).toHaveBeenLastCalledWith(
+        "default",
+        "all",
+      ),
+    );
+
+    await user.click(screen.getByRole("button", { name: "Movimientos" }));
+    await waitFor(() => expect(screen.getByRole("table")).toBeInTheDocument());
+
+    await user.selectOptions(screen.getByLabelText("Visibilidad"), "shared");
+
+    await waitFor(() =>
+      expect(fetchMovementSummaryMock).toHaveBeenLastCalledWith(
+        "default",
+        "shared",
+      ),
+    );
+    await waitFor(() =>
+      expect(fetchMovementsMock).toHaveBeenLastCalledWith(
+        "default",
+        {},
+        "shared",
+      ),
+    );
+
+    await user.click(screen.getByRole("button", { name: /limpiar/i }));
+
+    await waitFor(() =>
+      expect(fetchMovementSummaryMock).toHaveBeenLastCalledWith(
+        "default",
+        "all",
+      ),
+    );
+    await waitFor(() =>
+      expect(fetchMovementsMock).toHaveBeenLastCalledWith("default", {}, "all"),
     );
   });
 });

@@ -1,10 +1,10 @@
 import { useState } from "react";
 
-import type { MovementType } from "@rita/contracts";
+import type { Movement, MovementType, VisibilityFilter } from "@rita/contracts";
 
-import { OWNER_ID } from "../../infra/env";
 import { formatARS } from "../../infra/currency";
 import type { MovementListFilters } from "../../infra/api";
+import { useViewer } from "../household/ViewerContext";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { MovementEditForm } from "./MovementEditForm";
 import { MovementFilters } from "./MovementFilters";
@@ -19,21 +19,68 @@ const TYPE_LABELS: Record<MovementType, string> = {
 const ACTION_CLASS =
   "rounded-control border border-border bg-surface px-2.5 py-1 text-xs font-semibold text-ink transition-colors hover:bg-surface-raised focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-soft";
 
+const BADGE_CLASS =
+  "inline-flex items-center rounded-full bg-accent-soft px-2 py-0.5 text-xs font-medium text-accent";
+
 function sortByOccurredAtDesc(a: Date, b: Date): number {
   return b.getTime() - a.getTime();
+}
+
+/** The registrant is the author of the row: `registrantId` (derived alias of ownerId). */
+function registrantOf(movement: Movement): string {
+  return movement.registrantId ?? movement.ownerId;
 }
 
 type MovementListProps = {
   refreshToken?: number;
   onMutated?: () => void;
+  /** Hoisted visibility filter (drives list AND summary); default all. */
+  visibility?: VisibilityFilter;
+  /** Reports visibility changes up so the App can re-query the summary too. */
+  onVisibilityChange?: (visibility: VisibilityFilter) => void;
 };
 
-export function MovementList({ refreshToken, onMutated }: MovementListProps) {
+export function MovementList({
+  refreshToken,
+  onMutated,
+  visibility,
+  onVisibilityChange,
+}: MovementListProps) {
+  const { viewerId, members } = useViewer();
   const [filters, setFilters] = useState<MovementListFilters>({});
-  const state = useMovements(OWNER_ID, filters, "all", refreshToken);
+  // Uncontrolled fallback: when the App does not hoist the filter (standalone
+  // usage) the list manages its own visibility, defaulting to all.
+  const [internalVisibility, setInternalVisibility] =
+    useState<VisibilityFilter>("all");
+  const effectiveVisibility = visibility ?? internalVisibility;
+  const state = useMovements(
+    viewerId,
+    filters,
+    effectiveVisibility,
+    refreshToken,
+  );
   const { removeMovement, deleteError, busy } = useMovementMutations(onMutated);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [confirmingId, setConfirmingId] = useState<string | null>(null);
+
+  const memberNames = new Map(
+    members.map((member) => [member.ownerId, member.name]),
+  );
+
+  function registrantName(movement: Movement): string {
+    return memberNames.get(registrantOf(movement)) ?? registrantOf(movement);
+  }
+
+  function handleFiltersChange(next: MovementListFilters) {
+    const { visibility: nextVisibility, ...rest } = next;
+    setFilters(rest);
+    const resolved = nextVisibility ?? "all";
+    if (onVisibilityChange) {
+      onVisibilityChange(resolved);
+    } else {
+      setInternalVisibility(resolved);
+    }
+  }
 
   if (state.status === "error") {
     return (
@@ -93,8 +140,8 @@ export function MovementList({ refreshToken, onMutated }: MovementListProps) {
             {state.data.length === 1 ? "movimiento" : "movimientos"} registrados
           </p>
         </div>
-        <MovementFilters value={filters} onChange={setFilters} />
-<div className="overflow-x-auto">
+        <MovementFilters value={{ ...filters, visibility: effectiveVisibility }} onChange={handleFiltersChange} />
+        <div className="overflow-x-auto">
             <table className="w-full min-w-full text-left text-sm">
               <thead>
                 <tr className="border-b border-border text-xs tracking-wide text-ink-faint uppercase">
@@ -106,6 +153,7 @@ export function MovementList({ refreshToken, onMutated }: MovementListProps) {
                   <th className="px-4 py-3 font-medium sm:px-6">Moneda</th>
                   <th className="px-4 py-3 font-medium sm:px-6">Categoría</th>
                   <th className="px-4 py-3 font-medium sm:px-6">Nota</th>
+                  <th className="px-4 py-3 font-medium sm:px-6">Compartido</th>
                   <th className="px-4 py-3 font-medium sm:px-6">Acciones</th>
                 </tr>
               </thead>
@@ -113,7 +161,7 @@ export function MovementList({ refreshToken, onMutated }: MovementListProps) {
                 {visible.map((movement) =>
                   movement.id === editingId ? (
                     <tr key={movement.id} className="bg-surface-raised">
-                      <td colSpan={7} className="px-0 py-0">
+                      <td colSpan={8} className="px-0 py-0">
                         <MovementEditForm
                           movement={movement}
                           refreshToken={refreshToken}
@@ -164,24 +212,33 @@ export function MovementList({ refreshToken, onMutated }: MovementListProps) {
                       <td className="px-4 py-3 text-ink-soft sm:px-6">
                         {movement.note ?? "—"}
                       </td>
-                    <td className="px-4 py-3 whitespace-nowrap sm:px-6">
-                      <div className="flex items-center gap-2">
-                        <button
-                          type="button"
-                          onClick={() => setEditingId(movement.id)}
-                          className={ACTION_CLASS}
-                        >
-                          Editar
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => setConfirmingId(movement.id)}
-                          className={ACTION_CLASS}
-                        >
-                          Eliminar
-                        </button>
-                      </div>
-                    </td>
+                      <td className="px-4 py-3 whitespace-nowrap sm:px-6">
+                        {movement.visibility === "SHARED" ? (
+                          <span className={BADGE_CLASS}>
+                            Compartido · {registrantName(movement)}
+                          </span>
+                        ) : null}
+                      </td>
+                      <td className="px-4 py-3 whitespace-nowrap sm:px-6">
+                        {registrantOf(movement) === viewerId ? (
+                          <div className="flex items-center gap-2">
+                            <button
+                              type="button"
+                              onClick={() => setEditingId(movement.id)}
+                              className={ACTION_CLASS}
+                            >
+                              Editar
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setConfirmingId(movement.id)}
+                              className={ACTION_CLASS}
+                            >
+                              Eliminar
+                            </button>
+                          </div>
+                        ) : null}
+                      </td>
                   </tr>
                 ),
               )}

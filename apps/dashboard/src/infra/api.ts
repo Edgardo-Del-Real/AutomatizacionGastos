@@ -52,6 +52,8 @@ export type MovementListFilters = {
   to?: string;
   category?: string;
   q?: string;
+  /** Visibility select state; `undefined` means the default `all`. */
+  visibility?: VisibilityFilter;
 };
 
 /** Fields that may be updated on a movement via `PATCH /movements/:id`. */

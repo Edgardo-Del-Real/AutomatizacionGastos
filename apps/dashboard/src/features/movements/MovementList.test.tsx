@@ -1,22 +1,26 @@
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import type { ReactElement } from "react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { Movement } from "@rita/contracts";
+import type { HouseholdMember, Movement } from "@rita/contracts";
 
 import {
   ApiError,
   deleteMovement,
   fetchCategories,
+  fetchHouseholdMembers,
   fetchMovements,
   patchMovement,
 } from "../../infra/api";
+import { ViewerProvider } from "../household/ViewerContext";
 import { MovementList } from "./MovementList";
 
 vi.mock("../../infra/api", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../infra/api")>()),
   fetchMovements: vi.fn(),
   fetchCategories: vi.fn(),
+  fetchHouseholdMembers: vi.fn(),
   patchMovement: vi.fn(),
   deleteMovement: vi.fn(),
 }));
@@ -48,8 +52,67 @@ const movements: Movement[] = [
 
 const fetchMovementsMock = vi.mocked(fetchMovements);
 const fetchCategoriesMock = vi.mocked(fetchCategories);
+const fetchHouseholdMembersMock = vi.mocked(fetchHouseholdMembers);
 const patchMovementMock = vi.mocked(patchMovement);
 const deleteMovementMock = vi.mocked(deleteMovement);
+
+const duo: HouseholdMember[] = [
+  { ownerId: "rita", name: "Rita" },
+  { ownerId: "edgardo", name: "Edgardo" },
+];
+
+/** Renders inside a real ViewerProvider with a resolved household. */
+function renderWithViewer(ui: ReactElement, members: HouseholdMember[]) {
+  fetchHouseholdMembersMock.mockResolvedValue(members);
+  return render(<ViewerProvider>{ui}</ViewerProvider>);
+}
+
+const sharedMovements: Movement[] = [
+  {
+    id: "es1",
+    ownerId: "edgardo",
+    registrantId: "edgardo",
+    visibility: "SHARED",
+    amount: 2500,
+    currency: "ARS",
+    type: "EXPENSE",
+    category: "mercado",
+    note: "compra familiar",
+    occurredAt: new Date("2026-08-10T12:00:00Z"),
+    createdAt: new Date("2026-08-10T12:00:00Z"),
+  },
+  {
+    id: "es2",
+    ownerId: "rita",
+    registrantId: "rita",
+    visibility: "SHARED",
+    amount: 5000,
+    currency: "ARS",
+    type: "INCOME",
+    category: "sueldo",
+    note: null,
+    occurredAt: new Date("2026-08-11T12:00:00Z"),
+    createdAt: new Date("2026-08-11T12:00:00Z"),
+  },
+  {
+    id: "m3",
+    ownerId: "rita",
+    amount: 700,
+    currency: "ARS",
+    type: "EXPENSE",
+    category: "taxi",
+    note: null,
+    occurredAt: new Date("2026-08-12T12:00:00Z"),
+    createdAt: new Date("2026-08-12T12:00:00Z"),
+  },
+];
+
+beforeEach(() => {
+  // Single-member default so existing tests keep the fixed "default" viewer.
+  fetchHouseholdMembersMock.mockResolvedValue([
+    { ownerId: "default", name: "Rita" },
+  ]);
+});
 
 afterEach(() => {
   vi.clearAllMocks();
@@ -262,5 +325,47 @@ describe("MovementList", () => {
     expect(onMutated).not.toHaveBeenCalled();
     expect(screen.getAllByRole("row")).toHaveLength(3);
     expect(screen.getByRole("dialog")).toBeInTheDocument();
+  });
+
+  it("shows a SHARED badge with the registrant's name only on shared rows", async () => {
+    fetchMovementsMock.mockResolvedValue(sharedMovements);
+
+    renderWithViewer(<MovementList />, duo);
+    await waitFor(() => expect(screen.getByRole("table")).toBeInTheDocument());
+
+    expect(screen.getByText("Compartido · Edgardo")).toBeInTheDocument();
+    expect(screen.getByText("Compartido · Rita")).toBeInTheDocument();
+
+    // The individual row (newest, sorted first) carries no badge.
+    const rows = screen.getAllByRole("row");
+    expect(within(rows[1]!).queryByText(/Compartido ·/)).toBeNull();
+  });
+
+  it("renders partner rows read-only and keeps actions on the viewer's own rows", async () => {
+    fetchMovementsMock.mockResolvedValue(sharedMovements);
+
+    renderWithViewer(<MovementList />, duo);
+    await waitFor(() => expect(screen.getByRole("table")).toBeInTheDocument());
+
+    const rows = screen.getAllByRole("row");
+    // rows[1]: own INDIVIDUAL row (viewer rita) → actions available
+    expect(
+      within(rows[1]!).getByRole("button", { name: /editar/i }),
+    ).toBeInTheDocument();
+    expect(
+      within(rows[1]!).getByRole("button", { name: /eliminar/i }),
+    ).toBeInTheDocument();
+    // rows[2]: own SHARED row (registrant rita) → actions available
+    expect(
+      within(rows[2]!).getByRole("button", { name: /editar/i }),
+    ).toBeInTheDocument();
+    // rows[3]: partner SHARED row (registrant edgardo) → read-only
+    expect(
+      within(rows[3]!).queryByRole("button", { name: /editar/i }),
+    ).toBeNull();
+    expect(
+      within(rows[3]!).queryByRole("button", { name: /eliminar/i }),
+    ).toBeNull();
+    expect(screen.getByText("Compartido · Edgardo")).toBeInTheDocument();
   });
 });

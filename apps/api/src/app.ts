@@ -72,7 +72,7 @@ export function buildApp(options: AppOptions = {}): FastifyInstance {
   app.setErrorHandler(errorHandler);
   void app.register(cors, { origin: true });
   void app.register(expensesRoute, { expenseService });
-  void app.register(movementsRoute, { movementService, categoryService });
+  void app.register(movementsRoute, { movementService, categoryService, householdService });
   void app.register(householdRoute, { householdService });
   app.decorate("telegramService", telegramService);
 

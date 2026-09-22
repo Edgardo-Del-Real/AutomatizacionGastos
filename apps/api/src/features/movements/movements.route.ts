@@ -1,32 +1,50 @@
 import type { IncomingHttpHeaders } from "node:http";
 import type { FastifyPluginAsync } from "fastify";
-import { movementFiltersSchema } from "@rita/contracts";
+import { movementFiltersSchema, visibilityFilterSchema, type VisibilityFilter } from "@rita/contracts";
 import { z } from "zod";
 import { ValidationFailedError } from "../../infra/errors";
 import type { CategoryService } from "../categories/categories.service";
+import type { HouseholdService } from "../household/household.service";
 import type { MovementService } from "./movements.service";
+import type { ViewerScope } from "./movements.types";
 
 const summaryQuerySchema = z.object({
   ownerId: z.string().min(1),
   from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
   to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  visibility: visibilityFilterSchema.optional(),
 });
 
 export type MovementsRouteOptions = {
   movementService: MovementService;
   categoryService: CategoryService;
+  householdService: HouseholdService;
 };
 
+/**
+ * Builds the viewer scope from the ownerId query param: the household answers
+ * the partner lookup, and the visibility filter defaults to `all` (own +
+ * partner's SHARED) per the viewer-scoped read predicate.
+ */
+function buildViewerScope(
+  household: HouseholdService,
+  viewerId: string,
+  visibility: VisibilityFilter = "all",
+): ViewerScope {
+  return { viewerId, partnerId: household.partnerOf(viewerId), visibility };
+}
+
 export const movementsRoute: FastifyPluginAsync<MovementsRouteOptions> = async (app, options) => {
-  const { movementService, categoryService } = options;
+  const { movementService, categoryService, householdService } = options;
 
   app.get("/movements", async (request, reply) => {
     const parsed = movementFiltersSchema.safeParse(request.query);
     if (!parsed.success) {
       throw new ValidationFailedError("Invalid movement filters", parsed.error.issues);
     }
-    const { ownerId, ...filters } = parsed.data;
-    const movements = await movementService.listMovements(ownerId, filters);
+    const { ownerId, visibility, ...filters } = parsed.data;
+    const scope = buildViewerScope(householdService, ownerId, visibility);
+    const movements = await movementService.listMovements(scope, filters);
     return reply.send(movements);
   });
 
@@ -35,8 +53,9 @@ export const movementsRoute: FastifyPluginAsync<MovementsRouteOptions> = async (
     if (!parsed.success) {
       throw new ValidationFailedError("Invalid summary query", parsed.error.issues);
     }
-    const { ownerId, from, to } = parsed.data;
-    const summary = await movementService.getSummary(ownerId, from, to);
+    const { ownerId, from, to, visibility } = parsed.data;
+    const scope = buildViewerScope(householdService, ownerId, visibility);
+    const summary = await movementService.getSummary(scope, from, to);
     return reply.send(summary);
   });
 

@@ -1,9 +1,15 @@
 import { execSync } from "node:child_process";
-import type { FastifyInstance } from "fastify";
+import Fastify, { type FastifyInstance } from "fastify";
 import { PrismaClient } from "@prisma/client";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { buildApp } from "../../app";
 import { loadDotEnvFromDisk } from "../../config/load-env";
+import { PrismaCategoryRepository } from "../categories/categories.repository";
+import { CategoryService } from "../categories/categories.service";
+import { HouseholdService } from "../household/household.service";
+import { PrismaMovementRepository } from "./movements.repository";
+import { MovementService } from "./movements.service";
+import { movementsRoute } from "./movements.route";
 
 loadDotEnvFromDisk();
 
@@ -575,6 +581,117 @@ describe("movements route", () => {
 
       expect(response.statusCode).toBe(204);
       expect(await prisma.expense.count({ where: { id: movement.id } })).toBe(0);
+    });
+  });
+
+  describe("GET /movements visibility filter (household duo)", () => {
+    let duoApp: FastifyInstance;
+
+    beforeAll(async () => {
+      const categoryService = new CategoryService(new PrismaCategoryRepository(prisma));
+      const movementService = new MovementService(new PrismaMovementRepository(prisma), categoryService);
+      duoApp = Fastify();
+      void duoApp.register(movementsRoute, {
+        movementService,
+        categoryService,
+        householdService: new HouseholdService([
+          { ownerId: "rita", name: "Rita", chatId: 111 },
+          { ownerId: "edgardo", name: "Edgardo", chatId: 222 },
+        ]),
+      });
+      await duoApp.ready();
+    });
+
+    afterAll(async () => {
+      await duoApp.close();
+    });
+
+    async function seedDuo(): Promise<void> {
+      const now = new Date(Date.now() - 3 * 60 * 60 * 1000);
+      const rows = [
+        { ownerId: "rita", amount: 100, note: "privado rita", visibility: "INDIVIDUAL" as const },
+        { ownerId: "rita", amount: 200, note: "compartido rita", visibility: "SHARED" as const },
+        { ownerId: "edgardo", amount: 300, note: "privado edgardo", visibility: "INDIVIDUAL" as const },
+        { ownerId: "edgardo", amount: 400, note: "compartido edgardo", visibility: "SHARED" as const },
+      ];
+      for (const row of rows) {
+        await prisma.expense.create({
+          data: {
+            ownerId: row.ownerId,
+            amount: row.amount,
+            currency: "ARS",
+            category: "casa",
+            note: row.note,
+            occurredAt: now,
+            type: "EXPENSE",
+            visibility: row.visibility,
+          },
+        });
+      }
+    }
+
+    it("rejects an invalid visibility value with 422 on both endpoints", async () => {
+      const list = await duoApp.inject({ method: "GET", url: "/movements?ownerId=rita&visibility=foo" });
+      expect(list.statusCode).toBe(422);
+      expect(list.json().code).toBe("ValidationFailed");
+
+      const summary = await duoApp.inject({
+        method: "GET",
+        url: "/movements/summary?ownerId=rita&visibility=foo",
+      });
+      expect(summary.statusCode).toBe(422);
+      expect(summary.json().code).toBe("ValidationFailed");
+    });
+
+    it("visibility=mine returns only the viewer's own movements", async () => {
+      await seedDuo();
+
+      const response = await duoApp.inject({
+        method: "GET",
+        url: "/movements?ownerId=rita&visibility=mine",
+      });
+
+      expect(response.statusCode).toBe(200);
+      const notes = (response.json() as { note: string | null }[]).map((m) => m.note).sort();
+      expect(notes).toEqual(["compartido rita", "privado rita"]);
+    });
+
+    it("visibility=shared returns only SHARED movements visible to the viewer", async () => {
+      await seedDuo();
+
+      const response = await duoApp.inject({
+        method: "GET",
+        url: "/movements?ownerId=rita&visibility=shared",
+      });
+
+      expect(response.statusCode).toBe(200);
+      const notes = (response.json() as { note: string | null }[]).map((m) => m.note).sort();
+      expect(notes).toEqual(["compartido edgardo", "compartido rita"]);
+    });
+
+    it("defaults to all: own movements plus the partner's SHARED ones", async () => {
+      await seedDuo();
+
+      const response = await duoApp.inject({ method: "GET", url: "/movements?ownerId=rita" });
+
+      expect(response.statusCode).toBe(200);
+      const notes = (response.json() as { note: string | null }[]).map((m) => m.note).sort();
+      expect(notes).toEqual(["compartido edgardo", "compartido rita", "privado rita"]);
+      expect(notes).not.toContain("privado edgardo");
+    });
+
+    it("scopes the summary by visibility (mine excludes the partner's SHARED)", async () => {
+      await seedDuo();
+
+      const response = await duoApp.inject({
+        method: "GET",
+        url: "/movements/summary?ownerId=rita&visibility=mine",
+      });
+
+      expect(response.statusCode).toBe(200);
+      const summary = response.json() as { kpis: { expenses: number; count: number } };
+      expect(summary.kpis.expenses).toBe(300);
+      expect(summary.kpis.count).toBe(2);
     });
   });
 });

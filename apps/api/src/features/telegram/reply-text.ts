@@ -55,6 +55,11 @@ export function correctionOfferReply(amount: number, note: string | null, catego
   return `${successReply(amount, note, category)}. ¿Querés asignarle otra categoría? Escribí el nombre o "no".`;
 }
 
+/** Follow-up after an affirmation ("si", "dale") to the correction offer: asks the target category. */
+export function categoryFollowUpReply(): string {
+  return 'Dale, ¿a qué categoría lo asigno? Escribí el nombre o "no".';
+}
+
 export function correctionDoneReply(category: string): string {
   return `Listo, el movimiento quedó en "${category}".`;
 }

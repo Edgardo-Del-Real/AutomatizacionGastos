@@ -12,6 +12,7 @@ import {
   categoryCreatedReply,
   categoryDeletedReply,
   categoryErrorReply,
+  categoryFollowUpReply,
   categoryListReply,
   categoryNotFoundReply,
   categoryRenamedReply,
@@ -123,6 +124,12 @@ describe("reply builders", () => {
 
   it("builds the keep-as-otro confirmation", () => {
     expect(otroKeptReply()).toBe('Listo, quedó en "otro".');
+  });
+
+  it("builds the follow-up asking which category to reassign after an affirmation", () => {
+    expect(categoryFollowUpReply()).toBe(
+      'Dale, ¿a qué categoría lo asigno? Escribí el nombre o "no".',
+    );
   });
 
   it("builds the category-not-found reply listing the existing categories", () => {

@@ -75,7 +75,8 @@ describe("movementSchema", () => {
   });
 
   it("requires the type field", () => {
-    const { type: _type, ...withoutType } = movementPayload;
+    const withoutType: Record<string, unknown> = { ...movementPayload };
+    delete withoutType.type;
     const result = movementSchema.safeParse(withoutType);
     expect(result.success).toBe(false);
   });
@@ -127,7 +128,8 @@ describe("householdMembersSchema", () => {
 
 describe("expenseSchema family (unchanged)", () => {
   it("still parses an expense-shaped payload without type", () => {
-    const { type: _type, ...expensePayload } = movementPayload;
+    const expensePayload: Record<string, unknown> = { ...movementPayload };
+    delete expensePayload.type;
     const parsed = expenseSchema.parse(expensePayload);
     expect(parsed.note).toBe("Salary");
     expect(parsed.ownerId).toBe("owner-1");
@@ -224,7 +226,8 @@ describe("movementSummarySchema", () => {
   });
 
   it("rejects a summary missing kpis", () => {
-    const { kpis: _kpis, ...withoutKpis } = summaryPayload;
+    const withoutKpis: Record<string, unknown> = { ...summaryPayload };
+    delete withoutKpis.kpis;
     const result = movementSummarySchema.safeParse(withoutKpis);
     expect(result.success).toBe(false);
   });

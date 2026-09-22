@@ -1,6 +1,6 @@
 import { Prisma } from "@prisma/client";
 import type { PrismaClient } from "@prisma/client";
-import type { Movement, MovementType } from "@rita/contracts";
+import type { Movement, MovementType, MovementVisibility } from "@rita/contracts";
 import type {
   CategoryBucket,
   DayBucket,
@@ -8,6 +8,7 @@ import type {
   MonthBucket,
   MovementListFilters,
   SummaryPeriod,
+  ViewerScope,
 } from "./movements.types";
 
 const BA_TIMEZONE = "America/Argentina/Buenos_Aires";
@@ -15,6 +16,8 @@ const BA_TIMEZONE = "America/Argentina/Buenos_Aires";
 type MovementRow = {
   id: string;
   ownerId: string;
+  /** Derived alias of `ownerId` (AD5): the creating owner, carried on the wire. */
+  registrantId: string;
   amount: Prisma.Decimal;
   currency: string;
   category: string | null;
@@ -22,6 +25,7 @@ type MovementRow = {
   occurredAt: Date;
   createdAt: Date;
   type: MovementType;
+  visibility: MovementVisibility;
 };
 
 type DecimalLike = Prisma.Decimal | string | number | null | undefined;
@@ -37,6 +41,7 @@ function mapMovementRow(row: MovementRow): Movement {
   return {
     id: row.id,
     ownerId: row.ownerId,
+    registrantId: row.registrantId,
     amount: toNumber(row.amount),
     currency: row.currency,
     category: row.category,
@@ -44,6 +49,7 @@ function mapMovementRow(row: MovementRow): Movement {
     occurredAt: row.occurredAt,
     createdAt: row.createdAt,
     type: row.type,
+    visibility: row.visibility,
   };
 }
 
@@ -59,12 +65,12 @@ function periodConditions(period: SummaryPeriod): Prisma.Sql[] {
 }
 
 export interface MovementRepository {
-  listByOwner(ownerId: string, filters: MovementListFilters): Promise<Movement[]>;
-  summaryKpis(ownerId: string, period: SummaryPeriod): Promise<KpiTotals>;
-  summaryMonths(ownerId: string): Promise<MonthBucket[]>;
-  summaryDaily(ownerId: string): Promise<DayBucket[]>;
-  summaryCategories(ownerId: string, period: SummaryPeriod): Promise<CategoryBucket[]>;
-  topByType(ownerId: string, type: MovementType, limit: number, period: SummaryPeriod): Promise<Movement[]>;
+  listByOwner(scope: ViewerScope, filters: MovementListFilters): Promise<Movement[]>;
+  summaryKpis(scope: ViewerScope, period: SummaryPeriod): Promise<KpiTotals>;
+  summaryMonths(scope: ViewerScope): Promise<MonthBucket[]>;
+  summaryDaily(scope: ViewerScope): Promise<DayBucket[]>;
+  summaryCategories(scope: ViewerScope, period: SummaryPeriod): Promise<CategoryBucket[]>;
+  topByType(scope: ViewerScope, type: MovementType, limit: number, period: SummaryPeriod): Promise<Movement[]>;
   updateById(
     id: string,
     ownerId: string,
@@ -82,8 +88,31 @@ export type UpdateMovementPatch = {
 export class PrismaMovementRepository implements MovementRepository {
   constructor(private readonly prisma: PrismaClient) {}
 
-  async listByOwner(ownerId: string, filters: MovementListFilters): Promise<Movement[]> {
-    const conditions: Prisma.Sql[] = [Prisma.sql`"ownerId" = ${ownerId}`];
+  /**
+   * AD3 — the ONE leak-guard surface: every raw movement SELECT composes this
+   * fragment as `conditions[0]`. own rows are always visible; the partner's
+   * SHARED rows are visible only when a partner exists (partner-null reduces
+   * to owner-only in single-user mode). Prisma flattens nested `Prisma.Sql`
+   * fragments so positional parameter order stays safe.
+   */
+  private viewerPredicate(scope: ViewerScope): Prisma.Sql {
+    const own = Prisma.sql`"ownerId" = ${scope.viewerId}`;
+    const partnerShared =
+      scope.partnerId === null
+        ? Prisma.sql`FALSE`
+        : Prisma.sql`("visibility" = 'SHARED'::"MovementVisibility" AND "ownerId" = ${scope.partnerId})`;
+    switch (scope.visibility) {
+      case "mine":
+        return own;
+      case "shared":
+        return Prisma.sql`"visibility" = 'SHARED'::"MovementVisibility" AND (${own} OR ${partnerShared})`;
+      case "all":
+        return Prisma.sql`(${own} OR ${partnerShared})`;
+    }
+  }
+
+  async listByOwner(scope: ViewerScope, filters: MovementListFilters): Promise<Movement[]> {
+    const conditions: Prisma.Sql[] = [this.viewerPredicate(scope)];
     if (filters.type) {
       conditions.push(Prisma.sql`"type" = ${filters.type}::"MovementType"`);
     }
@@ -101,7 +130,7 @@ export class PrismaMovementRepository implements MovementRepository {
     }
     const where = Prisma.join(conditions, " AND ");
     const rows = await this.prisma.$queryRaw<MovementRow[]>`
-      SELECT "id", "ownerId", "amount", "currency", "category", "note", "occurredAt", "createdAt", "type"
+      SELECT "id", "ownerId", "ownerId" AS "registrantId", "amount", "currency", "category", "note", "occurredAt", "createdAt", "type", "visibility"
       FROM "Expense"
       WHERE ${where}
       ORDER BY "occurredAt" DESC
@@ -109,9 +138,9 @@ export class PrismaMovementRepository implements MovementRepository {
     return rows.map(mapMovementRow);
   }
 
-  async summaryKpis(ownerId: string, period: SummaryPeriod): Promise<KpiTotals> {
+  async summaryKpis(scope: ViewerScope, period: SummaryPeriod): Promise<KpiTotals> {
     const conditions: Prisma.Sql[] = [
-      Prisma.sql`"ownerId" = ${ownerId}`,
+      this.viewerPredicate(scope),
       Prisma.sql`"currency" = 'ARS'`,
       ...periodConditions(period),
     ];
@@ -144,7 +173,13 @@ export class PrismaMovementRepository implements MovementRepository {
     };
   }
 
-  async summaryMonths(ownerId: string): Promise<MonthBucket[]> {
+  async summaryMonths(scope: ViewerScope): Promise<MonthBucket[]> {
+    const conditions: Prisma.Sql[] = [
+      this.viewerPredicate(scope),
+      Prisma.sql`"currency" = 'ARS'`,
+      Prisma.sql`"occurredAt" >= (date_trunc('month', now() AT TIME ZONE ${BA_TIMEZONE}) - interval '5 months')`,
+    ];
+    const where = Prisma.join(conditions, " AND ");
     type MonthRow = {
       month: string;
       income: DecimalLike;
@@ -157,9 +192,7 @@ export class PrismaMovementRepository implements MovementRepository {
         COALESCE(SUM(CASE WHEN "type" = 'INCOME'::"MovementType" THEN "amount" ELSE 0 END), 0) AS "income",
         COALESCE(SUM(CASE WHEN "type" = 'EXPENSE'::"MovementType" THEN "amount" ELSE 0 END), 0) AS "expenses"
       FROM "Expense"
-      WHERE "ownerId" = ${ownerId}
-        AND "currency" = 'ARS'
-        AND "occurredAt" >= (date_trunc('month', now() AT TIME ZONE ${BA_TIMEZONE}) - interval '5 months')
+      WHERE ${where}
       GROUP BY 1
       ORDER BY 1 ASC
     `;
@@ -170,7 +203,14 @@ export class PrismaMovementRepository implements MovementRepository {
     }));
   }
 
-  async summaryDaily(ownerId: string): Promise<DayBucket[]> {
+  async summaryDaily(scope: ViewerScope): Promise<DayBucket[]> {
+    const conditions: Prisma.Sql[] = [
+      this.viewerPredicate(scope),
+      Prisma.sql`"currency" = 'ARS'`,
+      Prisma.sql`("occurredAt" AT TIME ZONE 'UTC' AT TIME ZONE ${BA_TIMEZONE})
+        >= date_trunc('day', now() AT TIME ZONE ${BA_TIMEZONE}) - interval '29 days'`,
+    ];
+    const where = Prisma.join(conditions, " AND ");
     type DayRow = {
       day: string;
       income: DecimalLike;
@@ -183,10 +223,7 @@ export class PrismaMovementRepository implements MovementRepository {
         COALESCE(SUM(CASE WHEN "type" = 'INCOME'::"MovementType" THEN "amount" ELSE 0 END), 0) AS "income",
         COALESCE(SUM(CASE WHEN "type" = 'EXPENSE'::"MovementType" THEN "amount" ELSE 0 END), 0) AS "expenses"
       FROM "Expense"
-      WHERE "ownerId" = ${ownerId}
-        AND "currency" = 'ARS'
-        AND ("occurredAt" AT TIME ZONE 'UTC' AT TIME ZONE ${BA_TIMEZONE})
-          >= date_trunc('day', now() AT TIME ZONE ${BA_TIMEZONE}) - interval '29 days'
+      WHERE ${where}
       GROUP BY 1
       ORDER BY 1 ASC
     `;
@@ -197,9 +234,9 @@ export class PrismaMovementRepository implements MovementRepository {
     }));
   }
 
-  async summaryCategories(ownerId: string, period: SummaryPeriod): Promise<CategoryBucket[]> {
+  async summaryCategories(scope: ViewerScope, period: SummaryPeriod): Promise<CategoryBucket[]> {
     const conditions: Prisma.Sql[] = [
-      Prisma.sql`"ownerId" = ${ownerId}`,
+      this.viewerPredicate(scope),
       Prisma.sql`"currency" = 'ARS'`,
       ...periodConditions(period),
     ];
@@ -227,20 +264,20 @@ export class PrismaMovementRepository implements MovementRepository {
   }
 
   async topByType(
-    ownerId: string,
+    scope: ViewerScope,
     type: MovementType,
     limit: number,
     period: SummaryPeriod,
   ): Promise<Movement[]> {
     const conditions: Prisma.Sql[] = [
-      Prisma.sql`"ownerId" = ${ownerId}`,
+      this.viewerPredicate(scope),
       Prisma.sql`"currency" = 'ARS'`,
       Prisma.sql`"type" = ${type}::"MovementType"`,
       ...periodConditions(period),
     ];
     const where = Prisma.join(conditions, " AND ");
     const rows = await this.prisma.$queryRaw<MovementRow[]>`
-      SELECT "id", "ownerId", "amount", "currency", "category", "note", "occurredAt", "createdAt", "type"
+      SELECT "id", "ownerId", "ownerId" AS "registrantId", "amount", "currency", "category", "note", "occurredAt", "createdAt", "type", "visibility"
       FROM "Expense"
       WHERE ${where}
       ORDER BY "amount" DESC
@@ -259,7 +296,7 @@ export class PrismaMovementRepository implements MovementRepository {
       return null;
     }
     const row = await this.prisma.expense.findFirst({ where: { id, ownerId } });
-    return row === null ? null : mapMovementRow(row);
+    return row === null ? null : mapMovementRow({ ...row, registrantId: row.ownerId });
   }
 
   async deleteById(id: string, ownerId: string): Promise<boolean> {

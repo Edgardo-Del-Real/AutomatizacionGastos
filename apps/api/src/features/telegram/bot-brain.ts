@@ -41,6 +41,13 @@ export type ConversationEnvelope = {
    * the controller reads it only for create_category with a pending movement.
    */
   then_reassign?: boolean;
+  /**
+   * SHARED-registration signal, only meaningful with `register_expense` (spec
+   * "Shared Flag Contract"): true registers as SHARED. A SIGNAL only — the
+   * deterministic `compartido:` prefix is authoritative and wins over this flag
+   * when both are present (AD6). Schema default false.
+   */
+  shared?: boolean;
 };
 
 export type BotAction =
@@ -165,6 +172,7 @@ export const conversationEnvelopeSchema = z
     new_name: z.string().trim().min(1).max(60).nullable().default(null),
     dialog_action: z.enum(["resolve", "abandon"]).nullable().default(null),
     then_reassign: z.boolean().default(false),
+    shared: z.boolean().default(false),
   })
   .refine(
     (data) =>
@@ -177,7 +185,7 @@ export const replyEnvelopeSchema = z.object({ reply: z.string().trim().min(1).ma
 export type ChatMessage = { role: "user" | "assistant"; content: string };
 
 export const INTERPRET_SYSTEM_PROMPT = [
-  'Respondé SOLO con un objeto JSON con exactamente estas claves: {"intent": string, "amount": number|null, "category": string|null, "note": string|null, "query_type": string|null, "new_name": string|null, "dialog_action": string|null, "then_reassign": boolean}.',
+  'Respondé SOLO con un objeto JSON con exactamente estas claves: {"intent": string, "amount": number|null, "category": string|null, "note": string|null, "query_type": string|null, "new_name": string|null, "dialog_action": string|null, "then_reassign": boolean, "shared": boolean}.',
   "No agregues texto ni campos extra.",
   '"intent" es exactamente UNA de: "register_expense" (cualquier movimiento de dinero, gasto o ingreso), "correct_amount", "correct_category", "query", "query_recent", "query_balance", "query_month", "associate_keyword", "create_category", "delete_category", "rename_category", "capabilities", "help", "off_topic".',
   "Si el mensaje tiene señal de gasto (verbo de gasto, $ o un monto) usá register_expense, aunque no tenga monto.",
@@ -195,6 +203,7 @@ export const INTERPRET_SYSTEM_PROMPT = [
   '"dialog_action" se usa SOLO cuando hay un diálogo abierto (pregunta pendiente del bot): "resolve" si el mensaje responde la pregunta con un valor presentado, "abandon" si el dueño abandona explícitamente ("no, dejalo"), null en cualquier otro caso. Fuera de diálogo siempre null.',
   'Para "correct_category": "category" es la categoría DESTINO; "amount" y/o "note" identifican el movimiento a corregir.',
   '"then_reassign" es true SOLO cuando "create_category" pide guardar el movimiento pendiente en la categoría nueva (ej: "creá X y guardalo ahí"); en cualquier otro caso false.',
+  '"shared" es true SOLO en "register_expense" cuando el dueño pide que el gasto sea compartido con su pareja ("ponelo compartido", "es compartido"); en cualquier otro caso false. Si el mensaje ya trae el prefijo "compartido:" el bot lo maneja solo: no lo dupliques.',
 ].join(" ");
 
 export const FEW_SHOTS: readonly ChatMessage[] = [
@@ -207,6 +216,11 @@ export const FEW_SHOTS: readonly ChatMessage[] = [
   {
     role: "assistant",
     content: '{"intent":"register_expense","amount":null,"category":"Supermercado","note":"mercaderia"}',
+  },
+  { role: "user", content: "poné el alquiler como compartido" },
+  {
+    role: "assistant",
+    content: '{"intent":"register_expense","amount":null,"category":null,"note":"alquiler","shared":true}',
   },
   { role: "user", content: "cuánto gasté este mes?" },
   {

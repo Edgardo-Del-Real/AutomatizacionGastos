@@ -17,6 +17,14 @@
   },
   {
     "role": "user",
+    "content": "poné el alquiler como compartido"
+  },
+  {
+    "role": "assistant",
+    "content": "{\"intent\":\"register_expense\",\"amount\":null,\"category\":null,\"note\":\"alquiler\",\"shared\":true}"
+  },
+  {
+    "role": "user",
     "content": "cuánto gasté este mes?"
   },
   {

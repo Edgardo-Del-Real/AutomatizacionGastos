@@ -160,6 +160,47 @@ describe("conversationEnvelopeSchema", () => {
     expect(result.success).toBe(false);
   });
 
+  it("carries shared: true on a register_expense envelope", () => {
+    const result = conversationEnvelopeSchema.safeParse({
+      intent: "register_expense",
+      amount: 2000,
+      category: null,
+      note: "super",
+      shared: true,
+    });
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.shared).toBe(true);
+    }
+  });
+
+  it("defaults an absent shared flag to false", () => {
+    const result = conversationEnvelopeSchema.safeParse({
+      intent: "register_expense",
+      amount: 2000,
+      category: null,
+      note: "super",
+    });
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.shared).toBe(false);
+    }
+  });
+
+  it("degrades to null for a malformed shared value (threat: malformed signal)", () => {
+    const result = conversationEnvelopeSchema.safeParse({
+      intent: "register_expense",
+      amount: 2000,
+      category: null,
+      note: "super",
+      shared: "yes",
+    });
+
+    expect(result.success).toBe(false);
+  });
+
   it.each([
     ["empty category", { intent: "register_expense", amount: 100, category: "", note: null }],
     ["whitespace category", { intent: "register_expense", amount: 100, category: "   ", note: null }],
@@ -466,6 +507,7 @@ describe("GroqBotBrain.interpret", () => {
       new_name: null,
       dialog_action: null,
       then_reassign: false,
+      shared: false,
     });
     expect(calls).toHaveLength(1);
   });
@@ -487,6 +529,7 @@ describe("GroqBotBrain.interpret", () => {
       new_name: null,
       dialog_action: null,
       then_reassign: false,
+      shared: false,
     });
   });
 
@@ -514,6 +557,7 @@ describe("GroqBotBrain.interpret", () => {
       new_name: null,
       dialog_action: null,
       then_reassign: false,
+      shared: false,
     });
   });
 
@@ -625,6 +669,7 @@ describe("GroqBotBrain.interpret", () => {
       new_name: "supermercado",
       dialog_action: null,
       then_reassign: false,
+      shared: false,
     });
   });
 
@@ -652,6 +697,7 @@ describe("GroqBotBrain.interpret", () => {
       new_name: null,
       dialog_action: null,
       then_reassign: false,
+      shared: false,
     });
   });
 
@@ -757,6 +803,7 @@ describe("GroqBotBrain.interpret with dialog context", () => {
       new_name: null,
       dialog_action: "resolve",
       then_reassign: false,
+      shared: false,
     });
   });
 
@@ -972,6 +1019,12 @@ describe("prompt contracts", () => {
     expect(INTERPRET_SYSTEM_PROMPT).toContain("resolve");
     expect(INTERPRET_SYSTEM_PROMPT).toContain("abandon");
     expect(INTERPRET_SYSTEM_PROMPT).toContain("then_reassign");
+  });
+
+  it("documents the shared flag as a register_expense-only signal and the compartido: prefix authority", () => {
+    expect(INTERPRET_SYSTEM_PROMPT).toContain('"shared": boolean');
+    expect(INTERPRET_SYSTEM_PROMPT).toContain("compartido");
+    expect(INTERPRET_SYSTEM_PROMPT).toContain("register_expense");
   });
 
   it("documents correct_category reference extraction in the interpret prompt", () => {

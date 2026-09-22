@@ -188,11 +188,14 @@ describe("MovementList", () => {
     await waitFor(() => expect(screen.getByRole("table")).toBeInTheDocument());
 
     await user.selectOptions(screen.getByLabelText("Tipo"), "EXPENSE");
+    await user.selectOptions(screen.getByLabelText("Visibilidad"), "shared");
 
     await waitFor(() =>
-      expect(fetchMovementsMock).toHaveBeenLastCalledWith("default", {
-        type: "EXPENSE",
-      }, "all"),
+      expect(fetchMovementsMock).toHaveBeenLastCalledWith(
+        "default",
+        { type: "EXPENSE" },
+        "shared",
+      ),
     );
 
     await user.click(screen.getByRole("button", { name: /limpiar/i }));

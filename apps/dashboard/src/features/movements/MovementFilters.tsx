@@ -1,4 +1,4 @@
-import type { MovementType } from "@rita/contracts";
+import type { MovementType, VisibilityFilter } from "@rita/contracts";
 
 import type { MovementListFilters } from "../../infra/api";
 
@@ -97,6 +97,25 @@ export function MovementFilters({ value, onChange }: MovementFiltersProps) {
           onChange={(event) => update({ q: event.target.value || undefined })}
           className={CONTROL_CLASS}
         />
+      </div>
+
+      <div className="flex flex-col gap-1.5">
+        <label htmlFor="movement-visibility-filter" className={LABEL_CLASS}>
+          Visibilidad
+        </label>
+        <select
+          id="movement-visibility-filter"
+          aria-label="Visibilidad"
+          value={value.visibility ?? "all"}
+          onChange={(event) =>
+            update({ visibility: event.target.value as VisibilityFilter })
+          }
+          className={CONTROL_CLASS}
+        >
+          <option value="all">Todos</option>
+          <option value="mine">Míos</option>
+          <option value="shared">Compartidos</option>
+        </select>
       </div>
 
       <button

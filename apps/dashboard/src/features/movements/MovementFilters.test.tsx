@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useState } from "react";
 import { describe, expect, it, vi } from "vitest";
@@ -12,7 +12,7 @@ function FiltersHarness() {
 }
 
 describe("MovementFilters", () => {
-  it("renders the type, date range, category, note, and reset controls in Spanish", () => {
+  it("renders the type, date range, category, note, visibility, and reset controls in Spanish", () => {
     render(<MovementFilters value={{}} onChange={() => {}} />);
 
     expect(screen.getByLabelText("Tipo")).toBeInTheDocument();
@@ -20,7 +20,34 @@ describe("MovementFilters", () => {
     expect(screen.getByLabelText("Hasta")).toBeInTheDocument();
     expect(screen.getByLabelText("Categoría")).toBeInTheDocument();
     expect(screen.getByLabelText("Texto")).toBeInTheDocument();
+    expect(screen.getByLabelText("Visibilidad")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /limpiar/i })).toBeInTheDocument();
+  });
+
+  it("renders the visibility options as Todos, Míos, and Compartidos", () => {
+    render(<MovementFilters value={{}} onChange={() => {}} />);
+
+    const select = screen.getByLabelText("Visibilidad");
+    const options = within(select)
+      .getAllByRole("option")
+      .map((option) => option.textContent);
+    expect(options).toEqual(["Todos", "Míos", "Compartidos"]);
+    expect(select).toHaveValue("all");
+  });
+
+  it("combines the visibility filter with the other filters", async () => {
+    const user = userEvent.setup();
+    render(<FiltersHarness />);
+
+    await user.selectOptions(screen.getByLabelText("Visibilidad"), "shared");
+    await user.selectOptions(screen.getByLabelText("Tipo"), "INCOME");
+
+    expect(
+      (screen.getByLabelText("Visibilidad") as HTMLSelectElement).value,
+    ).toBe("shared");
+    expect((screen.getByLabelText("Tipo") as HTMLSelectElement).value).toBe(
+      "INCOME",
+    );
   });
 
   it("combines type, date range, category, and note text into one filter state", async () => {
@@ -56,12 +83,12 @@ describe("MovementFilters", () => {
     );
   });
 
-  it("reset clears all active filters", async () => {
+  it("reset clears all active filters including visibility", async () => {
     const user = userEvent.setup();
     const onChange = vi.fn();
     render(
       <MovementFilters
-        value={{ type: "EXPENSE", q: "taxi" }}
+        value={{ type: "EXPENSE", q: "taxi", visibility: "shared" }}
         onChange={onChange}
       />,
     );

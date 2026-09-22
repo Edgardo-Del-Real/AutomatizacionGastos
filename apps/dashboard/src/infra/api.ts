@@ -10,6 +10,7 @@ import type {
   Movement,
   MovementSummary,
   OwnerCategory,
+  VisibilityFilter,
 } from "@rita/contracts";
 import { z } from "zod";
 
@@ -145,10 +146,13 @@ export function fetchHouseholdMembers(): Promise<HouseholdMember[]> {
   );
 }
 
-export function fetchMovementSummary(ownerId: string): Promise<MovementSummary> {
+export function fetchMovementSummary(
+  ownerId: string,
+  visibility: VisibilityFilter = "all",
+): Promise<MovementSummary> {
   return request(
     "GET",
-    `/api/movements/summary?${new URLSearchParams({ ownerId })}`,
+    `/api/movements/summary?${new URLSearchParams({ ownerId, visibility })}`,
     undefined,
     {},
     movementSummarySchema,
@@ -158,6 +162,7 @@ export function fetchMovementSummary(ownerId: string): Promise<MovementSummary> 
 export function fetchMovements(
   ownerId: string,
   filters: MovementListFilters = {},
+  visibility: VisibilityFilter = "all",
 ): Promise<Movement[]> {
   const params: Record<string, string> = {};
   if (filters.type) params.type = filters.type;
@@ -167,7 +172,7 @@ export function fetchMovements(
   if (filters.q) params.q = filters.q;
   return request(
     "GET",
-    `/api/movements?${new URLSearchParams({ ownerId, ...params })}`,
+    `/api/movements?${new URLSearchParams({ ownerId, ...params, visibility })}`,
     undefined,
     {},
     listMovementsSchema,

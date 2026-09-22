@@ -1,7 +1,7 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import type { MovementSummary } from "@rita/contracts";
+import type { MovementSummary, VisibilityFilter } from "@rita/contracts";
 
 import { ApiError, fetchMovementSummary } from "../../infra/api";
 import { useMovementSummary } from "./useMovementSummary";
@@ -59,7 +59,32 @@ describe("useMovementSummary", () => {
     if (state.status === "success") {
       expect(state.data.kpis.balance).toBe(1500);
     }
-    expect(fetchMovementSummaryMock).toHaveBeenCalledWith("default");
+    expect(fetchMovementSummaryMock).toHaveBeenCalledWith("default", "all");
+  });
+
+  it("refetches the summary when the visibility filter changes", async () => {
+    fetchMovementSummaryMock.mockResolvedValue(summary);
+
+    const { result, rerender } = renderHook(
+      ({ visibility }: { visibility: VisibilityFilter }) =>
+        useMovementSummary("default", visibility),
+      { initialProps: { visibility: "all" } },
+    );
+
+    await waitFor(() => expect(result.current.status).toBe("success"));
+    expect(fetchMovementSummaryMock).toHaveBeenCalledWith("default", "all");
+
+    rerender({ visibility: "shared" });
+
+    await waitFor(() =>
+      expect(fetchMovementSummaryMock).toHaveBeenCalledWith(
+        "default",
+        "shared",
+      ),
+    );
+    await waitFor(() =>
+      expect(fetchMovementSummaryMock).toHaveBeenCalledTimes(2),
+    );
   });
 
   it("reports the ApiError when the request fails", async () => {
@@ -98,7 +123,7 @@ describe("useMovementSummary", () => {
     fetchMovementSummaryMock.mockResolvedValue(summary);
 
     const { result, rerender } = renderHook(
-      ({ token }) => useMovementSummary("default", token),
+      ({ token }) => useMovementSummary("default", "all", token),
       { initialProps: { token: 0 } },
     );
 

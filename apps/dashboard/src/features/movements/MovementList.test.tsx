@@ -129,13 +129,13 @@ describe("MovementList", () => {
     await waitFor(() =>
       expect(fetchMovementsMock).toHaveBeenLastCalledWith("default", {
         type: "EXPENSE",
-      }),
+      }, "all"),
     );
 
     await user.click(screen.getByRole("button", { name: /limpiar/i }));
 
     await waitFor(() =>
-      expect(fetchMovementsMock).toHaveBeenLastCalledWith("default", {}),
+      expect(fetchMovementsMock).toHaveBeenLastCalledWith("default", {}, "all"),
     );
   });
 

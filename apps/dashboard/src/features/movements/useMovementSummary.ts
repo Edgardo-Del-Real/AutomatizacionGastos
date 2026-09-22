@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 
-import type { MovementSummary } from "@rita/contracts";
+import type { MovementSummary, VisibilityFilter } from "@rita/contracts";
 
 import { ApiError, fetchMovementSummary } from "../../infra/api";
 import type { AsyncState } from "./asyncState";
@@ -11,6 +11,7 @@ export type MovementSummaryState = AsyncState<MovementSummary> & {
 
 export function useMovementSummary(
   ownerId: string,
+  visibility: VisibilityFilter = "all",
   refreshToken?: number,
 ): MovementSummaryState {
   const [state, setState] = useState<AsyncState<MovementSummary>>({
@@ -21,7 +22,7 @@ export function useMovementSummary(
   useEffect(() => {
     let cancelled = false;
     setState({ status: "loading" });
-    fetchMovementSummary(ownerId)
+    fetchMovementSummary(ownerId, visibility)
       .then((data) => {
         if (!cancelled) setState({ status: "success", data });
       })
@@ -36,7 +37,7 @@ export function useMovementSummary(
     return () => {
       cancelled = true;
     };
-  }, [ownerId, attempt, refreshToken]);
+  }, [ownerId, visibility, attempt, refreshToken]);
 
   const retry = useCallback(() => setAttempt((n) => n + 1), []);
 

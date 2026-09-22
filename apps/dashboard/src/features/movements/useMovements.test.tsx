@@ -1,7 +1,7 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import type { Movement } from "@rita/contracts";
+import type { Movement, VisibilityFilter } from "@rita/contracts";
 
 import { ApiError, fetchMovements } from "../../infra/api";
 import type { MovementListFilters } from "../../infra/api";
@@ -63,7 +63,27 @@ describe("useMovements", () => {
     if (state.status === "success") {
       expect(state.data).toHaveLength(2);
     }
-    expect(fetchMovementsMock).toHaveBeenCalledWith("default", {});
+    expect(fetchMovementsMock).toHaveBeenCalledWith("default", {}, "all");
+  });
+
+  it("refetches when the visibility filter changes", async () => {
+    fetchMovementsMock.mockResolvedValue(movements);
+
+    const { result, rerender } = renderHook(
+      ({ visibility }: { visibility: VisibilityFilter }) =>
+        useMovements("default", {}, visibility),
+      { initialProps: { visibility: "all" } },
+    );
+
+    await waitFor(() => expect(result.current.status).toBe("success"));
+    expect(fetchMovementsMock).toHaveBeenCalledWith("default", {}, "all");
+
+    rerender({ visibility: "mine" });
+
+    await waitFor(() =>
+      expect(fetchMovementsMock).toHaveBeenCalledWith("default", {}, "mine"),
+    );
+    await waitFor(() => expect(fetchMovementsMock).toHaveBeenCalledTimes(2));
   });
 
   it("refetches with the new filters when the filter object changes", async () => {
@@ -76,13 +96,17 @@ describe("useMovements", () => {
     );
 
     await waitFor(() => expect(result.current.status).toBe("success"));
-    expect(fetchMovementsMock).toHaveBeenCalledWith("default", firstFilters);
+    expect(fetchMovementsMock).toHaveBeenCalledWith("default", firstFilters, "all");
 
     const secondFilters: MovementListFilters = { type: "EXPENSE", q: "taxi" };
     rerender({ filters: secondFilters });
 
     await waitFor(() =>
-      expect(fetchMovementsMock).toHaveBeenCalledWith("default", secondFilters),
+      expect(fetchMovementsMock).toHaveBeenCalledWith(
+        "default",
+        secondFilters,
+        "all",
+      ),
     );
   });
 
@@ -122,7 +146,7 @@ describe("useMovements", () => {
     fetchMovementsMock.mockResolvedValue(movements);
 
     const { result, rerender } = renderHook(
-      ({ token }) => useMovements("default", {}, token),
+      ({ token }) => useMovements("default", {}, "all", token),
       { initialProps: { token: 0 } },
     );
 

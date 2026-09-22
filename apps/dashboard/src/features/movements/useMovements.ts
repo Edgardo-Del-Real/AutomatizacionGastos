@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 
-import type { Movement } from "@rita/contracts";
+import type { Movement, VisibilityFilter } from "@rita/contracts";
 
 import { ApiError, fetchMovements } from "../../infra/api";
 import type { MovementListFilters } from "../../infra/api";
@@ -11,6 +11,7 @@ export type MovementsState = AsyncState<Movement[]> & { retry: () => void };
 export function useMovements(
   ownerId: string,
   filters: MovementListFilters = {},
+  visibility: VisibilityFilter = "all",
   refreshToken?: number,
 ): MovementsState {
   const [state, setState] = useState<AsyncState<Movement[]>>({ status: "idle" });
@@ -23,7 +24,7 @@ export function useMovements(
   useEffect(() => {
     let cancelled = false;
     setState({ status: "loading" });
-    fetchMovements(ownerId, filters)
+    fetchMovements(ownerId, filters, visibility)
       .then((data) => {
         if (!cancelled) setState({ status: "success", data });
       })
@@ -38,7 +39,7 @@ export function useMovements(
     return () => {
       cancelled = true;
     };
-  }, [ownerId, attempt, filtersKey, refreshToken]);
+  }, [ownerId, attempt, filtersKey, visibility, refreshToken]);
 
   const retry = useCallback(() => setAttempt((n) => n + 1), []);
 

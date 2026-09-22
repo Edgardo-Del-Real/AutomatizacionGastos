@@ -31,7 +31,7 @@ export default function App() {
 
   const [activeSection, setActiveSection] =
     useState<DashboardSection>("kpis");
-  const summaryState = useMovementSummary(OWNER_ID, refreshKey);
+  const summaryState = useMovementSummary(OWNER_ID, "all", refreshKey);
 
   const changeSection = useCallback((next: DashboardSection) => {
     setActiveSection(next);

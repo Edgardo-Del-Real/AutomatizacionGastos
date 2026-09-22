@@ -30,7 +30,7 @@ type MovementListProps = {
 
 export function MovementList({ refreshToken, onMutated }: MovementListProps) {
   const [filters, setFilters] = useState<MovementListFilters>({});
-  const state = useMovements(OWNER_ID, filters, refreshToken);
+  const state = useMovements(OWNER_ID, filters, "all", refreshToken);
   const { removeMovement, deleteError, busy } = useMovementMutations(onMutated);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [confirmingId, setConfirmingId] = useState<string | null>(null);

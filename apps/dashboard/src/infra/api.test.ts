@@ -130,17 +130,27 @@ describe("fetchHouseholdMembers", () => {
 });
 
 describe("fetchMovementSummary", () => {
-  it("resolves validated summary data for the owner", async () => {
+  it("resolves validated summary data for the owner with default visibility all", async () => {
     fetchMock.mockResolvedValue(jsonResponse(validSummary));
 
     const summary = await fetchMovementSummary("default");
 
     expect(fetchMock).toHaveBeenCalledWith(
-      "/api/movements/summary?ownerId=default",
+      "/api/movements/summary?ownerId=default&visibility=all",
     );
     expect(summary.kpis.balance).toBe(1500);
     expect(summary.mom.months).toHaveLength(2);
     expect(summary.daily[0]).toMatchObject({ day: "2026-07-01", balance: 50 });
+  });
+
+  it("sends the requested visibility filter on the summary request", async () => {
+    fetchMock.mockResolvedValue(jsonResponse(validSummary));
+
+    await fetchMovementSummary("default", "shared");
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/movements/summary?ownerId=default&visibility=shared",
+    );
   });
 
   it("throws ApiError validation when kpis is missing", async () => {
@@ -174,12 +184,14 @@ describe("fetchMovementSummary", () => {
 });
 
 describe("fetchMovements", () => {
-  it("resolves validated movements for the owner with no filters", async () => {
+  it("resolves validated movements for the owner with default visibility all", async () => {
     fetchMock.mockResolvedValue(jsonResponse(validMovements));
 
     const movements = await fetchMovements("acme");
 
-    expect(fetchMock).toHaveBeenCalledWith("/api/movements?ownerId=acme");
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/movements?ownerId=acme&visibility=all",
+    );
     expect(movements).toHaveLength(2);
     expect(movements[0]).toMatchObject({
       id: "m1",
@@ -190,7 +202,17 @@ describe("fetchMovements", () => {
     expect(movements[0]?.occurredAt).toEqual(new Date("2026-08-10T12:00:00Z"));
   });
 
-  it("builds query params from all active filters", async () => {
+  it("sends the requested visibility filter on the list request", async () => {
+    fetchMock.mockResolvedValue(jsonResponse(validMovements));
+
+    await fetchMovements("default", {}, "mine");
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/movements?ownerId=default&visibility=mine",
+    );
+  });
+
+  it("builds query params from all active filters including visibility", async () => {
     fetchMock.mockResolvedValue(jsonResponse(validMovements));
 
     await fetchMovements("default", {
@@ -201,9 +223,10 @@ describe("fetchMovements", () => {
       q: "julio",
     });
 
-    // URLSearchParams preserves insertion order: ownerId first, then filters.
+    // URLSearchParams preserves insertion order: ownerId first, then filters,
+    // then the visibility filter.
     expect(fetchMock).toHaveBeenCalledWith(
-      "/api/movements?ownerId=default&type=INCOME&from=2026-08-01&to=2026-08-31&category=sueldo&q=julio",
+      "/api/movements?ownerId=default&type=INCOME&from=2026-08-01&to=2026-08-31&category=sueldo&q=julio&visibility=all",
     );
   });
 
@@ -212,7 +235,9 @@ describe("fetchMovements", () => {
 
     await fetchMovements("default", { q: "" });
 
-    expect(fetchMock).toHaveBeenCalledWith("/api/movements?ownerId=default");
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/movements?ownerId=default&visibility=all",
+    );
   });
 
   it("throws ApiError validation when a movement is wrong-typed", async () => {

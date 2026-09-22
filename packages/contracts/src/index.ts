@@ -45,7 +45,21 @@ export const movementTypeSchema = z.enum(["EXPENSE", "INCOME"]);
 
 export type MovementType = z.infer<typeof movementTypeSchema>;
 
-export const movementSchema = expenseSchema.extend({ type: movementTypeSchema });
+export const movementVisibilitySchema = z.enum(["INDIVIDUAL", "SHARED"]);
+
+export type MovementVisibility = z.infer<typeof movementVisibilitySchema>;
+
+export const visibilityFilterSchema = z.enum(["mine", "shared", "all"]);
+
+export type VisibilityFilter = z.infer<typeof visibilityFilterSchema>;
+
+export const movementSchema = expenseSchema.extend({
+  type: movementTypeSchema,
+  // Additive contract (AD5): visibility/registrantId are carried when present;
+  // existing consumers keep parsing movements without them.
+  visibility: movementVisibilitySchema.optional(),
+  registrantId: z.string().optional(),
+});
 
 export type Movement = z.infer<typeof movementSchema>;
 
@@ -60,9 +74,24 @@ export const movementFiltersSchema = z.object({
   to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
   category: z.string().min(1).optional(),
   q: z.string().min(1).optional(),
+  visibility: visibilityFilterSchema.optional(),
 });
 
 export type MovementFilters = z.infer<typeof movementFiltersSchema>;
+
+export const householdMemberSchema = z
+  .object({
+    ownerId: z.string().min(1),
+    name: z.string().min(1),
+  })
+  // Strict: the wire contract never carries chatIds (household-identity spec).
+  .strict();
+
+export type HouseholdMember = z.infer<typeof householdMemberSchema>;
+
+export const householdMembersSchema = z.array(householdMemberSchema).min(1);
+
+export type HouseholdMembers = z.infer<typeof householdMembersSchema>;
 
 export const createMovementSchema = createExpenseSchema.extend({
   type: movementTypeSchema.optional(),

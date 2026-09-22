@@ -2,11 +2,15 @@ import { describe, expect, it } from "vitest";
 import {
   createMovementSchema,
   expenseSchema,
+  householdMemberSchema,
+  householdMembersSchema,
   listMovementsSchema,
   movementFiltersSchema,
   movementSchema,
   movementSummarySchema,
   movementTypeSchema,
+  movementVisibilitySchema,
+  visibilityFilterSchema,
 } from "./index";
 
 const movementPayload = {
@@ -25,6 +29,31 @@ describe("movementTypeSchema", () => {
   it("accepts INCOME and EXPENSE", () => {
     expect(movementTypeSchema.parse("INCOME")).toBe("INCOME");
     expect(movementTypeSchema.parse("EXPENSE")).toBe("EXPENSE");
+  });
+});
+
+describe("movementVisibilitySchema", () => {
+  it("accepts INDIVIDUAL and SHARED", () => {
+    expect(movementVisibilitySchema.parse("INDIVIDUAL")).toBe("INDIVIDUAL");
+    expect(movementVisibilitySchema.parse("SHARED")).toBe("SHARED");
+  });
+
+  it("rejects an unknown visibility value", () => {
+    const result = movementVisibilitySchema.safeParse("foo");
+    expect(result.success).toBe(false);
+  });
+});
+
+describe("visibilityFilterSchema", () => {
+  it("accepts mine, shared and all", () => {
+    expect(visibilityFilterSchema.parse("mine")).toBe("mine");
+    expect(visibilityFilterSchema.parse("shared")).toBe("shared");
+    expect(visibilityFilterSchema.parse("all")).toBe("all");
+  });
+
+  it("rejects an unknown visibility filter", () => {
+    const result = visibilityFilterSchema.safeParse("foo");
+    expect(result.success).toBe(false);
   });
 });
 
@@ -48,6 +77,50 @@ describe("movementSchema", () => {
   it("requires the type field", () => {
     const { type: _type, ...withoutType } = movementPayload;
     const result = movementSchema.safeParse(withoutType);
+    expect(result.success).toBe(false);
+  });
+
+  it("carries visibility and registrantId when present", () => {
+    const parsed = movementSchema.parse({
+      ...movementPayload,
+      visibility: "SHARED",
+      registrantId: "owner-1",
+    });
+    expect(parsed.visibility).toBe("SHARED");
+    expect(parsed.registrantId).toBe("owner-1");
+  });
+});
+
+describe("householdMemberSchema", () => {
+  it("parses an ownerId and name pair", () => {
+    const parsed = householdMemberSchema.parse({ ownerId: "rita", name: "Rita" });
+    expect(parsed.ownerId).toBe("rita");
+    expect(parsed.name).toBe("Rita");
+  });
+
+  it("rejects a member without a name", () => {
+    const result = householdMemberSchema.safeParse({ ownerId: "rita" });
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects a member carrying a chatId", () => {
+    const result = householdMemberSchema.safeParse({ ownerId: "rita", name: "Rita", chatId: 111 });
+    expect(result.success).toBe(false);
+  });
+});
+
+describe("householdMembersSchema", () => {
+  it("parses a member list", () => {
+    const parsed = householdMembersSchema.parse([
+      { ownerId: "rita", name: "Rita" },
+      { ownerId: "edgardo", name: "Edgardo" },
+    ]);
+    expect(parsed).toHaveLength(2);
+    expect(parsed[1]?.ownerId).toBe("edgardo");
+  });
+
+  it("rejects an empty member list", () => {
+    const result = householdMembersSchema.safeParse([]);
     expect(result.success).toBe(false);
   });
 });
@@ -93,6 +166,16 @@ describe("movementFiltersSchema", () => {
 
   it("rejects an invalid type value", () => {
     const result = movementFiltersSchema.safeParse({ ownerId: "owner-1", type: "SAVINGS" });
+    expect(result.success).toBe(false);
+  });
+
+  it("parses an optional visibility filter", () => {
+    const parsed = movementFiltersSchema.parse({ ownerId: "owner-1", visibility: "shared" });
+    expect(parsed.visibility).toBe("shared");
+  });
+
+  it("rejects an invalid visibility filter value", () => {
+    const result = movementFiltersSchema.safeParse({ ownerId: "owner-1", visibility: "foo" });
     expect(result.success).toBe(false);
   });
 });

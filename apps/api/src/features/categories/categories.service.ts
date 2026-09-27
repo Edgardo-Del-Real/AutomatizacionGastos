@@ -1,8 +1,10 @@
-import { NotFoundError, ValidationFailedError } from "../../infra/errors";
+import { NotFoundError, SavingsForbiddenError, ValidationFailedError } from "../../infra/errors";
 import { isUniqueConstraintViolation } from "../messages/message.repository";
 import type { CategoryRepository } from "./categories.repository";
-import type { CategoryEntity, CategoryWithKeywords } from "./categories.types";
+import type { CategoryEntity, CategoryType, CategoryWithKeywords } from "./categories.types";
 import { matchCategory, normalizeForMatch } from "./matcher";
+
+const AHORRO = "ahorro";
 
 export class CategoryService {
   constructor(private readonly repository: CategoryRepository) {}
@@ -12,9 +14,14 @@ export class CategoryService {
     if (trimmed.length === 0) {
       throw new ValidationFailedError("Category name must not be empty");
     }
+    // D9: "ahorro" is always the SAVINGS category — an upsert, never NORMAL,
+    // never a duplicate error.
+    if (normalizeForMatch(trimmed) === AHORRO) {
+      return this.ensureAhorro(ownerId);
+    }
     await this.assertNameAvailable(ownerId, trimmed);
     try {
-      return await this.repository.create(ownerId, trimmed);
+      return await this.repository.create(ownerId, trimmed, "NORMAL");
     } catch (error) {
       if (isUniqueConstraintViolation(error)) {
         throw new ValidationFailedError(`Category "${trimmed}" already exists`);
@@ -37,6 +44,15 @@ export class CategoryService {
     if (from.length === 0 || to.length === 0) {
       throw new ValidationFailedError("Both category names are required");
     }
+    // D9: the SAVINGS category cannot be renamed, and no category can be
+    // renamed TO ahorro (that name is reserved for the SAVINGS category).
+    const fromType = await this.categoryTypeOf(ownerId, from);
+    if (fromType === "SAVINGS") {
+      throw new SavingsForbiddenError(`Cannot rename the SAVINGS category "${from}"`);
+    }
+    if (normalizeForMatch(to) === AHORRO) {
+      throw new SavingsForbiddenError(`Cannot rename a category to "${AHORRO}"`);
+    }
     if (normalizeForMatch(from) !== normalizeForMatch(to)) {
       await this.assertNameAvailable(ownerId, to);
     }
@@ -50,6 +66,11 @@ export class CategoryService {
     }
     if (normalizeForMatch(trimmed) === "otro") {
       throw new ValidationFailedError(`Cannot delete the "otro" fallback category`);
+    }
+    // D9: the SAVINGS category cannot be deleted.
+    const type = await this.categoryTypeOf(ownerId, trimmed);
+    if (type === "SAVINGS") {
+      throw new SavingsForbiddenError(`Cannot delete the SAVINGS category "${trimmed}"`);
     }
     const deleted = await this.repository.delete(ownerId, trimmed);
     if (deleted === null) {
@@ -77,19 +98,43 @@ export class CategoryService {
     return this.repository.ensureOtro(ownerId);
   }
 
+  /** D9: upserts the SAVINGS-typed "ahorro" category for savings splits. */
+  async ensureAhorro(ownerId: string): Promise<CategoryEntity> {
+    return this.repository.ensureAhorro(ownerId);
+  }
+
   async matchNote(ownerId: string, note: string): Promise<string | null> {
     const rules = await this.repository.listKeywordRules(ownerId);
     return matchCategory(note, rules);
   }
 
-  /** Throws 422 when the name is not one of the owner's categories (D12). */
-  async assertOwnerCategory(ownerId: string, name: string): Promise<void> {
+  /**
+   * Throws 422 when the name is not one of the owner's categories (D12).
+   * With a movementType, also rejects the SAVINGS category on EXPENSE or
+   * INCOME movements (D9) — only SAVINGS movements may use "ahorro".
+   */
+  async assertOwnerCategory(
+    ownerId: string,
+    name: string,
+    movementType?: "EXPENSE" | "INCOME" | "SAVINGS",
+  ): Promise<void> {
     const trimmed = name.trim();
     const categories = await this.repository.listByOwner(ownerId);
     const normalized = normalizeForMatch(trimmed);
-    if (!categories.some((candidate) => normalizeForMatch(candidate.name) === normalized)) {
+    const category = categories.find((candidate) => normalizeForMatch(candidate.name) === normalized);
+    if (category === undefined) {
       throw new ValidationFailedError(`Category "${trimmed}" does not belong to the owner`);
     }
+    if (category.type === "SAVINGS" && (movementType === "EXPENSE" || movementType === "INCOME")) {
+      throw new SavingsForbiddenError(`The SAVINGS category "${trimmed}" is only valid for SAVINGS movements`);
+    }
+  }
+
+  private async categoryTypeOf(ownerId: string, name: string): Promise<CategoryType | null> {
+    const categories = await this.repository.listByOwner(ownerId);
+    const normalized = normalizeForMatch(name);
+    const found = categories.find((candidate) => normalizeForMatch(candidate.name) === normalized);
+    return found === undefined ? null : found.type;
   }
 
   private async assertNameAvailable(ownerId: string, name: string): Promise<void> {

@@ -170,6 +170,10 @@ export function otroDeleteForbiddenReply(): string {
   return 'No puedo borrar la categoría "otro": es el respaldo para los movimientos sin categoría.';
 }
 
+export function savingsForbiddenReply(): string {
+  return 'La categoría de ahorro no se puede borrar ni renombrar: guarda los ahorros automáticos.';
+}
+
 export function capabilitiesSummaryReply(): string {
   return (
     "Puedo:\n" +
@@ -288,6 +292,9 @@ export function categoryCommandReplyTemplate(result: ExecutionResult): string {
       if (result.error === "otro_forbidden") {
         return otroDeleteForbiddenReply();
       }
+      if (result.error === "savings_forbidden") {
+        return savingsForbiddenReply();
+      }
       return categoryErrorReply(result.message ?? "no se pudo borrar la categoría");
     case "rename_category":
       if (result.ok) {
@@ -298,6 +305,9 @@ export function categoryCommandReplyTemplate(result: ExecutionResult): string {
       }
       if (result.error === "duplicate") {
         return duplicateCategoryReply(result.new_name ?? "");
+      }
+      if (result.error === "savings_forbidden") {
+        return savingsForbiddenReply();
       }
       return categoryErrorReply(result.message ?? "no se pudo renombrar la categoría");
     case "capabilities":

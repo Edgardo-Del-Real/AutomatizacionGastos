@@ -1,4 +1,9 @@
-import { AppError, NotFoundError, ValidationFailedError } from "../../infra/errors";
+import {
+  AppError,
+  NotFoundError,
+  SavingsForbiddenError,
+  ValidationFailedError,
+} from "../../infra/errors";
 import type { CategoryService } from "../categories/categories.service";
 import type {
   BotIntent,
@@ -80,6 +85,13 @@ export class CategoryExecutor {
           message: error.message,
         });
       }
+      if (error instanceof SavingsForbiddenError) {
+        return this.result("delete_category", false, "deleted", {
+          category,
+          error: "savings_forbidden",
+          message: error.message,
+        });
+      }
       if (error instanceof ValidationFailedError) {
         return this.result("delete_category", false, "deleted", {
           category,
@@ -118,6 +130,14 @@ export class CategoryExecutor {
       }
       return this.result("rename_category", true, "renamed", { category: from, new_name: renamed.name });
     } catch (error) {
+      if (error instanceof SavingsForbiddenError) {
+        return this.result("rename_category", false, "renamed", {
+          category: from,
+          new_name: to,
+          error: "savings_forbidden",
+          message: error.message,
+        });
+      }
       if (error instanceof ValidationFailedError) {
         return this.result("rename_category", false, "renamed", {
           category: from,

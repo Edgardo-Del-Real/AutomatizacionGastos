@@ -20,7 +20,12 @@ export function normalizeForMatch(value: string): string {
 
 const WORD_CHARS = "a-z0-9";
 
-function boundaryRegex(keyword: string): RegExp {
+/**
+ * Word-boundary regex for a keyword on normalized text (diacritic-folded,
+ * lowercase). Exported so the savings slice reuses the same matching
+ * semantics for savings-rule keywords (D4).
+ */
+export function boundaryRegex(keyword: string): RegExp {
   return new RegExp(`(?:^|[^${WORD_CHARS}])${escapeRegExp(keyword)}(?![${WORD_CHARS}])`);
 }
 

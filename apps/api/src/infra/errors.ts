@@ -19,6 +19,18 @@ export class ValidationFailedError extends AppError {
   }
 }
 
+/**
+ * 422 discriminator for SAVINGS-category guard violations (D9): assigning
+ * "ahorro" to EXPENSE/INCOME movements, or deleting/renaming the SAVINGS
+ * category. Kept as a subclass so executors can route the exact machine code
+ * while the generic error handler still treats it as a validation failure.
+ */
+export class SavingsForbiddenError extends ValidationFailedError {
+  constructor(message: string) {
+    super(message);
+  }
+}
+
 export class NotFoundError extends AppError {
   readonly code = "NotFound";
   readonly statusCode = 404;

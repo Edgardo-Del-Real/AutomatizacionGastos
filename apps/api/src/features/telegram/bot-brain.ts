@@ -64,7 +64,12 @@ export type BotAction =
   | "asked_movement"
   | "created_reassigned";
 
-export type CategoryCommandErrorCode = "duplicate" | "not_found" | "otro_forbidden" | "unknown";
+export type CategoryCommandErrorCode =
+  | "duplicate"
+  | "not_found"
+  | "otro_forbidden"
+  | "savings_forbidden"
+  | "unknown";
 
 export type ExecutionResult = {
   intent: BotIntent;

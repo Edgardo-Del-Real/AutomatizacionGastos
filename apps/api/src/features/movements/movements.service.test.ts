@@ -21,6 +21,17 @@ function makeHarness() {
       createdAt: new Date("2026-09-01T12:00:00.000Z"),
       type: "EXPENSE" as const,
     })),
+    findById: vi.fn(async () => ({
+      id: "m1",
+      ownerId: "default",
+      amount: 100,
+      currency: "ARS",
+      category: null,
+      note: null,
+      occurredAt: new Date("2026-09-01T12:00:00.000Z"),
+      createdAt: new Date("2026-09-01T12:00:00.000Z"),
+      type: "EXPENSE" as const,
+    })),
   } as unknown as MovementRepository;
   const categoryService = {
     assertOwnerCategory: vi.fn(async () => undefined),
@@ -55,12 +66,32 @@ describe("MovementService.updateMovement", () => {
     expect(mockAssertOwnerCategory).not.toHaveBeenCalled();
   });
 
-  it("validates a string category against the owner's set (D12)", async () => {
+  it("validates a string category against the owner's set (D12) with the movement type (D9)", async () => {
     const { service, mockAssertOwnerCategory } = makeHarness();
 
     await service.updateMovement("default", "m1", { category: "Cafe" });
 
-    expect(mockAssertOwnerCategory).toHaveBeenCalledWith("default", "Cafe");
+    expect(mockAssertOwnerCategory).toHaveBeenCalledWith("default", "Cafe", "EXPENSE");
+  });
+
+  it("rejects assigning the SAVINGS category to an EXPENSE movement with 422", async () => {
+    const { service, mockAssertOwnerCategory } = makeHarness();
+    mockAssertOwnerCategory.mockRejectedValue(new ValidationFailedError("savings forbidden"));
+
+    await expect(service.updateMovement("default", "m1", { category: "ahorro" })).rejects.toBeInstanceOf(
+      ValidationFailedError,
+    );
+    expect(mockAssertOwnerCategory).toHaveBeenCalledWith("default", "ahorro", "EXPENSE");
+  });
+
+  it("throws NotFound when the movement does not exist before category validation", async () => {
+    const { service, mockUpdateById, mockAssertOwnerCategory } = makeHarness();
+    const repository = (service as unknown as { repository: { findById: ReturnType<typeof vi.fn> } }).repository;
+    repository.findById.mockResolvedValue(null);
+
+    await expect(service.updateMovement("default", "m1", { category: "Cafe" })).rejects.toBeInstanceOf(NotFoundError);
+    expect(mockAssertOwnerCategory).not.toHaveBeenCalled();
+    expect(mockUpdateById).not.toHaveBeenCalled();
   });
 
   it("rejects a category that is not the owner's with 422", async () => {

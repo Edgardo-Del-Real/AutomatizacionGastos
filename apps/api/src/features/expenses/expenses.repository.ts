@@ -32,6 +32,21 @@ export interface ExpenseRepository {
   listByOwner(ownerId: string): Promise<Expense[]>;
   deleteById(id: string, ownerId: string): Promise<boolean>;
   summarizeByMonth(ownerId: string, from: Date): Promise<ExpenseMonthlySummary[]>;
+  /**
+   * D7: splits a gross INCOME into a NET INCOME plus a SAVINGS movement in the
+   * ahorro category, both inside ONE transaction (a failing SAVINGS create
+   * rolls the net back too). Edge cases: pct=100 (net 0) → only the SAVINGS
+   * movement; savings rounds to 0 → only the whole INCOME.
+   */
+  createIncomeWithSavings(data: {
+    ownerId: string;
+    gross: number;
+    percent: number;
+    note: string | null;
+    occurredAt: Date;
+    category: string;
+    visibility: "INDIVIDUAL" | "SHARED";
+  }): Promise<{ net: Expense | null; savings: Expense | null }>;
 }
 
 export class PrismaExpenseRepository implements ExpenseRepository {
@@ -96,5 +111,59 @@ export class PrismaExpenseRepository implements ExpenseRepository {
       count: row.count,
       totalAmount: Number(row.totalAmount),
     }));
+  }
+
+  async createIncomeWithSavings(data: {
+    ownerId: string;
+    gross: number;
+    percent: number;
+    note: string | null;
+    occurredAt: Date;
+    category: string;
+    visibility: "INDIVIDUAL" | "SHARED";
+  }): Promise<{ net: Expense | null; savings: Expense | null }> {
+    // Decimal arithmetic keeps the invariant exact: savings = round2(gross*pct/100),
+    // net = gross - savings → net + savings === gross.
+    const gross = new Prisma.Decimal(data.gross);
+    const savingsAmount = gross.times(data.percent).div(100).toDecimalPlaces(2);
+    const netAmount = gross.minus(savingsAmount);
+
+    return this.prisma.$transaction(async (tx) => {
+      let net: Expense | null = null;
+      let savings: Expense | null = null;
+      if (netAmount.gt(0)) {
+        net = mapExpenseRow(
+          await tx.expense.create({
+            data: {
+              ownerId: data.ownerId,
+              amount: netAmount,
+              currency: "ARS",
+              category: data.category,
+              note: data.note,
+              occurredAt: data.occurredAt,
+              type: "INCOME",
+              visibility: data.visibility,
+            },
+          }),
+        );
+      }
+      if (savingsAmount.gt(0)) {
+        savings = mapExpenseRow(
+          await tx.expense.create({
+            data: {
+              ownerId: data.ownerId,
+              amount: savingsAmount,
+              currency: "ARS",
+              category: data.category,
+              note: data.note,
+              occurredAt: data.occurredAt,
+              type: "SAVINGS",
+              visibility: data.visibility,
+            },
+          }),
+        );
+      }
+      return { net, savings };
+    });
   }
 }

@@ -81,6 +81,7 @@ export interface MovementRepository {
   topByType(scope: ViewerScope, type: MovementType, limit: number, period: SummaryPeriod): Promise<Movement[]>;
   /** D3: current-calendar-month SAVINGS sum (ARS, viewer-scoped). */
   summarySavings(scope: ViewerScope, period: SummaryPeriod): Promise<number>;
+  findById(id: string, ownerId: string): Promise<Movement | null>;
   updateById(
     id: string,
     ownerId: string,
@@ -316,6 +317,12 @@ export class PrismaMovementRepository implements MovementRepository {
       WHERE ${where}
     `;
     return toNumber(rows[0]?.savings);
+  }
+
+  /** Resolves the movement for PATCH guards (D9): type decides whether the SAVINGS category is allowed. */
+  async findById(id: string, ownerId: string): Promise<Movement | null> {
+    const row = await this.prisma.expense.findFirst({ where: { id, ownerId } });
+    return row === null ? null : mapMovementRow({ ...row, registrantId: row.ownerId });
   }
 
   async updateById(

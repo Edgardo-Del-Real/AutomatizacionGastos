@@ -22,7 +22,9 @@ export class MovementService {
   /**
    * PATCH semantics (D12): only the present fields are written; null clears;
    * absent leaves unchanged; a string category must belong to the owner (422);
-   * `type`/`occurredAt` are excluded by the shared contract.
+   * `type`/`occurredAt` are excluded by the shared contract. The movement's own
+   * type feeds the guard (D9): the SAVINGS category is rejected on EXPENSE and
+   * INCOME movements.
    */
   async updateMovement(ownerId: string, id: string, patch: unknown): Promise<Movement> {
     const parsed = updateMovementSchema.safeParse(patch);
@@ -30,7 +32,11 @@ export class MovementService {
       throw new ValidationFailedError("Invalid movement patch", parsed.error.issues);
     }
     if (parsed.data.category !== undefined && parsed.data.category !== null) {
-      await this.categoryService.assertOwnerCategory(ownerId, parsed.data.category);
+      const movement = await this.repository.findById(id, ownerId);
+      if (movement === null) {
+        throw new NotFoundError(`Movement ${id} not found`);
+      }
+      await this.categoryService.assertOwnerCategory(ownerId, parsed.data.category, movement.type);
     }
     const updated = await this.repository.updateById(id, ownerId, parsed.data);
     if (updated === null) {

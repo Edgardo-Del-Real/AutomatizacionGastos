@@ -49,10 +49,13 @@ export class MovementService {
   async getSummary(scope: ViewerScope, from?: string, to?: string): Promise<MovementSummary> {
     const period: SummaryPeriod = { from, to };
     const thisMonthPeriod = currentMonthPeriod();
-    const [kpis, thisMonthKpis, months, daily, categories, topExpenses, topIncome] =
+    const [kpis, thisMonthKpis, savings, months, daily, categories, topExpenses, topIncome] =
       await Promise.all([
         this.repository.summaryKpis(scope, period),
         this.repository.summaryKpis(scope, thisMonthPeriod),
+        // D3: kpis.savings is the current-calendar-month SAVINGS sum (the
+        // period-scoped KPIs exclude SAVINGS entirely).
+        this.repository.summarySavings(scope, thisMonthPeriod),
         this.repository.summaryMonths(scope),
         this.repository.summaryDaily(scope),
         this.repository.summaryCategories(scope, period),
@@ -69,7 +72,7 @@ export class MovementService {
       const bucket = monthsMap.get(month);
       const income = bucket?.income ?? 0;
       const expenses = bucket?.expenses ?? 0;
-      return { month, income, expenses, balance: income - expenses };
+      return { month, income, expenses, balance: income - expenses, savings: bucket?.savings ?? 0 };
     });
 
     const dailyMap = new Map(daily.map((d) => [d.day, d]));
@@ -93,6 +96,7 @@ export class MovementService {
         income: kpis.income,
         expenses: kpis.expenses,
         balance,
+        savings,
         avgPerMonth,
         avgPerMovement,
         maxAmount: kpis.maxAmount,

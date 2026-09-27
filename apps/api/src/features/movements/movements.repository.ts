@@ -64,6 +64,14 @@ function periodConditions(period: SummaryPeriod): Prisma.Sql[] {
   return conditions;
 }
 
+/**
+ * D1 — the ONE SAVINGS-exclusion surface: every aggregate that must never
+ * count savings (summaryKpis, summaryDaily, summaryCategories) composes this
+ * fragment. CASE sums would exclude SAVINGS implicitly, but COUNT, MAX,
+ * monthsWithData and the categories GROUP BY would leak the rows.
+ */
+const SAVINGS_EXCLUDED = Prisma.sql`"type" <> 'SAVINGS'::"MovementType"`;
+
 export interface MovementRepository {
   listByOwner(scope: ViewerScope, filters: MovementListFilters): Promise<Movement[]>;
   summaryKpis(scope: ViewerScope, period: SummaryPeriod): Promise<KpiTotals>;
@@ -71,6 +79,8 @@ export interface MovementRepository {
   summaryDaily(scope: ViewerScope): Promise<DayBucket[]>;
   summaryCategories(scope: ViewerScope, period: SummaryPeriod): Promise<CategoryBucket[]>;
   topByType(scope: ViewerScope, type: MovementType, limit: number, period: SummaryPeriod): Promise<Movement[]>;
+  /** D3: current-calendar-month SAVINGS sum (ARS, viewer-scoped). */
+  summarySavings(scope: ViewerScope, period: SummaryPeriod): Promise<number>;
   updateById(
     id: string,
     ownerId: string,
@@ -142,6 +152,7 @@ export class PrismaMovementRepository implements MovementRepository {
     const conditions: Prisma.Sql[] = [
       this.viewerPredicate(scope),
       Prisma.sql`"currency" = 'ARS'`,
+      SAVINGS_EXCLUDED,
       ...periodConditions(period),
     ];
     const where = Prisma.join(conditions, " AND ");
@@ -184,13 +195,15 @@ export class PrismaMovementRepository implements MovementRepository {
       month: string;
       income: DecimalLike;
       expenses: DecimalLike;
+      savings: DecimalLike;
     };
     const rows = await this.prisma.$queryRaw<MonthRow[]>`
       SELECT
         to_char(date_trunc('month',
           "occurredAt" AT TIME ZONE 'UTC' AT TIME ZONE ${BA_TIMEZONE}), 'YYYY-MM') AS "month",
         COALESCE(SUM(CASE WHEN "type" = 'INCOME'::"MovementType" THEN "amount" ELSE 0 END), 0) AS "income",
-        COALESCE(SUM(CASE WHEN "type" = 'EXPENSE'::"MovementType" THEN "amount" ELSE 0 END), 0) AS "expenses"
+        COALESCE(SUM(CASE WHEN "type" = 'EXPENSE'::"MovementType" THEN "amount" ELSE 0 END), 0) AS "expenses",
+        COALESCE(SUM(CASE WHEN "type" = 'SAVINGS'::"MovementType" THEN "amount" ELSE 0 END), 0) AS "savings"
       FROM "Expense"
       WHERE ${where}
       GROUP BY 1
@@ -200,6 +213,7 @@ export class PrismaMovementRepository implements MovementRepository {
       month: row.month,
       income: toNumber(row.income),
       expenses: toNumber(row.expenses),
+      savings: toNumber(row.savings),
     }));
   }
 
@@ -207,6 +221,7 @@ export class PrismaMovementRepository implements MovementRepository {
     const conditions: Prisma.Sql[] = [
       this.viewerPredicate(scope),
       Prisma.sql`"currency" = 'ARS'`,
+      SAVINGS_EXCLUDED,
       Prisma.sql`("occurredAt" AT TIME ZONE 'UTC' AT TIME ZONE ${BA_TIMEZONE})
         >= date_trunc('day', now() AT TIME ZONE ${BA_TIMEZONE}) - interval '29 days'`,
     ];
@@ -238,6 +253,7 @@ export class PrismaMovementRepository implements MovementRepository {
     const conditions: Prisma.Sql[] = [
       this.viewerPredicate(scope),
       Prisma.sql`"currency" = 'ARS'`,
+      SAVINGS_EXCLUDED,
       ...periodConditions(period),
     ];
     const where = Prisma.join(conditions, " AND ");
@@ -284,6 +300,22 @@ export class PrismaMovementRepository implements MovementRepository {
       LIMIT ${limit}
     `;
     return rows.map(mapMovementRow);
+  }
+
+  async summarySavings(scope: ViewerScope, period: SummaryPeriod): Promise<number> {
+    const conditions: Prisma.Sql[] = [
+      this.viewerPredicate(scope),
+      Prisma.sql`"currency" = 'ARS'`,
+      Prisma.sql`"type" = 'SAVINGS'::"MovementType"`,
+      ...periodConditions(period),
+    ];
+    const where = Prisma.join(conditions, " AND ");
+    const rows = await this.prisma.$queryRaw<{ savings: DecimalLike }[]>`
+      SELECT COALESCE(SUM("amount"), 0) AS "savings"
+      FROM "Expense"
+      WHERE ${where}
+    `;
+    return toNumber(rows[0]?.savings);
   }
 
   async updateById(

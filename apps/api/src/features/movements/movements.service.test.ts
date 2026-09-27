@@ -140,6 +140,7 @@ describe("MovementService.getSummary", () => {
       summaryDaily: vi.fn(async () => []),
       summaryCategories: vi.fn(async () => []),
       topByType: vi.fn(async () => []),
+      summarySavings: vi.fn(async () => 0),
     } as unknown as MovementRepository;
     const service = new MovementService(repository, {} as CategoryService);
     return {
@@ -149,11 +150,12 @@ describe("MovementService.getSummary", () => {
       summaryDaily: vi.mocked(repository.summaryDaily),
       summaryCategories: vi.mocked(repository.summaryCategories),
       topByType: vi.mocked(repository.topByType),
+      summarySavings: vi.mocked(repository.summarySavings),
     };
   }
 
   it("threads the viewer scope into every repository feed", async () => {
-    const { service, summaryKpis, summaryMonths, summaryDaily, summaryCategories, topByType } =
+    const { service, summaryKpis, summaryMonths, summaryDaily, summaryCategories, topByType, summarySavings } =
       makeSummaryHarness();
     summaryKpis.mockResolvedValue({
       income: 3000,
@@ -174,6 +176,7 @@ describe("MovementService.getSummary", () => {
 
     expect(summaryKpis).toHaveBeenNthCalledWith(1, ritaScope, { from: undefined, to: undefined });
     expect(summaryKpis).toHaveBeenNthCalledWith(2, ritaScope, expect.any(Object));
+    expect(summarySavings).toHaveBeenCalledWith(ritaScope, expect.any(Object));
     expect(summaryMonths).toHaveBeenCalledWith(ritaScope);
     expect(summaryDaily).toHaveBeenCalledWith(ritaScope);
     expect(summaryCategories).toHaveBeenCalledWith(ritaScope, { from: undefined, to: undefined });
@@ -203,6 +206,7 @@ describe("MovementService.getSummary", () => {
     expect(summaryKpis).toHaveBeenCalledTimes(2);
     expect(summary.kpis.count).toBe(3);
     expect(summary.kpis.countThisMonth).toBe(2);
+    expect(summary.kpis.savings).toBe(0);
 
     // The second call is scoped to the current Buenos Aires month: from the 1st
     // to the last day of that month, derived from the month key in `from`.

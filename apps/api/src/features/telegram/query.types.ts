@@ -12,7 +12,7 @@ export type RecentMovementResult = {
   category: string | null;
   note: string | null;
   date: string;
-  type: "EXPENSE" | "INCOME";
+  type: "EXPENSE" | "INCOME" | "SAVINGS";
 };
 
 export type RecentQueryResult = {

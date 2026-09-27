@@ -39,6 +39,7 @@ export type MonthBucket = {
   month: string;
   income: number;
   expenses: number;
+  savings: number;
 };
 
 export type DayBucket = {

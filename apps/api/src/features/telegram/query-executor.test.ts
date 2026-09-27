@@ -51,8 +51,8 @@ describe("QueryExecutor.execute", () => {
   it("returns the owner categories with their keywords", async () => {
     const { executor, mockListCategories } = makeHarness();
     mockListCategories.mockResolvedValue([
-      { id: "c1", ownerId, name: "Cafe", createdAt: new Date(), keywords: ["cafe", "cafeteria"] },
-      { id: "c2", ownerId, name: "otro", createdAt: new Date(), keywords: [] },
+      { id: "c1", ownerId, name: "Cafe", type: "NORMAL", createdAt: new Date(), keywords: ["cafe", "cafeteria"] },
+      { id: "c2", ownerId, name: "otro", type: "NORMAL", createdAt: new Date(), keywords: [] },
     ]);
 
     const result = await executor.execute(scope, "categories");
@@ -111,13 +111,14 @@ describe("QueryExecutor.execute", () => {
         income: 5000,
         expenses: 2000,
         balance: 3000,
+        savings: 0,
         avgPerMonth: 1500,
         avgPerMovement: 500,
         maxAmount: 2000,
         count: 7,
         countThisMonth: 2,
       },
-      mom: { months: [{ month: "2026-09", income: 1000, expenses: 500, balance: 500 }] },
+      mom: { months: [{ month: "2026-09", income: 1000, expenses: 500, balance: 500, savings: 0 }] },
       daily: [],
       categories: [],
       top: { expenses: [], income: [] },
@@ -141,6 +142,7 @@ describe("QueryExecutor.execute", () => {
         income: 5000,
         expenses: 2000,
         balance: 3000,
+        savings: 0,
         avgPerMonth: 1500,
         avgPerMovement: 500,
         maxAmount: 2000,
@@ -149,8 +151,8 @@ describe("QueryExecutor.execute", () => {
       },
       mom: {
         months: [
-          { month: "2026-08", income: 1500, expenses: 800, balance: 700 },
-          { month: "2026-09", income: 2500, expenses: 1200, balance: 1300 },
+          { month: "2026-08", income: 1500, expenses: 800, balance: 700, savings: 0 },
+          { month: "2026-09", income: 2500, expenses: 1200, balance: 1300, savings: 0 },
         ],
       },
       daily: [],
@@ -177,6 +179,7 @@ describe("QueryExecutor.execute", () => {
         income: 0,
         expenses: 0,
         balance: 0,
+        savings: 0,
         avgPerMonth: 0,
         avgPerMovement: 0,
         maxAmount: 0,

@@ -41,7 +41,7 @@ export const listExpensesSchema = z.array(expenseSchema);
 
 export type ListExpenses = z.infer<typeof listExpensesSchema>;
 
-export const movementTypeSchema = z.enum(["EXPENSE", "INCOME"]);
+export const movementTypeSchema = z.enum(["EXPENSE", "INCOME", "SAVINGS"]);
 
 export type MovementType = z.infer<typeof movementTypeSchema>;
 
@@ -122,11 +122,21 @@ export const categoryListSchema = z.array(ownerCategorySchema);
 
 export type CategoryList = z.infer<typeof categoryListSchema>;
 
+/** Savings-rule definition contract: 0 < percent <= 100 (savings capability). */
+export const savingsRuleSchema = z.object({
+  ownerId: z.string().min(1),
+  keyword: z.string().min(1),
+  percent: z.number().gt(0).lte(100),
+});
+
+export type SavingsRule = z.infer<typeof savingsRuleSchema>;
+
 export const movementSummarySchema = z.object({
   kpis: z.object({
     income: z.number(),
     expenses: z.number(),
     balance: z.number(),
+    savings: z.number(),
     avgPerMonth: z.number(),
     avgPerMovement: z.number(),
     maxAmount: z.number(),
@@ -140,6 +150,7 @@ export const movementSummarySchema = z.object({
         income: z.number(),
         expenses: z.number(),
         balance: z.number(),
+        savings: z.number(),
       }),
     ),
   }),

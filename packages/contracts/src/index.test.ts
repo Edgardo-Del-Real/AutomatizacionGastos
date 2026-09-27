@@ -10,6 +10,7 @@ import {
   movementSummarySchema,
   movementTypeSchema,
   movementVisibilitySchema,
+  savingsRuleSchema,
   visibilityFilterSchema,
 } from "./index";
 
@@ -26,9 +27,10 @@ const movementPayload = {
 } as const;
 
 describe("movementTypeSchema", () => {
-  it("accepts INCOME and EXPENSE", () => {
+  it("accepts INCOME, EXPENSE and SAVINGS", () => {
     expect(movementTypeSchema.parse("INCOME")).toBe("INCOME");
     expect(movementTypeSchema.parse("EXPENSE")).toBe("EXPENSE");
+    expect(movementTypeSchema.parse("SAVINGS")).toBe("SAVINGS");
   });
 });
 
@@ -69,8 +71,13 @@ describe("movementSchema", () => {
     expect(parsed.type).toBe("EXPENSE");
   });
 
+  it("parses a payload with type SAVINGS", () => {
+    const parsed = movementSchema.parse({ ...movementPayload, type: "SAVINGS" });
+    expect(parsed.type).toBe("SAVINGS");
+  });
+
   it("rejects an unknown movement type", () => {
-    const result = movementSchema.safeParse({ ...movementPayload, type: "SAVINGS" });
+    const result = movementSchema.safeParse({ ...movementPayload, type: "REFUND" });
     expect(result.success).toBe(false);
   });
 
@@ -166,8 +173,13 @@ describe("movementFiltersSchema", () => {
     expect(result.success).toBe(false);
   });
 
+  it("accepts SAVINGS in the type filter", () => {
+    const parsed = movementFiltersSchema.parse({ ownerId: "owner-1", type: "SAVINGS" });
+    expect(parsed.type).toBe("SAVINGS");
+  });
+
   it("rejects an invalid type value", () => {
-    const result = movementFiltersSchema.safeParse({ ownerId: "owner-1", type: "SAVINGS" });
+    const result = movementFiltersSchema.safeParse({ ownerId: "owner-1", type: "REFUND" });
     expect(result.success).toBe(false);
   });
 
@@ -187,6 +199,7 @@ const summaryPayload = {
     income: 50000,
     expenses: 12500,
     balance: 37500,
+    savings: 10000,
     avgPerMonth: 37500,
     avgPerMovement: 25000,
     maxAmount: 50000,
@@ -194,7 +207,7 @@ const summaryPayload = {
     countThisMonth: 1,
   },
   mom: {
-    months: [{ month: "2026-07", income: 0, expenses: 5000, balance: -5000 }],
+    months: [{ month: "2026-07", income: 0, expenses: 5000, balance: -5000, savings: 500 }],
   },
   daily: [{ day: "2026-08-01", income: 50000, expenses: 12500, balance: 37500 }],
   categories: [
@@ -216,19 +229,58 @@ describe("movementSummarySchema", () => {
   it("parses a full summary payload", () => {
     const parsed = movementSummarySchema.parse(summaryPayload);
     expect(parsed.kpis.balance).toBe(37500);
+    expect(parsed.kpis.savings).toBe(10000);
     expect(parsed.kpis.count).toBe(2);
     expect(parsed.kpis.countThisMonth).toBe(1);
     expect(parsed.mom.months[0]?.balance).toBe(-5000);
+    expect(parsed.mom.months[0]?.savings).toBe(500);
     expect(parsed.daily[0]?.day).toBe("2026-08-01");
     expect(parsed.categories[0]?.incomePercent).toBe(100);
     expect(parsed.top.income[0]?.type).toBe("INCOME");
     expect(parsed.top.expenses[0]?.type).toBe("EXPENSE");
   });
 
+  it("rejects a summary missing the kpis savings figure", () => {
+    const withoutSavings: Record<string, unknown> = JSON.parse(JSON.stringify(summaryPayload));
+    delete (withoutSavings.kpis as Record<string, unknown>).savings;
+    const result = movementSummarySchema.safeParse(withoutSavings);
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects a summary missing the per-month savings figure", () => {
+    const withoutMonthSavings: Record<string, unknown> = JSON.parse(JSON.stringify(summaryPayload));
+    const months = withoutMonthSavings.mom as { months: Record<string, unknown>[] };
+    delete months.months[0]?.savings;
+    const result = movementSummarySchema.safeParse(withoutMonthSavings);
+    expect(result.success).toBe(false);
+  });
+
   it("rejects a summary missing kpis", () => {
     const withoutKpis: Record<string, unknown> = { ...summaryPayload };
     delete withoutKpis.kpis;
     const result = movementSummarySchema.safeParse(withoutKpis);
+    expect(result.success).toBe(false);
+  });
+});
+
+describe("savingsRuleSchema", () => {
+  it("accepts a valid rule with ownerId, keyword and percent", () => {
+    const parsed = savingsRuleSchema.parse({ ownerId: "owner-1", keyword: "entrenuts", percent: 10 });
+    expect(parsed.percent).toBe(10);
+  });
+
+  it("accepts percent 100", () => {
+    const parsed = savingsRuleSchema.parse({ ownerId: "owner-1", keyword: "entrenuts", percent: 100 });
+    expect(parsed.percent).toBe(100);
+  });
+
+  it.each([0, -1, 101, 150])("rejects percent %s", (percent) => {
+    const result = savingsRuleSchema.safeParse({ ownerId: "owner-1", keyword: "entrenuts", percent });
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects a missing keyword", () => {
+    const result = savingsRuleSchema.safeParse({ ownerId: "owner-1", percent: 10 });
     expect(result.success).toBe(false);
   });
 });
@@ -251,11 +303,20 @@ describe("createMovementSchema", () => {
     expect(parsed.type).toBe("INCOME");
   });
 
+  it("accepts an explicit SAVINGS type", () => {
+    const parsed = createMovementSchema.parse({
+      amount: 1000,
+      occurredAt: "2026-08-01T12:00:00.000Z",
+      type: "SAVINGS",
+    });
+    expect(parsed.type).toBe("SAVINGS");
+  });
+
   it("rejects an invalid type value", () => {
     const result = createMovementSchema.safeParse({
       amount: 1000,
       occurredAt: "2026-08-01T12:00:00.000Z",
-      type: "SAVINGS",
+      type: "REFUND",
     });
     expect(result.success).toBe(false);
   });

@@ -10,11 +10,17 @@ datasource db {
 enum MovementType {
   EXPENSE
   INCOME
+  SAVINGS
 }
 
 enum MovementVisibility {
   INDIVIDUAL
   SHARED
+}
+
+enum CategoryType {
+  NORMAL
+  SAVINGS
 }
 
 model Expense {
@@ -48,10 +54,22 @@ model Category {
   id        String             @id @default(cuid())
   ownerId   String
   name      String
+  type      CategoryType       @default(NORMAL)
   createdAt DateTime           @default(now())
   keywords  CategoryKeyword[]
 
   @@unique([ownerId, name])
+  @@index([ownerId])
+}
+
+model SavingsRule {
+  id        String   @id @default(cuid())
+  ownerId   String
+  keyword   String
+  percent   Decimal  @db.Decimal(12, 2)
+  createdAt DateTime @default(now())
+
+  @@unique([ownerId, keyword])
   @@index([ownerId])
 }
 

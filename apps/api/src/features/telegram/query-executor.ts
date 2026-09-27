@@ -30,6 +30,8 @@ export class QueryExecutor {
         return this.balance(scope);
       case "month":
         return this.month(scope);
+      case "savings":
+        return this.savings(scope);
     }
   }
 
@@ -78,6 +80,16 @@ export class QueryExecutor {
       monthIncome: current?.income ?? 0,
       monthExpenses: current?.expenses ?? 0,
       monthCount: summary.kpis.countThisMonth,
+    };
+  }
+
+  /** D12: "cuánto ahorré este mes" — kpis.savings + the last mom month key. */
+  private async savings(scope: ViewerScope): Promise<QueryExecutionResult> {
+    const summary = await this.movementService.getSummary(scope);
+    return {
+      query_type: "savings",
+      month: summary.mom.months.at(-1)?.month ?? "",
+      savings: summary.kpis.savings,
     };
   }
 }

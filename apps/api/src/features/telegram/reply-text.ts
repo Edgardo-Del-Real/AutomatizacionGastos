@@ -27,6 +27,28 @@ export function successReply(amount: number, note: string | null, category: stri
   return `Registrado: ${formatARS(amount)}${notePart} — Categoría: ${category}`;
 }
 
+/** Split confirmation (D7): reports gross, net and the saved amount. */
+export function successSplitReply(gross: number, net: number, savings: number): string {
+  return `Registrado: ingreso neto ${formatARS(net)} de ${formatARS(gross)} — Ahorrado: ${formatARS(savings)} (categoría ahorro)`;
+}
+
+export function savingsRuleRedirectReply(): string {
+  return "Para definir un ahorro automático usá el comando: registrar ahorro: <palabra> al <X>% (por ejemplo: registrar ahorro: entrenuts al 10%).";
+}
+
+export function savingsRuleDefinedReply(keyword: string, percent: number): string {
+  return `Regla de ahorro guardada: "${keyword}" al ${percent}%.`;
+}
+
+export function savingsRuleInvalidReply(): string {
+  return "El porcentaje de ahorro debe ser mayor a 0 y hasta 100 (ej: al 10%). No guardé nada.";
+}
+
+export function savingsOverrideInvalidReply(percent?: number): string {
+  const value = percent === undefined ? "" : ` (${percent}%)`;
+  return `El porcentaje de ahorro${value} debe ser mayor a 0 y hasta 100. No registré nada.`;
+}
+
 export function helpReply(): string {
   return (
     "No entendí el mensaje. Enviá un monto con una nota, por ejemplo: $2500 supermercado.\n" +
@@ -109,7 +131,7 @@ export function recentQueryReply(movements: RecentMovementResult[]): string {
     return "Todavía no tenés movimientos registrados.";
   }
   const lines = movements.map((movement) => {
-    const kind = movement.type === "INCOME" ? "ingreso" : "gasto";
+    const kind = movement.type === "INCOME" ? "ingreso" : movement.type === "SAVINGS" ? "ahorro" : "gasto";
     const category = movement.category ?? "sin categoría";
     const note = movement.note !== null ? ` (${truncateNote(movement.note)})` : "";
     return `- ${formatDateShort(movement.date)} · ${kind} ${formatARS(movement.amount)} · ${category}${note}`;
@@ -124,6 +146,12 @@ export function balanceQueryReply(balance: number, income: number, expenses: num
 export function monthQueryReply(month: string, income: number, expenses: number, count: number): string {
   const label = formatMonthLabel(month);
   return `En ${label} ingresaste ${formatARS(income)} y gastaste ${formatARS(expenses)} (${count} movimientos).`;
+}
+
+/** D12: "cuánto ahorré este mes" from the executed summary. */
+export function savingsQueryReply(savings: number, month: string): string {
+  const label = formatMonthLabel(month);
+  return `En ${label} ahorraste ${formatARS(savings)}.`;
 }
 
 function formatMonthLabel(monthKey: string): string {
@@ -147,6 +175,8 @@ export function queryReplyTemplate(result: QueryExecutionResult): string {
       return balanceQueryReply(result.balance, result.income, result.expenses);
     case "month":
       return monthQueryReply(result.month, result.monthIncome, result.monthExpenses, result.monthCount);
+    case "savings":
+      return savingsQueryReply(result.savings, result.month);
   }
 }
 

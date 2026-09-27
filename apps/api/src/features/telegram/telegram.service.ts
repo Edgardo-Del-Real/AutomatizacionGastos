@@ -5,6 +5,8 @@ import type { CategoryWithKeywords } from "../categories/categories.types";
 import type { ExpenseService } from "../expenses/expenses.service";
 import type { HouseholdService } from "../household/household.service";
 import type { ViewerScope } from "../movements/movements.types";
+import type { SavingsOverride } from "../savings/savings.types";
+import type { SavingsRuleService } from "../savings/savings.service";
 import {
   classifyMovementType,
   extractNote,
@@ -29,7 +31,7 @@ import { MovementCorrector } from "./movement-corrector";
 import { QueryExecutor } from "./query-executor";
 import { deriveQueryType, type QueryExecutionResult } from "./query.types";
 import { parseCommand, type TelegramCommand } from "./telegram.commands";
-import { normalizeTelegramMessage, parseSharedPrefix } from "./telegram.parser";
+import { normalizeTelegramMessage, parseSavingsOverride, parseSharedPrefix } from "./telegram.parser";
 import {
   amountConfirmationAbandonedReply,
   amountConflictReply,
@@ -60,10 +62,15 @@ import {
   queryRedirectReply,
   queryReplyTemplate,
   questionDroppedReply,
+  savingsOverrideInvalidReply,
+  savingsRuleDefinedReply,
+  savingsRuleInvalidReply,
+  savingsRuleRedirectReply,
   setupDoneReply,
   setupQuestionReply,
   setupRetryReply,
   successReply,
+  successSplitReply,
 } from "./reply-text";
 
 export type ReplyPort = (text: string) => Promise<void>;
@@ -76,6 +83,8 @@ export type TelegramServiceDeps = {
   expenseService: ExpenseService;
   movementService: MovementService;
   categoryService: CategoryService;
+  /** D4: savings-rule slice for note matching, split resolution and rule definition. */
+  savingsService: SavingsRuleService;
   botStateRepository: BotStateRepository;
   /**
    * AD9 — the household registry replaces the single `ownerChatId`/`ownerId`:
@@ -98,14 +107,22 @@ const AWAITING_MOVEMENT_SELECTION = "awaiting_movement_selection";
  * Stored payload of an open amount-conflict question. Lives in
  * `BotState.pendingNote` (a String column) so it survives restarts. The
  * `shared` bit is persisted so a dialog-created registration keeps the
- * shared signal of the message that opened the question (AD6).
+ * shared signal of the message that opened the question (AD6); the savings
+ * `override` is persisted so a split applies when the question resolves (D6).
  */
+export const savingsOverrideSchema = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("none") }),
+  z.object({ kind: z.literal("disabled") }),
+  z.object({ kind: z.literal("percent"), percent: z.number().gt(0).lte(100) }),
+]);
+
 export const amountConfirmationPayloadSchema = z.object({
   body: z.string().min(1),
   note: z.string().nullable(),
   amounts: z.tuple([z.number().positive(), z.number().positive()]),
   category: z.string().min(1).nullable(),
   shared: z.boolean().default(false),
+  override: savingsOverrideSchema.default({ kind: "none" }),
 });
 
 export type AmountConfirmationPayload = z.infer<typeof amountConfirmationPayloadSchema>;
@@ -188,7 +205,19 @@ export class TelegramService {
 
     // AD6 — the `compartido:` prefix is parsed ONCE at arrival; the stripped
     // text flows to the brain/parser and the shared bit is threaded down.
-    const { text: stripped, shared: sharedByPrefix } = parseSharedPrefix(body);
+    const { text: sharedStripped, shared: sharedByPrefix } = parseSharedPrefix(body);
+
+    // D6 — the savings override ("sin ahorro" / "con X%") is parsed ONCE at
+    // arrival right after the shared prefix, stripped before the parser/brain,
+    // and persisted in the amount-confirmation payload. An invalid percent
+    // rejects the registration: nothing is stored and nothing is answered by
+    // the parser/brain.
+    const overrideResult = parseSavingsOverride(sharedStripped);
+    if (!overrideResult.ok) {
+      await this.safeReply(reply, savingsOverrideInvalidReply(overrideResult.percent));
+      return;
+    }
+    const { text: stripped, override } = overrideResult;
 
     const state = await this.deps.botStateRepository.get(ownerId);
 
@@ -198,19 +227,25 @@ export class TelegramService {
     }
 
     if (state?.state === AWAITING_CATEGORY || state?.state === AWAITING_AMOUNT_CONFIRMATION) {
-      await this.handleDialogMessage(state, stripped, ownerId, sharedByPrefix, reply);
+      await this.handleDialogMessage(state, stripped, ownerId, sharedByPrefix, override, reply);
       return;
     }
 
     if (state?.state === AWAITING_MOVEMENT_SELECTION) {
-      await this.handleMovementSelection(state, stripped, ownerId, sharedByPrefix, reply);
+      await this.handleMovementSelection(state, stripped, ownerId, sharedByPrefix, override, reply);
       return;
     }
 
-    await this.handleRegistration(stripped, ownerId, sharedByPrefix, reply);
+    await this.handleRegistration(stripped, ownerId, sharedByPrefix, override, reply);
   }
 
-  private async handleRegistration(body: string, ownerId: string, shared: boolean, reply?: ReplyPort): Promise<void> {
+  private async handleRegistration(
+    body: string,
+    ownerId: string,
+    shared: boolean,
+    override: SavingsOverride,
+    reply?: ReplyPort,
+  ): Promise<void> {
     const categories = await this.deps.categoryService.listCategories(ownerId);
 
     // The setup gate wins BEFORE any brain call: the brain never fires for
@@ -229,11 +264,11 @@ export class TelegramService {
     const envelope = await this.tryBrainInterpret(body);
     if (envelope === null) {
       // D5: interpret-null → full deterministic path, fixed replies, no reply call.
-      await this.deterministicRegistration(body, parseAmountAndNote(body), categories, ownerId, shared, reply);
+      await this.deterministicRegistration(body, parseAmountAndNote(body), categories, ownerId, shared, override, reply);
       return;
     }
 
-    await this.routeEnvelopeIntent(envelope, body, ownerId, shared, reply);
+    await this.routeEnvelopeIntent(envelope, body, ownerId, shared, override, reply);
   }
 
   private async sendRedirect(intent: ConversationEnvelope["intent"], fixed: string, reply?: ReplyPort): Promise<void> {
@@ -331,6 +366,7 @@ export class TelegramService {
     categories: CategoryWithKeywords[],
     ownerId: string,
     shared: boolean,
+    override: SavingsOverride,
     reply?: ReplyPort,
   ): Promise<void> {
     if (parsed === null) {
@@ -343,11 +379,11 @@ export class TelegramService {
 
     // A user-authored keyword rule beats any brain suggestion.
     if (matched !== null) {
-      await this.registerWithCategory(body, parsed.amount, parsed.note, matched, ownerId, shared, this.makeSender(false, reply));
+      await this.registerWithCategory(body, parsed.amount, parsed.note, matched, ownerId, shared, override, this.makeSender(false, reply));
       return;
     }
 
-    await this.registerOtroWithCorrection(body, parsed.amount, parsed.note, ownerId, shared, this.makeSender(false, reply));
+    await this.registerOtroWithCorrection(body, parsed.amount, parsed.note, ownerId, shared, override, this.makeSender(false, reply));
   }
 
   /** register_expense envelope: amount → note → category, then register. */
@@ -358,6 +394,7 @@ export class TelegramService {
     categories: CategoryWithKeywords[],
     ownerId: string,
     sharedByPrefix: boolean,
+    override: SavingsOverride,
     reply?: ReplyPort,
   ): Promise<void> {
     const send = this.makeSender(true, reply);
@@ -388,7 +425,7 @@ export class TelegramService {
       amount = brainAmount as number;
     } else {
       // Genuine disagreement: ask the owner, nothing registers silently.
-      await this.askAmountConfirmation(body, detAmount, brainAmount, parsed, envelope, categories, ownerId, shared, send);
+      await this.askAmountConfirmation(body, detAmount, brainAmount, parsed, envelope, categories, ownerId, shared, override, send);
       return;
     }
 
@@ -400,10 +437,10 @@ export class TelegramService {
     const matched = await this.deps.categoryService.matchNote(ownerId, note ?? body);
     const category = matched ?? this.resolveSuggestion(envelope.category, categories);
     if (category !== null) {
-      await this.registerWithCategory(body, amount, note, category, ownerId, shared, send);
+      await this.registerWithCategory(body, amount, note, category, ownerId, shared, override, send);
       return;
     }
-    await this.registerOtroWithCorrection(body, amount, note, ownerId, shared, send);
+    await this.registerOtroWithCorrection(body, amount, note, ownerId, shared, override, send);
   }
 
   /** Amounts differ: persist the question and ask; nothing registers silently. */
@@ -416,6 +453,7 @@ export class TelegramService {
     categories: CategoryWithKeywords[],
     ownerId: string,
     shared: boolean,
+    override: SavingsOverride,
     send: Sender,
   ): Promise<void> {
     const note = parsed !== null ? (parsed.note ?? envelope.note) : (envelope.note ?? extractNote(body));
@@ -425,6 +463,7 @@ export class TelegramService {
       amounts: [detAmount, brainAmount],
       category: this.resolveSuggestion(envelope.category, categories),
       shared,
+      override,
     };
     await this.deps.botStateRepository.set({
       ownerId,
@@ -443,6 +482,7 @@ export class TelegramService {
     body: string,
     ownerId: string,
     shared: boolean,
+    override: SavingsOverride,
     reply?: ReplyPort,
   ): Promise<void> {
     const send = this.makeSender(this.brainAvailable, reply);
@@ -460,7 +500,7 @@ export class TelegramService {
         { intent: "register_expense", ok: false, action: "none", amount: null, category: null, note: body },
         amountConfirmationAbandonedReply(),
       );
-      await this.handleRegistration(body, ownerId, shared, reply);
+      await this.handleRegistration(body, ownerId, shared, override, reply);
       return;
     }
 
@@ -481,16 +521,17 @@ export class TelegramService {
         { intent: "register_expense", ok: false, action: "none", amount: null, category: null, note: body },
         amountConfirmationAbandonedReply(),
       );
-      await this.handleRegistration(body, ownerId, shared, reply);
+      await this.handleRegistration(body, ownerId, shared, override, reply);
       return;
     }
 
-    // Register from the STORED context (payload.shared persists the bit, AD6);
-    // a creation failure leaves the question open.
+    // Register from the STORED context (payload.shared persists the bit, AD6;
+    // payload.override persists the savings override, D6); a creation failure
+    // leaves the question open.
     if (payload.category !== null) {
-      await this.registerWithCategory(payload.body, chosen, payload.note, payload.category, ownerId, payload.shared, send);
+      await this.registerWithCategory(payload.body, chosen, payload.note, payload.category, ownerId, payload.shared, payload.override, send);
     } else {
-      await this.registerOtroWithCorrection(payload.body, chosen, payload.note, ownerId, payload.shared, send);
+      await this.registerOtroWithCorrection(payload.body, chosen, payload.note, ownerId, payload.shared, payload.override, send);
     }
   }
 
@@ -618,6 +659,7 @@ export class TelegramService {
     body: string,
     ownerId: string,
     shared: boolean,
+    override: SavingsOverride,
     reply?: ReplyPort,
   ): Promise<void> {
     const send = this.makeSender(this.brainAvailable, reply);
@@ -654,7 +696,7 @@ export class TelegramService {
         { intent: "correct_category", ok: false, action: "none", amount: null, category: null, note: body },
         correctionAbandonedReply(),
       );
-      await this.handleRegistration(body, ownerId, shared, reply);
+      await this.handleRegistration(body, ownerId, shared, override, reply);
       return;
     }
 
@@ -722,20 +764,21 @@ export class TelegramService {
     body: string,
     ownerId: string,
     shared: boolean,
+    override: SavingsOverride,
     reply?: ReplyPort,
   ): Promise<void> {
     const context = this.buildInterpretContext(state);
     if (context === null) {
       // A corrupt amount-confirmation payload cannot be contextualized: today's
       // deterministic rules own the message.
-      await this.d6DialogFallback(state, body, ownerId, shared, reply);
+      await this.d6DialogFallback(state, body, ownerId, shared, override, reply);
       return;
     }
 
     const envelope = await this.tryBrainInterpret(body, context);
     if (envelope === null || envelope.dialog_action === "abandon") {
       // D1: brain-absent / brain-null / explicit abandon → D6 rules verbatim.
-      await this.d6DialogFallback(state, body, ownerId, shared, reply);
+      await this.d6DialogFallback(state, body, ownerId, shared, override, reply);
       return;
     }
 
@@ -747,7 +790,7 @@ export class TelegramService {
     }
 
     // dialog_action null → shared intent routing; the pending stays untouched.
-    await this.routeEnvelopeIntent(envelope, body, ownerId, shared, reply, { state });
+    await this.routeEnvelopeIntent(envelope, body, ownerId, shared, override, reply, { state });
   }
 
   /** D1: the single D6 fallback path, dispatching to today's verbatim handlers. */
@@ -756,13 +799,14 @@ export class TelegramService {
     body: string,
     ownerId: string,
     shared: boolean,
+    override: SavingsOverride,
     reply?: ReplyPort,
   ): Promise<void> {
     if (state.state === AWAITING_CATEGORY) {
-      await this.d6AwaitingCategory(state, body, ownerId, shared, reply);
+      await this.d6AwaitingCategory(state, body, ownerId, shared, override, reply);
       return;
     }
-    await this.d6AwaitingAmountConfirmation(state, body, ownerId, shared, reply);
+    await this.d6AwaitingAmountConfirmation(state, body, ownerId, shared, override, reply);
   }
 
   /**
@@ -909,12 +953,13 @@ export class TelegramService {
       return;
     }
 
-    // Register from the STORED context (payload.shared persists the bit, AD6);
-    // a creation failure leaves the question open.
+    // Register from the STORED context (payload.shared persists the bit, AD6;
+    // payload.override persists the savings override, D6); a creation failure
+    // leaves the question open.
     if (payload.category !== null) {
-      await this.registerWithCategory(payload.body, chosen, payload.note, payload.category, ownerId, payload.shared, send);
+      await this.registerWithCategory(payload.body, chosen, payload.note, payload.category, ownerId, payload.shared, payload.override, send);
     } else {
-      await this.registerOtroWithCorrection(payload.body, chosen, payload.note, ownerId, payload.shared, send);
+      await this.registerOtroWithCorrection(payload.body, chosen, payload.note, ownerId, payload.shared, payload.override, send);
     }
   }
 
@@ -929,6 +974,7 @@ export class TelegramService {
     body: string,
     ownerId: string,
     shared: boolean,
+    override: SavingsOverride,
     reply?: ReplyPort,
     dialog?: DialogContext,
   ): Promise<void> {
@@ -941,6 +987,10 @@ export class TelegramService {
         return;
       case "associate_keyword":
         await this.sendRedirect("associate_keyword", associateKeywordRedirectReply(), reply);
+        return;
+      case "create_savings_rule":
+        // D10: redirect only — the explicit command defines the rule.
+        await this.sendRedirect("create_savings_rule", savingsRuleRedirectReply(), reply);
         return;
       case "create_category":
       case "delete_category":
@@ -978,7 +1028,7 @@ export class TelegramService {
               : correctionAbandonedReply();
           await this.safeReply(reply, abandoned);
         }
-        await this.executeRegistration(body, parseAmountAndNote(body), envelope, await this.deps.categoryService.listCategories(ownerId), ownerId, shared, reply);
+        await this.executeRegistration(body, parseAmountAndNote(body), envelope, await this.deps.categoryService.listCategories(ownerId), ownerId, shared, override, reply);
         return;
     }
   }
@@ -1101,6 +1151,7 @@ export class TelegramService {
     body: string,
     ownerId: string,
     shared: boolean,
+    override: SavingsOverride,
     reply?: ReplyPort,
   ): Promise<void> {
     const payload = this.decodeMovementSelectionPayload(state.pendingNote);
@@ -1108,7 +1159,7 @@ export class TelegramService {
     if (payload === null) {
       await this.deps.botStateRepository.set({ ownerId, state: IDLE, pendingMovementId: null, pendingNote: null });
       await this.safeReply(reply, questionDroppedReply());
-      await this.handleRegistration(body, ownerId, shared, reply);
+      await this.handleRegistration(body, ownerId, shared, override, reply);
       return;
     }
 
@@ -1116,7 +1167,7 @@ export class TelegramService {
     if (picked === null) {
       await this.deps.botStateRepository.set({ ownerId, state: IDLE, pendingMovementId: null, pendingNote: null });
       await this.safeReply(reply, movementSelectionAbandonedReply());
-      await this.handleRegistration(body, ownerId, shared, reply);
+      await this.handleRegistration(body, ownerId, shared, override, reply);
       return;
     }
 
@@ -1241,9 +1292,31 @@ export class TelegramService {
         await this.safeReply(reply, setupQuestionReply());
         return;
       }
+
+      case "savings-rule": {
+        try {
+          await this.deps.savingsService.defineRule(ownerId, command.keyword, command.percent);
+        } catch (error) {
+          if (error instanceof ValidationFailedError) {
+            await this.safeReply(reply, savingsRuleInvalidReply());
+            return;
+          }
+          throw error;
+        }
+        await this.safeReply(reply, savingsRuleDefinedReply(command.keyword, command.percent));
+        return;
+      }
+
+      case "savings-rule-invalid": {
+        // D10: a recognized command with an out-of-range percent is rejected
+        // and nothing is stored.
+        await this.safeReply(reply, savingsRuleInvalidReply());
+        return;
+      }
     }
   }
 
+  /** D5: createMovement gains an explicit type — the tail classifies ONCE. */
   private async createMovement(
     body: string,
     amount: number,
@@ -1251,6 +1324,7 @@ export class TelegramService {
     category: string,
     ownerId: string,
     visibility: "INDIVIDUAL" | "SHARED",
+    type: "EXPENSE" | "INCOME" | "SAVINGS",
   ): Promise<{ id: string } | null> {
     try {
       return await this.deps.expenseService.createExpense(
@@ -1259,7 +1333,7 @@ export class TelegramService {
           currency: "ARS",
           note,
           occurredAt: new Date(),
-          type: classifyMovementType(body),
+          type,
           category,
         },
         ownerId,
@@ -1271,7 +1345,11 @@ export class TelegramService {
     }
   }
 
-  /** Shared tail: register with a resolved category, confirm, go idle. */
+  /**
+   * Shared tail: register with a resolved category, confirm, go idle. D5 — the
+   * movement type is classified ONCE; an INCOME with a matching savings rule
+   * (or an override) splits into net INCOME + SAVINGS in one transaction.
+   */
   private async registerWithCategory(
     body: string,
     amount: number,
@@ -1279,9 +1357,17 @@ export class TelegramService {
     category: string,
     ownerId: string,
     shared: boolean,
+    override: SavingsOverride,
     send: Sender,
   ): Promise<boolean> {
-    const movement = await this.createMovement(body, amount, note, category, ownerId, shared ? "SHARED" : "INDIVIDUAL");
+    const type = classifyMovementType(body);
+    if (type === "INCOME") {
+      const split = await this.deps.savingsService.resolveSplit(ownerId, note ?? body, override);
+      if (split.kind === "split") {
+        return this.registerIncomeSplit(body, amount, note, ownerId, shared, split.percent, send);
+      }
+    }
+    const movement = await this.createMovement(body, amount, note, category, ownerId, shared ? "SHARED" : "INDIVIDUAL", type);
     if (movement === null) {
       return false;
     }
@@ -1298,17 +1384,28 @@ export class TelegramService {
     return true;
   }
 
-  /** Shared tail: register in "otro", offer the category correction. */
+  /**
+   * Shared tail: register in "otro", offer the category correction. D5 — same
+   * single classification and split as the with-category tail.
+   */
   private async registerOtroWithCorrection(
     body: string,
     amount: number,
     note: string | null,
     ownerId: string,
     shared: boolean,
+    override: SavingsOverride,
     send: Sender,
   ): Promise<boolean> {
+    const type = classifyMovementType(body);
+    if (type === "INCOME") {
+      const split = await this.deps.savingsService.resolveSplit(ownerId, note ?? body, override);
+      if (split.kind === "split") {
+        return this.registerIncomeSplit(body, amount, note, ownerId, shared, split.percent, send);
+      }
+    }
     await this.deps.categoryService.ensureOtro(ownerId);
-    const movement = await this.createMovement(body, amount, note, "otro", ownerId, shared ? "SHARED" : "INDIVIDUAL");
+    const movement = await this.createMovement(body, amount, note, "otro", ownerId, shared ? "SHARED" : "INDIVIDUAL", type);
     if (movement === null) {
       return false;
     }
@@ -1325,6 +1422,59 @@ export class TelegramService {
     await send(
       { intent: "register_expense", ok: true, action: "asked_category", amount, category: "otro", note: displayNote },
       correctionOfferReply(amount, displayNote, "otro"),
+    );
+    return true;
+  }
+
+  /**
+   * D5/D7 — the savings split tail: ensure the SAVINGS "ahorro" category and
+   * persist net INCOME + SAVINGS in ONE transaction; the reply carries the
+   * executed gross/net/savings facts.
+   */
+  private async registerIncomeSplit(
+    body: string,
+    gross: number,
+    note: string | null,
+    ownerId: string,
+    shared: boolean,
+    percent: number,
+    send: Sender,
+  ): Promise<boolean> {
+    await this.deps.categoryService.ensureAhorro(ownerId);
+    const visibility = shared ? "SHARED" : "INDIVIDUAL";
+    const result = await this.deps.expenseService.createIncomeWithSavings({
+      ownerId,
+      gross,
+      percent,
+      note,
+      occurredAt: new Date(),
+      category: "ahorro",
+      visibility,
+    });
+    if (result.net === null && result.savings === null) {
+      return false;
+    }
+    const net = result.net?.amount ?? null;
+    const savings = result.savings?.amount ?? null;
+    await this.deps.botStateRepository.set({
+      ownerId,
+      state: IDLE,
+      pendingMovementId: null,
+      pendingNote: null,
+    });
+    await send(
+      {
+        intent: "register_expense",
+        ok: true,
+        action: "registered",
+        amount: net ?? savings,
+        category: "ahorro",
+        note,
+        gross_amount: gross,
+        net_amount: net,
+        savings_amount: savings,
+      },
+      successSplitReply(gross, net ?? 0, savings ?? 0),
     );
     return true;
   }

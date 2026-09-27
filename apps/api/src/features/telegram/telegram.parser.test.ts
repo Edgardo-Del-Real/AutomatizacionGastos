@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { normalizeTelegramMessage, parseSharedPrefix } from "./telegram.parser";
+import { normalizeTelegramMessage, parseSavingsOverride, parseSharedPrefix } from "./telegram.parser";
 import type { TelegramMessage } from "./telegram.types";
 
 const OWNER_ID = 123456789;
@@ -109,5 +109,51 @@ describe("parseSharedPrefix", () => {
 
   it("does not treat plain words starting with 'compartido' without the colon as a prefix", () => {
     expect(parseSharedPrefix("compartido el gasto")).toEqual({ text: "compartido el gasto", shared: false });
+  });
+});
+
+describe("parseSavingsOverride", () => {
+  it("detects 'sin ahorro' as disabled and strips the prefix, trimming the rest", () => {
+    expect(parseSavingsOverride("sin ahorro cobro sueldo de entrenuts 1000")).toEqual({
+      ok: true,
+      override: { kind: "disabled" },
+      text: "cobro sueldo de entrenuts 1000",
+    });
+    expect(parseSavingsOverride("SIN AHORRO: cobro sueldo 1000")).toEqual({
+      ok: true,
+      override: { kind: "disabled" },
+      text: "cobro sueldo 1000",
+    });
+  });
+
+  it("detects 'con X%' as a percent override and strips the prefix", () => {
+    expect(parseSavingsOverride("con 5% cobro sueldo de entrenuts 1000")).toEqual({
+      ok: true,
+      override: { kind: "percent", percent: 5 },
+      text: "cobro sueldo de entrenuts 1000",
+    });
+    expect(parseSavingsOverride("con 12,5% cobro 1000")).toEqual({
+      ok: true,
+      override: { kind: "percent", percent: 12.5 },
+      text: "cobro 1000",
+    });
+  });
+
+  it("rejects an invalid percent override with an error (0 < X <= 100)", () => {
+    expect(parseSavingsOverride("con 150% cobro sueldo de entrenuts 1000")).toEqual({
+      ok: false,
+      error: "invalid_percent",
+      percent: 150,
+    });
+    expect(parseSavingsOverride("con 0% cobro 1000")).toEqual({ ok: false, error: "invalid_percent", percent: 0 });
+    expect(parseSavingsOverride("con -5% cobro 1000")).toEqual({ ok: false, error: "invalid_percent", percent: -5 });
+  });
+
+  it("returns no override when neither prefix is present", () => {
+    expect(parseSavingsOverride("cobro sueldo de entrenuts 1000")).toEqual({
+      ok: true,
+      override: { kind: "none" },
+      text: "cobro sueldo de entrenuts 1000",
+    });
   });
 });

@@ -4,6 +4,7 @@ import type { ExpenseService } from "../expenses/expenses.service";
 import type { ProcessedMessageRepository } from "../messages/message.repository";
 import type { MovementService } from "../movements/movements.service";
 import type { CategoryService } from "../categories/categories.service";
+import type { SavingsRuleService } from "../savings/savings.service";
 import type { HouseholdService } from "../household/household.service";
 import type { BotStateRepository, BotStateRecord } from "./bot-state.repository";
 import type { ConversationEnvelope, ExecutionResult } from "./bot-brain";
@@ -60,6 +61,8 @@ type Harness = {
   mockAssociateKeyword: ReturnType<typeof vi.fn>;
   mockRenameCategory: ReturnType<typeof vi.fn>;
   mockEnsureOtro: ReturnType<typeof vi.fn>;
+  mockEnsureAhorro: ReturnType<typeof vi.fn>;
+  mockResolveSplit: ReturnType<typeof vi.fn>;
   mockSetState: ReturnType<typeof vi.fn>;
   mockBrainInterpret: ReturnType<typeof vi.fn>;
   mockBrainReply: ReturnType<typeof vi.fn>;
@@ -127,10 +130,24 @@ function makeHarness(): Harness {
       id: "otro-id",
       ownerId: owner,
       name: "otro",
+      type: "NORMAL",
+      createdAt: new Date(),
+    })),
+    ensureAhorro: vi.fn(async (owner: string) => ({
+      id: "ahorro-id",
+      ownerId: owner,
+      name: "ahorro",
+      type: "SAVINGS",
       createdAt: new Date(),
     })),
     assertOwnerCategory: vi.fn(async () => undefined),
   } as unknown as CategoryService;
+  const savingsService = {
+    resolveSplit: vi.fn(async () => ({ kind: "whole" })),
+    defineRule: vi.fn(),
+    matchNote: vi.fn(),
+    computeSplit: vi.fn(),
+  } as unknown as SavingsRuleService;
   const botStateRepository = {
     get: vi.fn(async () => storedState),
     set: vi.fn(async (state: BotStateRecord) => {
@@ -156,6 +173,7 @@ function makeHarness(): Harness {
     expenseService,
     movementService,
     categoryService,
+    savingsService,
     botStateRepository,
     household: household as unknown as HouseholdService,
     logger: mockLogger,
@@ -181,6 +199,8 @@ function makeHarness(): Harness {
     mockAssociateKeyword: vi.mocked(categoryService.associateKeyword),
     mockRenameCategory: vi.mocked(categoryService.renameCategory),
     mockEnsureOtro: vi.mocked(categoryService.ensureOtro),
+    mockEnsureAhorro: vi.mocked(categoryService.ensureAhorro),
+    mockResolveSplit: vi.mocked(savingsService.resolveSplit),
     mockSetState: vi.mocked(botStateRepository.set),
     mockBrainInterpret: vi.mocked(brain.interpret),
     mockBrainReply: vi.mocked(brain.reply),
@@ -202,13 +222,14 @@ function emptySummary() {
       income: 0,
       expenses: 0,
       balance: 0,
+      savings: 0,
       avgPerMonth: 0,
       avgPerMovement: 0,
       maxAmount: 0,
       count: 0,
       countThisMonth: 0,
     },
-    mom: { months: [{ month: "2026-09", income: 0, expenses: 0, balance: 0 }] },
+    mom: { months: [{ month: "2026-09", income: 0, expenses: 0, balance: 0, savings: 0 }] },
     daily: [],
     categories: [],
     top: { expenses: [], income: [] },

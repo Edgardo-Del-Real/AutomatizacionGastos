@@ -16,6 +16,8 @@ import { CategoryService } from "./features/categories/categories.service";
 import { PrismaBotStateRepository } from "./features/telegram/bot-state.repository";
 import { GroqBotBrain } from "./features/telegram/bot-brain";
 import { TelegramService } from "./features/telegram/telegram.service";
+import { PrismaSavingsRuleRepository } from "./features/savings/savings.repository";
+import { SavingsRuleService } from "./features/savings/savings.service";
 import { parseHouseholdMembers } from "./features/household/household.config";
 import { HouseholdService } from "./features/household/household.service";
 import { householdRoute } from "./features/household/household.route";
@@ -32,6 +34,8 @@ export function buildApp(options: AppOptions = {}): FastifyInstance {
   const movementRepository = new PrismaMovementRepository(prisma);
   const categoryRepository = new PrismaCategoryRepository(prisma);
   const categoryService = new CategoryService(categoryRepository);
+  const savingsRepository = new PrismaSavingsRuleRepository(prisma);
+  const savingsService = new SavingsRuleService(savingsRepository);
   const movementService = new MovementService(movementRepository, categoryService);
   const messageRepository = new PrismaProcessedMessageRepository(prisma);
   const botStateRepository = new PrismaBotStateRepository(prisma);
@@ -47,6 +51,7 @@ export function buildApp(options: AppOptions = {}): FastifyInstance {
     expenseService,
     movementService,
     categoryService,
+    savingsService,
     botStateRepository,
     // AD9: the household registry gates and attributes every chat; in
     // single-user mode it holds only the `default` member with the owner chat.

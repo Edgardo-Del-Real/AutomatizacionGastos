@@ -32,6 +32,7 @@ describe("deriveQueryType", () => {
     expect(deriveQueryType("query", "recent")).toBe("recent");
     expect(deriveQueryType("query", "balance")).toBe("balance");
     expect(deriveQueryType("query", "month")).toBe("month");
+    expect(deriveQueryType("query", "savings")).toBe("savings");
   });
 
   it("maps the legacy query_* intents without a query_type", () => {
@@ -200,6 +201,41 @@ describe("QueryExecutor.execute", () => {
       monthIncome: 0,
       monthExpenses: 0,
       monthCount: 0,
+    });
+  });
+
+  it("answers the month-savings query from the current-month kpis.savings and the last month bucket", async () => {
+    const { executor, mockGetSummary } = makeHarness();
+    mockGetSummary.mockResolvedValue({
+      kpis: {
+        income: 0,
+        expenses: 0,
+        balance: 0,
+        savings: 150,
+        avgPerMonth: 0,
+        avgPerMovement: 0,
+        maxAmount: 0,
+        count: 0,
+        countThisMonth: 0,
+      },
+      mom: {
+        months: [
+          { month: "2026-08", income: 0, expenses: 0, balance: 0, savings: 200 },
+          { month: "2026-09", income: 0, expenses: 0, balance: 0, savings: 150 },
+        ],
+      },
+      daily: [],
+      categories: [],
+      top: { expenses: [], income: [] },
+    });
+
+    const result = await executor.execute(scope, "savings");
+
+    expect(mockGetSummary).toHaveBeenCalledWith(scope);
+    expect(result).toEqual({
+      query_type: "savings",
+      month: "2026-09",
+      savings: 150,
     });
   });
 });

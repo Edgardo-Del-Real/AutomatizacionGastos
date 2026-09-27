@@ -65,6 +65,22 @@
   },
   {
     "role": "user",
+    "content": "cuánto ahorré este mes?"
+  },
+  {
+    "role": "assistant",
+    "content": "{\"intent\":\"query\",\"amount\":null,\"category\":null,\"note\":null,\"query_type\":\"savings\"}"
+  },
+  {
+    "role": "user",
+    "content": "guarda un ahorro del 10% para entrenuts"
+  },
+  {
+    "role": "assistant",
+    "content": "{\"intent\":\"create_savings_rule\",\"amount\":null,\"category\":\"entrenuts\",\"note\":\"al 10%\"}"
+  },
+  {
+    "role": "user",
     "content": "hola, cómo andás?"
   },
   {

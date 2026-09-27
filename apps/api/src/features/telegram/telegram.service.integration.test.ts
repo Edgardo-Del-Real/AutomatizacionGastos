@@ -10,6 +10,8 @@ import { PrismaProcessedMessageRepository } from "../messages/message.repository
 import { PrismaMovementRepository } from "../movements/movements.repository";
 import { MovementService } from "../movements/movements.service";
 import { PrismaBotStateRepository } from "./bot-state.repository";
+import { PrismaSavingsRuleRepository } from "../savings/savings.repository";
+import { SavingsRuleService } from "../savings/savings.service";
 import type { BotBrain, ConversationEnvelope } from "./bot-brain";
 import { HouseholdService } from "../household/household.service";
 import { formatARS } from "./reply-text";
@@ -79,12 +81,14 @@ describe("TelegramService (integration)", () => {
     const messageRepository = new PrismaProcessedMessageRepository(prisma);
     const expenseService = new ExpenseService(new PrismaExpenseRepository(prisma));
     const movementService = new MovementService(new PrismaMovementRepository(prisma), categoryService);
+    const savingsService = new SavingsRuleService(new PrismaSavingsRuleRepository(prisma));
     const botStateRepository = new PrismaBotStateRepository(prisma);
     return new TelegramService({
       messageRepository,
       expenseService,
       movementService,
       categoryService,
+      savingsService,
       botStateRepository,
       // Single-user degraded mode: only the owner chat resolves, to `default`.
       household: new HouseholdService([{ ownerId, name: "default", chatId: OWNER_CHAT_ID }]),

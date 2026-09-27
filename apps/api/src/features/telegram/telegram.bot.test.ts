@@ -8,6 +8,7 @@ import type { ProcessedMessageRepository } from "../messages/message.repository"
 import type { MovementService } from "../movements/movements.service";
 import type { HouseholdService } from "../household/household.service";
 import type { BotStateRepository } from "./bot-state.repository";
+import type { SavingsRuleService } from "../savings/savings.service";
 import {
   createTelegramBot,
   recordApiCalls,
@@ -119,12 +120,19 @@ function makeBotHarness(): BotHarness {
     set: vi.fn(async () => undefined),
     clear: vi.fn(async () => undefined),
   } as unknown as BotStateRepository;
+  const savingsService = {
+    resolveSplit: vi.fn(async () => ({ kind: "whole" })),
+    defineRule: vi.fn(),
+    matchNote: vi.fn(),
+    computeSplit: vi.fn(),
+  } as unknown as SavingsRuleService;
 
   const service = new TelegramService({
     messageRepository,
     expenseService,
     movementService,
     categoryService,
+    savingsService,
     botStateRepository,
     household: {
       resolveOwnerByChatId: (chatId: number) => (chatId === OWNER_CHAT_ID ? ownerId : null),

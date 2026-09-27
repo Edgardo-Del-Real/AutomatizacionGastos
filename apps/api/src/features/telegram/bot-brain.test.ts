@@ -388,6 +388,22 @@ describe("conversationEnvelopeSchema", () => {
     expect(result.success).toBe(false);
   });
 
+  it("decodes a create_savings_rule envelope carrying the keyword and percent phrasing", () => {
+    const result = conversationEnvelopeSchema.safeParse({
+      intent: "create_savings_rule",
+      amount: null,
+      category: "entrenuts",
+      note: "al 10%",
+    });
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.intent).toBe("create_savings_rule");
+      expect(result.data.category).toBe("entrenuts");
+      expect(result.data.note).toBe("al 10%");
+    }
+  });
+
   it("defaults then_reassign to false when the key is omitted", () => {
     const result = conversationEnvelopeSchema.safeParse({
       intent: "create_category",
@@ -839,6 +855,33 @@ describe("GroqBotBrain.reply", () => {
     expect(calls).toHaveLength(1);
   });
 
+  it("posts the executed result with the savings split facts to the LLM", async () => {
+    const { fetchImpl, calls } = makeFetch(() =>
+      jsonResponse({ choices: [{ message: { content: '{"reply":"Listo: ingresaron 900 y ahorraste 100."}' } }] }),
+    );
+    const brain = brainWith(fetchImpl);
+
+    await brain.reply({
+      intent: "register_expense",
+      ok: true,
+      action: "registered",
+      amount: 900,
+      category: "ahorro",
+      note: "sueldo",
+      gross_amount: 1000,
+      net_amount: 900,
+      savings_amount: 100,
+    });
+
+    const call = calls[0];
+    const body = JSON.parse(String(call?.init?.body)) as { messages: { content: string }[] };
+    const posted = body.messages.at(-1)?.content ?? "";
+    expect(posted).toContain("gross_amount");
+    expect(posted).toContain("net_amount");
+    expect(posted).toContain("savings_amount");
+    expect(posted).toContain("1000");
+  });
+
   it("posts the executed result JSON as the only user message", async () => {
     const { fetchImpl, calls } = makeFetch(() => jsonResponse(OPENAI_SHAPE));
     const brain = brainWith(fetchImpl);
@@ -1031,6 +1074,23 @@ describe("prompt contracts", () => {
     expect(INTERPRET_SYSTEM_PROMPT).toContain("correct_category");
     expect(INTERPRET_SYSTEM_PROMPT).toContain("identifican");
     expect(INTERPRET_SYSTEM_PROMPT).toContain("DESTINO");
+  });
+
+  it("teaches the create_savings_rule intent and its redirect in the interpret prompt", () => {
+    expect(INTERPRET_SYSTEM_PROMPT).toContain("create_savings_rule");
+    expect(INTERPRET_SYSTEM_PROMPT).toContain("registrar ahorro");
+  });
+
+  it("classifies the month-savings question into the query intent with query_type savings", () => {
+    expect(INTERPRET_SYSTEM_PROMPT).toContain('"savings"');
+    expect(INTERPRET_SYSTEM_PROMPT).toContain("ahorré");
+  });
+
+  it("teaches the reply to confirm the savings split from the executed facts", () => {
+    expect(REPLY_SYSTEM_PROMPT).toContain("gross_amount");
+    expect(REPLY_SYSTEM_PROMPT).toContain("net_amount");
+    expect(REPLY_SYSTEM_PROMPT).toContain("savings_amount");
+    expect(REPLY_SYSTEM_PROMPT).toContain("ahorraste");
   });
 
   it("teaches the reply to confirm asked_movement and created_reassigned actions", () => {

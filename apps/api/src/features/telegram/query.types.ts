@@ -1,4 +1,4 @@
-export const QUERY_TYPES = ["categories", "recent", "balance", "month"] as const;
+export const QUERY_TYPES = ["categories", "recent", "balance", "month", "savings"] as const;
 
 export type QueryType = (typeof QUERY_TYPES)[number];
 
@@ -35,11 +35,18 @@ export type MonthQueryResult = {
   monthCount: number;
 };
 
+export type SavingsQueryResult = {
+  query_type: "savings";
+  month: string;
+  savings: number;
+};
+
 export type QueryExecutionResult =
   | CategoriesQueryResult
   | RecentQueryResult
   | BalanceQueryResult
-  | MonthQueryResult;
+  | MonthQueryResult
+  | SavingsQueryResult;
 
 /**
  * Resolves the concrete query type from the interpreted intent. The `query`

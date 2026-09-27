@@ -5,13 +5,16 @@ export type TelegramCommand =
   | { type: "rename"; from: string; to: string }
   | { type: "associate"; keyword: string; category: string }
   | { type: "list" }
-  | { type: "configurar" };
+  | { type: "configurar" }
+  | { type: "savings-rule"; keyword: string; percent: number }
+  | { type: "savings-rule-invalid" };
 
 const REGISTER_RE = /^\s*registrar\s+categoria\s*:\s*(.+?)\s*$/;
 const RENAME_RE = /^\s*renombrar\s+categoria\s*:\s*(.+?)\s+a\s*:\s*(.+?)\s*$/;
 const ASSOCIATE_RE = /^\s*asociar\s+palabra\s*:\s*(.+?)\s+a\s+categoria\s*:\s*(.+?)\s*$/;
 const LIST_RE = /^\s*listar\s+categorias\s*$/;
 const CONFIGURAR_RE = /^\s*configurar\s+categorias\s*$/;
+const SAVINGS_RULE_RE = /^\s*registrar\s+ahorro\s*:\s*(.+?)\s+al\s+(-?\d+(?:[.,]\d+)?)%\s*$/;
 
 /**
  * Recognizes the five owner commands on accent- and case-insensitive text
@@ -49,6 +52,21 @@ export function parseCommand(text: string): TelegramCommand | null {
       type: "associate",
       keyword: sliceFromOriginal(text, normalized, associate[1]!),
       category: sliceFromOriginal(text, normalized, associate[2]!),
+    };
+  }
+
+  const savingsRule = SAVINGS_RULE_RE.exec(normalized);
+  if (savingsRule !== null) {
+    const percent = Number(savingsRule[2]!.replace(",", "."));
+    // D10: only 0 < percent <= 100 defines a rule; an out-of-range percent is
+    // still a recognized command and is rejected (nothing stored, no fallthrough).
+    if (!Number.isFinite(percent) || percent <= 0 || percent > 100) {
+      return { type: "savings-rule-invalid" };
+    }
+    return {
+      type: "savings-rule",
+      keyword: sliceFromOriginal(text, normalized, savingsRule[1]!),
+      percent,
     };
   }
 

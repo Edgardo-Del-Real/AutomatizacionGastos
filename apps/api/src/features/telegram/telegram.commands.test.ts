@@ -47,6 +47,28 @@ describe("parseCommand", () => {
     expect(parseCommand("configurar categorias")).toEqual({ type: "configurar" });
   });
 
+  it("parses 'registrar ahorro: palabra al X%' with the percent", () => {
+    expect(parseCommand("registrar ahorro: entrenuts al 10%")).toEqual({
+      type: "savings-rule",
+      keyword: "entrenuts",
+      percent: 10,
+    });
+  });
+
+  it("recognizes the savings-rule command case-insensitively with accents", () => {
+    expect(parseCommand("REGISTRAR AHORRO: Entrenuts al 5%")).toEqual({
+      type: "savings-rule",
+      keyword: "Entrenuts",
+      percent: 5,
+    });
+  });
+
+  it("returns a savings-rule-invalid command for an out-of-range percent (nothing is stored)", () => {
+    expect(parseCommand("registrar ahorro: entrenuts al 0%")).toEqual({ type: "savings-rule-invalid" });
+    expect(parseCommand("registrar ahorro: entrenuts al 150%")).toEqual({ type: "savings-rule-invalid" });
+    expect(parseCommand("registrar ahorro: entrenuts al -3%")).toEqual({ type: "savings-rule-invalid" });
+  });
+
   it("falls through to null for a plain registration", () => {
     expect(parseCommand("$2000 supermercado")).toBeNull();
   });

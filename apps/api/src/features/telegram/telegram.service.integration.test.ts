@@ -108,6 +108,7 @@ describe("TelegramService (integration)", () => {
     await prisma.categoryKeyword.deleteMany();
     await prisma.category.deleteMany();
     await prisma.botState.deleteMany();
+    await prisma.savingsRule.deleteMany();
   });
 
   async function seedCategories(names: string[]): Promise<void> {
@@ -116,6 +117,41 @@ describe("TelegramService (integration)", () => {
     }
     await categoryService.ensureOtro(ownerId);
   }
+
+  it("savings split e2e: a matching income registers net INCOME + SAVINGS and the summary excludes savings", async () => {
+    const savingsService = new SavingsRuleService(new PrismaSavingsRuleRepository(prisma));
+    await savingsService.defineRule(ownerId, "entrenuts", 10);
+    await seedCategories(["trabajo"]);
+    const replies: string[] = [];
+    const reply = async (text: string): Promise<void> => {
+      replies.push(text);
+    };
+
+    await service.handleUpdate(
+      textUpdate({ messageId: 50, text: "cobro sueldo de entrenuts 1000" }),
+      reply,
+    );
+
+    const movements = await prisma.expense.findMany({ where: { ownerId } });
+    expect(movements).toHaveLength(2);
+    const income = movements.find((movement) => movement.type === "INCOME");
+    const savings = movements.find((movement) => movement.type === "SAVINGS");
+    expect(income?.amount.toNumber()).toBe(900);
+    expect(savings?.amount.toNumber()).toBe(100);
+    expect(savings?.category).toBe("ahorro");
+    expect(replies.join("\n")).toContain("900,00");
+
+    const summaryService = new MovementService(new PrismaMovementRepository(prisma), categoryService);
+    const summary = await summaryService.getSummary({
+      viewerId: ownerId,
+      partnerId: null,
+      visibility: "all",
+    });
+    expect(summary.kpis.income).toBe(900);
+    expect(summary.kpis.expenses).toBe(0);
+    expect(summary.kpis.balance).toBe(900);
+    expect(summary.kpis.savings).toBe(100);
+  });
 
   it("setup: a first registration enters awaiting_setup without persisting, and the reply creates the categories plus 'otro'", async () => {
     const replies: string[] = [];

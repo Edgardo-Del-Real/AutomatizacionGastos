@@ -14,6 +14,13 @@ import { useMovements } from "./useMovements";
 const TYPE_LABELS: Record<MovementType, string> = {
   INCOME: "Ingreso",
   EXPENSE: "Gasto",
+  SAVINGS: "Ahorro",
+};
+
+const TYPE_BADGE_CLASS: Record<MovementType, string> = {
+  INCOME: "inline-flex items-center rounded-full bg-income-soft px-2 py-0.5 text-xs font-medium text-income",
+  EXPENSE: "inline-flex items-center rounded-full bg-expense-soft px-2 py-0.5 text-xs font-medium text-expense",
+  SAVINGS: "inline-flex items-center rounded-full bg-accent-soft px-2 py-0.5 text-xs font-medium text-accent",
 };
 
 const ACTION_CLASS =
@@ -182,13 +189,7 @@ export function MovementList({
                         {movement.occurredAt.toISOString().slice(0, 10)}
                       </td>
                       <td className="px-4 py-3 whitespace-nowrap sm:px-6">
-                        <span
-                          className={
-                            movement.type === "INCOME"
-                              ? "inline-flex items-center rounded-full bg-income-soft px-2 py-0.5 text-xs font-medium text-income"
-                              : "inline-flex items-center rounded-full bg-expense-soft px-2 py-0.5 text-xs font-medium text-expense"
-                          }
-                        >
+                        <span className={TYPE_BADGE_CLASS[movement.type]}>
                           {TYPE_LABELS[movement.type]}
                         </span>
                       </td>
@@ -196,7 +197,9 @@ export function MovementList({
                         className={`px-4 py-3 text-right whitespace-nowrap sm:px-6 ${
                           movement.type === "INCOME"
                             ? "font-mono font-semibold text-income tabular-nums"
-                            : "font-mono font-semibold text-expense tabular-nums"
+                            : movement.type === "SAVINGS"
+                              ? "font-mono font-semibold text-accent tabular-nums"
+                              : "font-mono font-semibold text-expense tabular-nums"
                         }`}
                       >
                         {formatARS(movement.amount)}

@@ -35,6 +35,20 @@ describe("MovementFilters", () => {
     expect(select).toHaveValue("all");
   });
 
+  it("offers Ahorro alongside Ingreso and Gasto in the type filter", async () => {
+    const user = userEvent.setup();
+    render(<FiltersHarness />);
+
+    const select = screen.getByLabelText("Tipo");
+    const options = within(select)
+      .getAllByRole("option")
+      .map((option) => option.textContent);
+    expect(options).toEqual(["Todos", "Ingreso", "Gasto", "Ahorro"]);
+
+    await user.selectOptions(select, "SAVINGS");
+    expect((select as HTMLSelectElement).value).toBe("SAVINGS");
+  });
+
   it("combines the visibility filter with the other filters", async () => {
     const user = userEvent.setup();
     render(<FiltersHarness />);

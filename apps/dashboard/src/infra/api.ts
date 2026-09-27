@@ -47,7 +47,7 @@ export class ApiError extends Error {
 
 /** Client-side movement list filters, mapped onto `/movements` query params. */
 export type MovementListFilters = {
-  type?: "EXPENSE" | "INCOME";
+  type?: "EXPENSE" | "INCOME" | "SAVINGS";
   from?: string;
   to?: string;
   category?: string;

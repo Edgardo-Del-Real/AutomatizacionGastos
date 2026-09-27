@@ -152,6 +152,31 @@ describe("MovementList", () => {
     expect(table.getByText("$ 1.200,00")).toBeInTheDocument();
   });
 
+  it("renders a SAVINGS row with the Ahorro label and badge", async () => {
+    fetchMovementsMock.mockResolvedValue([
+      {
+        id: "s1",
+        ownerId: "default",
+        amount: 100,
+        currency: "ARS",
+        type: "SAVINGS",
+        category: "ahorro",
+        note: "ahorro del mes",
+        occurredAt: new Date("2026-08-12T12:00:00Z"),
+        createdAt: new Date("2026-08-12T12:00:00Z"),
+      },
+    ]);
+
+    render(<MovementList />);
+
+    await waitFor(() => expect(screen.getByRole("table")).toBeInTheDocument());
+    const table = within(screen.getByRole("table"));
+    const row = within(table.getAllByRole("row")[1]!);
+    expect(row.getByText("Ahorro")).toBeInTheDocument();
+    expect(row.getByText("ahorro")).toBeInTheDocument();
+    expect(row.getByText("$ 100,00")).toBeInTheDocument();
+  });
+
   it("shows a Spanish empty state when there are no movements", async () => {
     fetchMovementsMock.mockResolvedValue([]);
 

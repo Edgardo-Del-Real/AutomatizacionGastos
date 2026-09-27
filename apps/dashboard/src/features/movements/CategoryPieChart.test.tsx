@@ -10,6 +10,7 @@ const kpis: MovementSummary["kpis"] = {
   income: 3000,
   expenses: 1500,
   balance: 1500,
+  savings: 0,
   avgPerMonth: 750,
   avgPerMovement: 500,
   maxAmount: 1200,

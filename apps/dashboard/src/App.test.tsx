@@ -30,6 +30,7 @@ const summary: MovementSummary = {
     income: 3000,
     expenses: 1500,
     balance: 1500,
+    savings: 0,
     avgPerMonth: 750,
     avgPerMovement: 500,
     maxAmount: 1200,
@@ -38,8 +39,8 @@ const summary: MovementSummary = {
   },
   mom: {
     months: [
-      { month: "2026-06", income: 2000, expenses: 1000, balance: 1000 },
-      { month: "2026-07", income: 1000, expenses: 500, balance: 1500 },
+      { month: "2026-06", income: 2000, expenses: 1000, balance: 1000, savings: 0 },
+      { month: "2026-07", income: 1000, expenses: 500, balance: 1500, savings: 0 },
     ],
   },
   daily: [
@@ -78,6 +79,7 @@ const emptySummary: MovementSummary = {
     income: 0,
     expenses: 0,
     balance: 0,
+    savings: 0,
     avgPerMonth: 0,
     avgPerMovement: 0,
     maxAmount: 0,

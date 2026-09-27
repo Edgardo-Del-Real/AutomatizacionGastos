@@ -38,6 +38,7 @@ export function MovementFilters({ value, onChange }: MovementFiltersProps) {
           <option value="">Todos</option>
           <option value="INCOME">Ingreso</option>
           <option value="EXPENSE">Gasto</option>
+          <option value="SAVINGS">Ahorro</option>
         </select>
       </div>
 

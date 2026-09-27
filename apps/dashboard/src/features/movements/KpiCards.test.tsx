@@ -9,6 +9,7 @@ const kpis: MovementSummary["kpis"] = {
   income: 3000,
   expenses: 1500,
   balance: 1500,
+  savings: 150,
   avgPerMonth: 750,
   avgPerMovement: 500,
   maxAmount: 1200,
@@ -17,20 +18,22 @@ const kpis: MovementSummary["kpis"] = {
 };
 
 describe("KpiCards", () => {
-  it("renders the four Spanish KPI cards with es-AR amounts", () => {
+  it("renders the five Spanish KPI cards with es-AR amounts", () => {
     render(<KpiCards kpis={kpis} />);
 
     const items = screen.getAllByRole("listitem");
-    expect(items).toHaveLength(4);
+    expect(items).toHaveLength(5);
 
     expect(screen.getByText("Ingresos")).toBeInTheDocument();
     expect(screen.getByText("Gastos")).toBeInTheDocument();
     expect(screen.getByText("Dinero restante")).toBeInTheDocument();
+    expect(screen.getByText("Ahorrado")).toBeInTheDocument();
     expect(screen.getByText("Movimientos del mes")).toBeInTheDocument();
 
     expect(screen.getByText("$ 3.000,00")).toBeInTheDocument();
     // Gastos and Dinero restante are both $ 1.500,00 in the fixture.
     expect(screen.getAllByText("$ 1.500,00")).toHaveLength(2);
+    expect(screen.getByText("$ 150,00")).toBeInTheDocument();
   });
 
   it("omits the averages and the max card", () => {
@@ -50,5 +53,12 @@ describe("KpiCards", () => {
 
     expect(screen.getByText("2")).toBeInTheDocument();
     expect(screen.queryByText("$ 2,00")).toBeNull();
+  });
+
+  it("renders the Ahorrado card as $0 when kpis.savings is zero", () => {
+    render(<KpiCards kpis={{ ...kpis, savings: 0 }} />);
+
+    expect(screen.getByText("Ahorrado")).toBeInTheDocument();
+    expect(screen.getByText("$ 0,00")).toBeInTheDocument();
   });
 });

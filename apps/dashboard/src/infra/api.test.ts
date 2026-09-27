@@ -22,6 +22,7 @@ const validSummary: MovementSummary = {
     income: 3000,
     expenses: 1500,
     balance: 1500,
+    savings: 150,
     avgPerMonth: 1500,
     avgPerMovement: 500,
     maxAmount: 1000,
@@ -30,8 +31,8 @@ const validSummary: MovementSummary = {
   },
   mom: {
     months: [
-      { month: "2026-06", income: 2000, expenses: 1000, balance: 1000 },
-      { month: "2026-07", income: 1000, expenses: 500, balance: 500 },
+      { month: "2026-06", income: 2000, expenses: 1000, balance: 1000, savings: 0 },
+      { month: "2026-07", income: 1000, expenses: 500, balance: 500, savings: 150 },
     ],
   },
   daily: [
@@ -212,6 +213,16 @@ describe("fetchMovements", () => {
     );
   });
 
+  it("sends the SAVINGS type filter on the list request", async () => {
+    fetchMock.mockResolvedValue(jsonResponse(validMovements));
+
+    await fetchMovements("default", { type: "SAVINGS" });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/movements?ownerId=default&type=SAVINGS&visibility=all",
+    );
+  });
+
   it("builds query params from all active filters including visibility", async () => {
     fetchMock.mockResolvedValue(jsonResponse(validMovements));
 
@@ -242,7 +253,7 @@ describe("fetchMovements", () => {
 
   it("throws ApiError validation when a movement is wrong-typed", async () => {
     fetchMock.mockResolvedValue(
-      jsonResponse([{ ...validMovements[0]!, type: "SAVINGS" }]),
+      jsonResponse([{ ...validMovements[0]!, type: "REFUND" }]),
     );
 
     await expect(fetchMovements("default")).rejects.toMatchObject({

@@ -27,6 +27,7 @@ export function KpiCards({ kpis }: { kpis: Kpis }) {
     { label: "Ingresos", value: formatARS(kpis.income), tone: "income" },
     { label: "Gastos", value: formatARS(kpis.expenses), tone: "expense" },
     { label: "Dinero restante", value: formatARS(kpis.balance), tone: "balance" },
+    { label: "Ahorrado", value: formatARS(kpis.savings), tone: "default" },
     {
       label: "Movimientos del mes",
       value: String(kpis.countThisMonth),

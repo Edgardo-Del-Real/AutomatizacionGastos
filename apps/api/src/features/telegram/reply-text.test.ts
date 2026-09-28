@@ -37,7 +37,9 @@ import {
   queryReplyTemplate,
   questionDroppedReply,
   recentQueryReply,
+  reservedCategoryReply,
   setupDoneReply,
+  setupDoneWithRedirectsReply,
   setupQuestionReply,
   setupRetryReply,
   successReply,
@@ -111,6 +113,32 @@ describe("reply builders", () => {
     expect(setupDoneReply(["Cafe", "Transporte", "otro"])).toBe(
       'Categorías creadas: Cafe, Transporte, otro.',
     );
+  });
+
+  it("builds the setup-done reply with reserved redirects, confirming the created categories and teaching the blocked concepts", () => {
+    const text = setupDoneWithRedirectsReply(
+      ["Cafe", "otro"],
+      [{ name: "gastos fijos", concept: "gasto fijo" }],
+    );
+
+    expect(text).toContain("Cafe");
+    expect(text).toContain("otro");
+    expect(text).toContain("gastos fijos");
+    expect(text).toContain("previsto");
+  });
+
+  it.each([
+    ["previsto", "previsto: <monto> <nota>"],
+    ["gasto fijo", "previsto: <monto> <nota>"],
+    ["ahorro", "registrar ahorro:"],
+    ["compartido", "compartido:"],
+    ["compartida", "compartido:"],
+    ["otro", "respaldo"],
+  ] as const)("builds the reserved redirect for the %s concept teaching the system usage", (concept, teaches) => {
+    const text = reservedCategoryReply("gastos fijos", concept);
+
+    expect(text).toContain("gastos fijos");
+    expect(text).toContain(teaches);
   });
 
   it("builds the correction offer confirming the registration first and then offering reassignment", () => {
@@ -312,6 +340,26 @@ describe("category command reply templates", () => {
 
     expect(text).toContain("Ya existe");
     expect(text).toContain("Mascotas");
+  });
+
+  it("renders the reserved redirect message for a reserved create", () => {
+    const message = reservedCategoryReply("previsto", "previsto");
+    const text = categoryCommandReplyTemplate(
+      categoryResult({ intent: "create_category", ok: false, error: "reserved", category: "previsto", message }),
+    );
+
+    expect(text).toBe(message);
+    expect(text).toContain("previsto: <monto> <nota>");
+  });
+
+  it("renders the reserved redirect message for a reserved rename", () => {
+    const message = reservedCategoryReply("ahorros", "ahorro");
+    const text = categoryCommandReplyTemplate(
+      categoryResult({ intent: "rename_category", ok: false, error: "reserved", category: "Guardado", new_name: "ahorros", message }),
+    );
+
+    expect(text).toBe(message);
+    expect(text).toContain("registrar ahorro");
   });
 
   it("confirms a deleted category", () => {

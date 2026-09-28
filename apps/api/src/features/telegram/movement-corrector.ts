@@ -1,7 +1,8 @@
 import type { Movement, MovementType } from "@rita/contracts";
 import { NotFoundError, ValidationFailedError } from "../../infra/errors";
 import type { CategoryService } from "../categories/categories.service";
-import { normalizeForMatch } from "../categories/matcher";
+import { normalizeForMatch, normalizeForMatchTolerant } from "../categories/matcher";
+import { ReservedCategoryError, type ReservedConcept } from "../categories/reserved";
 import type { MovementService } from "../movements/movements.service";
 
 export type MovementCandidate = {
@@ -19,7 +20,12 @@ export type CorrectionResult =
   | { status: "ask"; reason: "ambiguous" | "no_reference"; candidates: MovementCandidate[]; category: string }
   | { status: "no_match" }
   /** The matched movement disappeared before the update (spec "Missing movement degrades"). */
-  | { status: "missing" };
+  | { status: "missing" }
+  /**
+   * The target category is a reserved concept: no movement is listed, scored
+   * or updated; the controller replies with the per-concept redirect.
+   */
+  | { status: "rejected"; concept: ReservedConcept; name: string };
 
 const WINDOW_SIZE = 10;
 const RECENCY_HOT_MS = 48 * 60 * 60 * 1000;
@@ -63,7 +69,13 @@ export class MovementCorrector {
     targetCategory: string,
     now: Date = new Date(),
   ): Promise<CorrectionResult> {
-    const category = await this.resolveTargetCategory(ownerId, targetCategory);
+    const target = await this.resolveTargetCategory(ownerId, targetCategory);
+    // Reserved guard short-circuit: a rejected target is redirected BEFORE any
+    // movement is listed or scored (spec: no reassignment occurs).
+    if (target.status === "rejected") {
+      return { status: "rejected", concept: target.concept, name: target.name };
+    }
+    const category = target.name;
     // Correction candidates are ALWAYS the owner's own movements (registrant-only
     // mutation, AD4): a mine-scope with no partner keeps partner rows out.
     // PENDING rows are excluded BEFORE the slice (spec movement-correction:
@@ -106,27 +118,42 @@ export class MovementCorrector {
   }
 
   /**
-   * D7: exact normalized match against the owner's categories; otherwise
-   * auto-create the target. A duplicate race resolves to the existing category.
+   * D7 + tolerant fold: exact normalized match, then folded match, against the
+   * owner's categories; otherwise auto-create through the guarded choke point.
+   * A reserved target is reported as rejected (never created, never matched);
+   * a duplicate race resolves to the existing category.
    */
-  private async resolveTargetCategory(ownerId: string, targetCategory: string): Promise<string> {
+  private async resolveTargetCategory(
+    ownerId: string,
+    targetCategory: string,
+  ): Promise<{ status: "ok"; name: string } | { status: "rejected"; concept: ReservedConcept; name: string }> {
     const trimmed = targetCategory.trim();
-    const exact = (await this.categoryService.listCategories(ownerId)).find(
+    const categories = await this.categoryService.listCategories(ownerId);
+    const exact = categories.find(
       (category) => normalizeForMatch(category.name) === normalizeForMatch(trimmed),
     );
     if (exact !== undefined) {
-      return exact.name;
+      return { status: "ok", name: exact.name };
+    }
+    const folded = categories.find(
+      (category) => normalizeForMatchTolerant(category.name) === normalizeForMatchTolerant(trimmed),
+    );
+    if (folded !== undefined) {
+      return { status: "ok", name: folded.name };
     }
     try {
       const created = await this.categoryService.createCategory(ownerId, trimmed);
-      return created.name;
+      return { status: "ok", name: created.name };
     } catch (error) {
+      if (error instanceof ReservedCategoryError) {
+        return { status: "rejected", concept: error.concept, name: trimmed };
+      }
       if (error instanceof ValidationFailedError) {
         const existing = (await this.categoryService.listCategories(ownerId)).find(
-          (category) => normalizeForMatch(category.name) === normalizeForMatch(trimmed),
+          (category) => normalizeForMatchTolerant(category.name) === normalizeForMatchTolerant(trimmed),
         );
         if (existing !== undefined) {
-          return existing.name;
+          return { status: "ok", name: existing.name };
         }
       }
       throw error;

@@ -1,6 +1,7 @@
 import type { QueryExecutionResult, RecentMovementResult } from "./query.types";
 import type { ExecutionResult } from "./bot-brain";
 import type { MovementCandidate } from "./movement-corrector";
+import type { ReservedConcept } from "../categories/reserved";
 
 const arsFormatter = new Intl.NumberFormat("es-AR", {
   style: "currency",
@@ -80,6 +81,41 @@ export function setupRetryReply(): string {
 
 export function setupDoneReply(created: string[]): string {
   return `Categorías creadas: ${created.join(", ")}.`;
+}
+
+/**
+ * Setup completion when one or more entries were rejected by the reserved
+ * guard: confirms the created categories and appends the per-concept
+ * educational redirects for the blocked names (spec "Setup entry gated").
+ */
+export function setupDoneWithRedirectsReply(
+  created: string[],
+  redirects: { name: string; concept: ReservedConcept }[],
+): string {
+  const createdPart = setupDoneReply(created);
+  const lines = redirects.map((redirect) => `"${redirect.name}": ${reservedCategoryReply(redirect.name, redirect.concept)}`);
+  return `${createdPart} No pude crear: ${lines.join(" / ")}`;
+}
+
+/**
+ * Educational redirect for a reserved-concept rejection (design decision 4):
+ * teaches the system usage for the concept instead of creating a phantom
+ * category. Per-concept wording from the design "Redirect replies" section.
+ */
+export function reservedCategoryReply(name: string, concept: ReservedConcept): string {
+  switch (concept) {
+    case "previsto":
+      return `"${name}" es un gasto fijo previsto: usá "previsto: <monto> <nota>" para registrarlo (ej: "previsto: 2500 alquiler").`;
+    case "gasto fijo":
+      return `"${name}" va como gasto fijo previsto: usá "previsto: <monto> <nota>" (ej: "previsto: 2500 alquiler"). Consultá tus previstos con "cuánto tengo previsto?".`;
+    case "ahorro":
+      return `"${name}" es la categoría de ahorro: definí tu regla con "registrar ahorro: <palabra> al <X>%" (ej: "registrar ahorro: sueldo al 10%").`;
+    case "compartido":
+    case "compartida":
+      return `"${name}" se marca con el prefijo "compartido:" (ej: "compartido: 2500 expensas").`;
+    case "otro":
+      return `"${name}" es la categoría de respaldo para los movimientos sin categoría: no se crea manualmente.`;
+  }
 }
 
 export function correctionOfferReply(amount: number, note: string | null, category: string): string {
@@ -328,6 +364,9 @@ export function categoryCommandReplyTemplate(result: ExecutionResult): string {
       if (result.error === "duplicate") {
         return duplicateCategoryReply(result.category ?? "");
       }
+      if (result.error === "reserved") {
+        return result.message ?? categoryErrorReply("no se pudo crear la categoría");
+      }
       return categoryErrorReply(result.message ?? "no se pudo crear la categoría");
     case "delete_category":
       if (result.ok) {
@@ -352,6 +391,9 @@ export function categoryCommandReplyTemplate(result: ExecutionResult): string {
       }
       if (result.error === "duplicate") {
         return duplicateCategoryReply(result.new_name ?? "");
+      }
+      if (result.error === "reserved") {
+        return result.message ?? categoryErrorReply("no se pudo renombrar la categoría");
       }
       if (result.error === "savings_forbidden") {
         return savingsForbiddenReply();

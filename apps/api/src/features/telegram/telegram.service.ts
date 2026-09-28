@@ -1,7 +1,8 @@
 import { z } from "zod";
 import type { CategoryService } from "../categories/categories.service";
-import { normalizeForMatch } from "../categories/matcher";
+import { normalizeForMatch, normalizeForMatchTolerant } from "../categories/matcher";
 import type { CategoryWithKeywords } from "../categories/categories.types";
+import { ReservedCategoryError } from "../categories/reserved";
 import type { ExpenseService } from "../expenses/expenses.service";
 import type { HouseholdService } from "../household/household.service";
 import type { ViewerScope } from "../movements/movements.types";
@@ -63,11 +64,13 @@ import {
   queryRedirectReply,
   queryReplyTemplate,
   questionDroppedReply,
+  reservedCategoryReply,
   savingsOverrideInvalidReply,
   savingsRuleDefinedReply,
   savingsRuleInvalidReply,
   savingsRuleRedirectReply,
   setupDoneReply,
+  setupDoneWithRedirectsReply,
   setupQuestionReply,
   setupRetryReply,
   successReply,
@@ -416,6 +419,10 @@ export class TelegramService {
     // AD6 — the deterministic prefix is authoritative and wins over the brain
     // flag: visibility = prefixShared OR envelope.shared === true.
     const shared = sharedByPrefix || envelope.shared === true;
+    // C1 — mirror of shared: the deterministic `previsto:` prefix is
+    // authoritative and wins over the brain flag:
+    // planned = prefixPlanned OR envelope.planned === true.
+    const effectivePlanned = planned || envelope.planned === true;
 
     if (detAmount === null && brainAmount === null) {
       await send(
@@ -438,7 +445,7 @@ export class TelegramService {
       amount = brainAmount as number;
     } else {
       // Genuine disagreement: ask the owner, nothing registers silently.
-      await this.askAmountConfirmation(body, detAmount, brainAmount, parsed, envelope, categories, ownerId, shared, planned, override, send);
+      await this.askAmountConfirmation(body, detAmount, brainAmount, parsed, envelope, categories, ownerId, shared, effectivePlanned, override, send);
       return;
     }
 
@@ -450,10 +457,10 @@ export class TelegramService {
     const matched = await this.deps.categoryService.matchNote(ownerId, note ?? body);
     const category = matched ?? this.resolveSuggestion(envelope.category, categories);
     if (category !== null) {
-      await this.registerWithCategory(body, amount, note, category, ownerId, shared, planned, override, send);
+      await this.registerWithCategory(body, amount, note, category, ownerId, shared, effectivePlanned, override, send);
       return;
     }
-    await this.registerOtroWithCorrection(body, amount, note, ownerId, shared, planned, override, send);
+    await this.registerOtroWithCorrection(body, amount, note, ownerId, shared, effectivePlanned, override, send);
   }
 
   /** Amounts differ: persist the question and ask; nothing registers silently. */
@@ -633,21 +640,28 @@ export class TelegramService {
     }
 
     const existing = await this.deps.categoryService.listCategories(ownerId);
-    const existingNormalized = new Set(existing.map((category) => normalizeForMatch(category.name)));
+    const existingNormalized = new Set(existing.map((category) => normalizeForMatchTolerant(category.name)));
 
     const created: string[] = [];
+    const redirects: { name: string; concept: ReservedCategoryError["concept"] }[] = [];
     for (const name of names) {
       if (normalizeForMatch(name) === "otro") {
         continue; // the fallback is created by ensureOtro below
       }
-      if (existingNormalized.has(normalizeForMatch(name))) {
+      if (existingNormalized.has(normalizeForMatchTolerant(name))) {
         continue;
       }
       try {
         await this.deps.categoryService.createCategory(ownerId, name);
         created.push(name);
-        existingNormalized.add(normalizeForMatch(name));
+        existingNormalized.add(normalizeForMatchTolerant(name));
       } catch (error) {
+        if (error instanceof ReservedCategoryError) {
+          // Reserved names are rejected with their educational redirect; the
+          // setup continues with the remaining entries (spec "Setup entry gated").
+          redirects.push({ name, concept: error.concept });
+          continue;
+        }
         if (error instanceof ValidationFailedError) {
           continue; // duplicate raced in — skip
         }
@@ -667,7 +681,10 @@ export class TelegramService {
       pendingMovementId: null,
       pendingNote: null,
     });
-    await this.safeReply(reply, setupDoneReply(finalCreated));
+    await this.safeReply(
+      reply,
+      redirects.length > 0 ? setupDoneWithRedirectsReply(finalCreated, redirects) : setupDoneReply(finalCreated),
+    );
   }
 
   private async d6AwaitingCategory(
@@ -707,6 +724,16 @@ export class TelegramService {
       return;
     }
 
+    // D6 rule 1 (folded): a plural variant of an existing category name is the
+    // ANSWER, never a new category ("cafes" resolves to "Cafe").
+    const foldedCategory = categories.find(
+      (category) => normalizeForMatchTolerant(category.name) === normalizeForMatchTolerant(body),
+    );
+    if (foldedCategory !== undefined) {
+      await this.answerCorrection(state, foldedCategory.name, ownerId, send, reply);
+      return;
+    }
+
     // D6 rule 2: parses as amount → NEW registration; the pending correction is abandoned.
     if (parseAmountAndNote(body) !== null) {
       await send(
@@ -717,11 +744,24 @@ export class TelegramService {
       return;
     }
 
-    // D6 rule 3: a single token → ANSWER + auto-create.
+    // D6 rule 3: a single token → ANSWER + auto-create, routed through the
+    // guarded choke point. A reserved reject keeps the correction open with a
+    // redirect (the movement stays in "otro").
     if (trimmed.split(/\s+/).length === 1) {
-      const created = await this.deps.categoryService.createCategory(ownerId, trimmed);
-      await this.answerCorrection(state, created.name, ownerId, send, reply);
-      return;
+      try {
+        const created = await this.deps.categoryService.createCategory(ownerId, trimmed);
+        await this.answerCorrection(state, created.name, ownerId, send, reply);
+        return;
+      } catch (error) {
+        if (error instanceof ReservedCategoryError) {
+          await send(
+            { intent: "correct_category", ok: false, action: "asked_category", amount: null, category: null, note: trimmed, error: "reserved", message: reservedCategoryReply(trimmed, error.concept) },
+            reservedCategoryReply(trimmed, error.concept),
+          );
+          return;
+        }
+        throw error;
+      }
     }
 
     // A multi-word non-category answer → DO NOT dead-end: list the existing
@@ -919,11 +959,34 @@ export class TelegramService {
       return;
     }
 
-    // A single token is a new category: auto-create and apply (D6 rule 3).
-    if (answer.split(/\s+/).length === 1) {
-      const created = await this.deps.categoryService.createCategory(ownerId, answer);
-      await this.answerCorrection(state, created.name, ownerId, send, reply);
+    // Folded answer: a plural variant of an existing category is the ANSWER
+    // ("cafes" resolves to "Cafe"), never a new category.
+    const foldedCategory = categories.find(
+      (category) => normalizeForMatchTolerant(category.name) === normalizeForMatchTolerant(answer),
+    );
+    if (foldedCategory !== undefined) {
+      await this.answerCorrection(state, foldedCategory.name, ownerId, send, reply);
       return;
+    }
+
+    // A single token is a new category: auto-create and apply (D6 rule 3),
+    // routed through the guarded choke point. A reserved reject keeps the
+    // correction open with a redirect.
+    if (answer.split(/\s+/).length === 1) {
+      try {
+        const created = await this.deps.categoryService.createCategory(ownerId, answer);
+        await this.answerCorrection(state, created.name, ownerId, send, reply);
+        return;
+      } catch (error) {
+        if (error instanceof ReservedCategoryError) {
+          await send(
+            { intent: "correct_category", ok: false, action: "asked_category", amount: null, category: null, note: answer, error: "reserved", message: reservedCategoryReply(answer, error.concept) },
+            reservedCategoryReply(answer, error.concept),
+          );
+          return;
+        }
+        throw error;
+      }
     }
 
     // Multi-word non-category answer → list the categories, keep the state open.
@@ -1127,6 +1190,10 @@ export class TelegramService {
           movementCorrectionDoneReply(result.category, result.movement.amount, result.movement.note),
         );
         return;
+      case "rejected":
+        // Reserved guard redirect: nothing was listed, scored or updated.
+        await this.safeReply(reply, reservedCategoryReply(result.name, result.concept));
+        return;
       case "no_match":
         await this.safeReply(reply, movementNoMatchReply());
         return;
@@ -1256,6 +1323,10 @@ export class TelegramService {
         try {
           await this.deps.categoryService.createCategory(ownerId, command.name);
         } catch (error) {
+          if (error instanceof ReservedCategoryError) {
+            await this.safeReply(reply, reservedCategoryReply(command.name, error.concept));
+            return;
+          }
           if (error instanceof ValidationFailedError) {
             await this.safeReply(reply, duplicateCategoryReply(command.name));
             return;
@@ -1274,6 +1345,10 @@ export class TelegramService {
             return;
           }
         } catch (error) {
+          if (error instanceof ReservedCategoryError) {
+            await this.safeReply(reply, reservedCategoryReply(command.to, error.concept));
+            return;
+          }
           if (error instanceof ValidationFailedError) {
             await this.safeReply(reply, duplicateCategoryReply(command.to));
             return;

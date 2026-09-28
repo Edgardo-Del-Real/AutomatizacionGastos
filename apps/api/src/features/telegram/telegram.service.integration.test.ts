@@ -1104,4 +1104,65 @@ describe("TelegramService (integration)", () => {
     expect(after.every((row) => row.category === "otro" || row.category === null)).toBe(true);
     expect(correctReplies.at(-1)).toContain("No encontré");
   });
+
+  it("planned e2e: a brain planned:true flag (no prefix) registers a PENDING EXPENSE through the guarded path", async () => {
+    await seedCategories(["Vivienda"]);
+    const replies: string[] = [];
+    const stubbed = buildService(
+      () => undefined,
+      stubBrain({
+        interpret: async () => ({
+          intent: "register_expense",
+          amount: 2500,
+          category: "Vivienda",
+          note: "alquiler",
+          planned: true,
+        }),
+      }),
+    );
+
+    await stubbed.handleUpdate(
+      textUpdate({ messageId: 1, text: "dejalo para el mes que viene: 2500 alquiler" }),
+      async (text) => {
+        replies.push(text);
+      },
+    );
+
+    const rows = await prisma.expense.findMany({ where: { ownerId } });
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.amount.toNumber()).toBe(2500);
+    expect(rows[0]?.category).toBe("Vivienda");
+    expect(rows[0]?.status).toBe("PENDING");
+    expect(rows[0]?.type).toBe("EXPENSE");
+    expect(replies.at(-1)).toContain("previsto");
+  });
+
+  it("planned e2e: the previsto: prefix beats a brain planned:false flag", async () => {
+    await seedCategories(["Vivienda"]);
+    const replies: string[] = [];
+    const stubbed = buildService(
+      () => undefined,
+      stubBrain({
+        interpret: async () => ({
+          intent: "register_expense",
+          amount: 2500,
+          category: "Vivienda",
+          note: "alquiler",
+          planned: false,
+        }),
+      }),
+    );
+
+    await stubbed.handleUpdate(
+      textUpdate({ messageId: 1, text: "previsto: 2500 alquiler" }),
+      async (text) => {
+        replies.push(text);
+      },
+    );
+
+    const rows = await prisma.expense.findMany({ where: { ownerId } });
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.status).toBe("PENDING");
+    expect(replies.at(-1)).toContain("previsto");
+  });
 });

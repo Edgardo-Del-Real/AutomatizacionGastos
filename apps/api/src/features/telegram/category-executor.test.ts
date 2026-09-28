@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { NotFoundError, ValidationFailedError } from "../../infra/errors";
 import type { CategoryService } from "../categories/categories.service";
+import { ReservedCategoryError } from "../categories/reserved";
 import type { ConversationEnvelope } from "./bot-brain";
 import { CategoryExecutor } from "./category-executor";
 
@@ -56,6 +57,21 @@ describe("CategoryExecutor.create", () => {
     expect(result.ok).toBe(false);
     expect(result.error).toBe("duplicate");
     expect(result.message).toContain("already exists");
+  });
+
+  it("carries the reserved error with code reserved and the redirect message instead of throwing", async () => {
+    h = makeExecutor({
+      createCategory: vi.fn(async () => {
+        throw new ReservedCategoryError('Category "previsto" is the reserved concept "previsto"', "previsto");
+      }),
+    });
+
+    const result = await h.executor.execute(OWNER, envelope("create_category", "previsto"));
+
+    expect(result.ok).toBe(false);
+    expect(result.error).toBe("reserved");
+    expect(result.message).toContain("previsto");
+    expect(result.message).toContain("monto");
   });
 
   it("reports a generic failure when the category name is missing, without calling the service", async () => {
@@ -155,6 +171,21 @@ describe("CategoryExecutor.rename", () => {
     expect(result.ok).toBe(false);
     expect(result.error).toBe("duplicate");
     expect(result.message).toContain("already exists");
+  });
+
+  it("carries the reserved error with code reserved for a reserved rename target", async () => {
+    h = makeExecutor({
+      renameCategory: vi.fn(async () => {
+        throw new ReservedCategoryError('Category "ahorros" is the reserved concept "ahorro"', "ahorro");
+      }),
+    });
+
+    const result = await h.executor.execute(OWNER, envelope("rename_category", "Guardado", "ahorros"));
+
+    expect(result.ok).toBe(false);
+    expect(result.error).toBe("reserved");
+    expect(result.message).toContain("ahorro");
+    expect(result.message).toContain("registrar ahorro");
   });
 
   it("reports a generic failure when either name is missing, without calling the service", async () => {

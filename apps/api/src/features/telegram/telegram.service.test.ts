@@ -9,12 +9,14 @@ import type { HouseholdService } from "../household/household.service";
 import type { BotStateRepository, BotStateRecord } from "./bot-state.repository";
 import type { ConversationEnvelope, ExecutionResult } from "./bot-brain";
 import { NotFoundError, ValidationFailedError } from "../../infra/errors";
+import { ReservedCategoryError } from "../categories/reserved";
 import {
   associateKeywordRedirectReply,
   formatARS,
   helpReply,
   offTopicRedirectReply,
   queryRedirectReply,
+  reservedCategoryReply,
 } from "./reply-text";
 import { amountConfirmationPayloadSchema, TelegramService } from "./telegram.service";
 
@@ -71,7 +73,7 @@ type Harness = {
   reply: (text: string) => Promise<void>;
 };
 
-function makeHarness(): Harness {
+function makeHarness(options?: { noBrain?: boolean }): Harness {
   const replies: string[] = [];
   const reply = async (text: string): Promise<void> => {
     replies.push(text);
@@ -177,7 +179,7 @@ function makeHarness(): Harness {
     botStateRepository,
     household: household as unknown as HouseholdService,
     logger: mockLogger,
-    brain,
+    ...(options?.noBrain === true ? {} : { brain }),
   });
 
   return {
@@ -282,6 +284,31 @@ describe("TelegramService state machine", () => {
     expect(h.mockCreateCategory).toHaveBeenCalledWith(ownerId, "Cafe");
     expect(h.mockCreateCategory).toHaveBeenCalledWith(ownerId, "Transporte");
     expect(h.mockEnsureOtro).toHaveBeenCalledWith(ownerId);
+  });
+
+  it("gates setup entries: 'Cafe, gastos fijos' creates Cafe and redirects the reserved gastos fijos", async () => {
+    h.mockCreateCategory.mockImplementation(async (owner: string, name: string) => {
+      if (name === "gastos fijos") {
+        throw new ReservedCategoryError('Category "gastos fijos" is the reserved concept "gasto fijo"', "gasto fijo");
+      }
+      return { id: `cat-${name}`, ownerId: owner, name, createdAt: new Date() };
+    });
+
+    await h.service.handleUpdate(textUpdate({ text: "$2500 cafe", messageId: 1 }), h.reply);
+    await h.service.handleUpdate(textUpdate({ text: "Cafe, gastos fijos", messageId: 2 }), h.reply);
+
+    expect(h.mockCreateCategory).toHaveBeenCalledWith(ownerId, "Cafe");
+    expect(h.mockCreateCategory).toHaveBeenCalledWith(ownerId, "gastos fijos");
+    // No category for the reserved name: only Cafe (plus otro via ensureOtro).
+    expect(h.replies.at(-1)).toContain("Cafe");
+    expect(h.replies.at(-1)).toContain("gastos fijos");
+    expect(h.replies.at(-1)).toContain("previsto");
+    expect(h.mockSetState).toHaveBeenLastCalledWith({
+      ownerId,
+      state: "idle",
+      pendingMovementId: null,
+      pendingNote: null,
+    });
   });
 
   it("dedupes setup names by normalized value", async () => {
@@ -693,6 +720,48 @@ describe("TelegramService ambiguity rules (awaiting_category, D6)", () => {
     expect(h.replies.at(-1)).toContain('No encontré la categoría');
     expect(h.replies.at(-1)).toContain('"otro"');
   });
+
+  it("resolves a folded plural answer to the existing category without creating (cafes → Cafe)", async () => {
+    h.mockListCategories.mockResolvedValue([
+      { id: "c1", ownerId, name: "otro", createdAt: new Date(), keywords: [] },
+      { id: "c2", ownerId, name: "Cafe", createdAt: new Date(), keywords: [] },
+    ]);
+
+    await h.service.handleUpdate(textUpdate({ text: "$1000 anterior", messageId: 1 }), h.reply);
+    h.mockCreateExpense.mockClear();
+
+    await h.service.handleUpdate(textUpdate({ text: "cafes", messageId: 2 }), h.reply);
+
+    expect(h.mockUpdateMovement).toHaveBeenCalledWith(ownerId, "mov-1", { category: "Cafe" });
+    expect(h.mockCreateCategory).not.toHaveBeenCalled();
+    expect(h.mockSetState).toHaveBeenLastCalledWith({
+      ownerId,
+      state: "idle",
+      pendingMovementId: null,
+      pendingNote: null,
+    });
+    expect(h.replies.at(-1)).toBe('Listo, el movimiento quedó en "Cafe".');
+  });
+
+  it("rejects a reserved single-token answer with a redirect and keeps the correction open", async () => {
+    h.mockListCategories.mockResolvedValue([
+      { id: "c1", ownerId, name: "otro", createdAt: new Date(), keywords: [] },
+    ]);
+    h.mockCreateCategory.mockRejectedValue(
+      new ReservedCategoryError('Category "previsto" is the reserved concept "previsto"', "previsto"),
+    );
+
+    await h.service.handleUpdate(textUpdate({ text: "$1000 anterior", messageId: 1 }), h.reply);
+    h.mockSetState.mockClear();
+
+    await h.service.handleUpdate(textUpdate({ text: "previsto", messageId: 2 }), h.reply);
+
+    expect(h.mockCreateCategory).toHaveBeenCalledWith(ownerId, "previsto");
+    expect(h.mockUpdateMovement).not.toHaveBeenCalled();
+    // The pending correction stays open: the state is untouched (movement in "otro").
+    expect(h.mockSetState).not.toHaveBeenCalled();
+    expect(h.replies.at(-1)).toBe(reservedCategoryReply("previsto", "previsto"));
+  });
 });
 
 describe("TelegramService commands", () => {
@@ -707,6 +776,33 @@ describe("TelegramService commands", () => {
 
     expect(h.mockCreateCategory).toHaveBeenCalledWith(ownerId, "Salud");
     expect(h.replies.at(-1)).toContain("Salud");
+  });
+
+  it("redirects a reserved 'registrar categoria: previsto' with the previsto teaching and creates nothing", async () => {
+    h.mockCreateCategory.mockRejectedValue(
+      new ReservedCategoryError('Category "previsto" is the reserved concept "previsto"', "previsto"),
+    );
+
+    await h.service.handleUpdate(textUpdate({ text: "registrar categoria: previsto", messageId: 1 }), h.reply);
+
+    expect(h.mockCreateCategory).toHaveBeenCalledWith(ownerId, "previsto");
+    expect(h.replies.at(-1)).toBe(reservedCategoryReply("previsto", "previsto"));
+    expect(h.replies.at(-1)).toContain("previsto: <monto> <nota>");
+  });
+
+  it("redirects a reserved 'renombrar categoria: X a: ahorros' with the ahorro teaching", async () => {
+    h.mockRenameCategory.mockRejectedValue(
+      new ReservedCategoryError('Category "ahorros" is the reserved concept "ahorro"', "ahorro"),
+    );
+
+    await h.service.handleUpdate(
+      textUpdate({ text: "renombrar categoria: Guardado a: ahorros", messageId: 1 }),
+      h.reply,
+    );
+
+    expect(h.mockRenameCategory).toHaveBeenCalledWith(ownerId, "Guardado", "ahorros");
+    expect(h.replies.at(-1)).toBe(reservedCategoryReply("ahorros", "ahorro"));
+    expect(h.replies.at(-1)).toContain("registrar ahorro");
   });
 
   it("renames a category via 'renombrar categoria: X a: Y'", async () => {
@@ -885,6 +981,75 @@ describe("TelegramService brain orchestration (llm-conversational-bot)", () => {
       pendingMovementId: "mov-1",
       pendingNote: "$ feria",
     });
+  });
+
+  it("keeps resolveSuggestion EXACT: a plural brain suggestion never matches its singular category", async () => {
+    seedHarnessCategories(h, ["Cafe", "otro"]);
+    h.mockBrainInterpret.mockResolvedValue({
+      intent: "register_expense",
+      amount: 2000,
+      category: "cafes",
+      note: null,
+    });
+
+    await h.service.handleUpdate(textUpdate({ text: "$2000 feria", messageId: 1 }), h.reply);
+
+    // "cafes" does NOT resolve to the existing "Cafe": the LLM ceiling keeps
+    // suggestions exact-normalized only; the movement falls to "otro".
+    expect(h.mockCreateExpense).toHaveBeenCalledWith(
+      expect.objectContaining({ amount: 2000, category: "otro" }),
+      ownerId,
+      { visibility: "INDIVIDUAL" },
+    );
+    expect(h.mockCreateCategory).not.toHaveBeenCalled();
+    expect(h.mockSetState).toHaveBeenLastCalledWith({
+      ownerId,
+      state: "awaiting_category",
+      pendingMovementId: "mov-1",
+      pendingNote: "$ feria",
+    });
+  });
+
+  it("materializes a brain planned:true flag as a PENDING EXPENSE without any prefix", async () => {
+    seedHarnessCategories(h, ["Vivienda", "otro"]);
+    h.mockBrainInterpret.mockResolvedValue({
+      intent: "register_expense",
+      amount: 2500,
+      category: "Vivienda",
+      note: "alquiler",
+      planned: true,
+    });
+
+    await h.service.handleUpdate(
+      textUpdate({ text: "dejalo para el mes que viene: 2500 alquiler", messageId: 1 }),
+      h.reply,
+    );
+
+    expect(h.mockCreateExpense).toHaveBeenCalledWith(
+      expect.objectContaining({ amount: 2500, category: "Vivienda", type: "EXPENSE", status: "PENDING" }),
+      ownerId,
+      { visibility: "INDIVIDUAL" },
+    );
+    expect(h.replies.at(-1)).toContain("previsto");
+  });
+
+  it("lets the previsto: prefix beat a brain planned:false flag", async () => {
+    seedHarnessCategories(h, ["Vivienda", "otro"]);
+    h.mockBrainInterpret.mockResolvedValue({
+      intent: "register_expense",
+      amount: 2500,
+      category: "Vivienda",
+      note: "alquiler",
+      planned: false,
+    });
+
+    await h.service.handleUpdate(textUpdate({ text: "previsto: 2500 alquiler", messageId: 1 }), h.reply);
+
+    expect(h.mockCreateExpense).toHaveBeenCalledWith(
+      expect.objectContaining({ amount: 2500, category: "Vivienda", type: "EXPENSE", status: "PENDING" }),
+      ownerId,
+      { visibility: "INDIVIDUAL" },
+    );
   });
 
   it("falls back to today's otro path on a keyword miss when the brain returns null", async () => {
@@ -2027,6 +2192,32 @@ describe("TelegramService dialog controller (brain-routed)", () => {
     expect(h.mockUpdateMovement).not.toHaveBeenCalled();
   });
 
+  it("gates then_reassign on a reserved create: redirect reply, no category, no reassignment, dialog stays open", async () => {
+    await seedAwaitingCategory("mov-9");
+    h.mockCreateCategory.mockRejectedValue(
+      new ReservedCategoryError('Category "gastos fijos" is the reserved concept "gasto fijo"', "gasto fijo"),
+    );
+    h.mockBrainInterpret.mockResolvedValue({
+      intent: "create_category",
+      amount: null,
+      category: "gastos fijos",
+      note: null,
+      dialog_action: null,
+      then_reassign: true,
+    });
+
+    await h.service.handleUpdate(textUpdate({ text: "creá gastos fijos y guardalo ahí", messageId: 2 }), h.reply);
+
+    expect(h.mockCreateCategory).toHaveBeenCalledWith(ownerId, "gastos fijos");
+    expect(h.mockUpdateMovement).not.toHaveBeenCalled();
+    expect(h.replies.at(-1)).toBe(reservedCategoryReply("gastos fijos", "gasto fijo"));
+    expect(h.replies.at(-1)).toContain("previsto");
+    // The pending correction stays open: state is untouched.
+    const state = await h.botStateRepository.get(ownerId);
+    expect(state?.state).toBe("awaiting_category");
+    expect(state?.pendingMovementId).toBe("mov-9");
+  });
+
   it("replies with both the created and the missing-movement notices when the reassign fails", async () => {
     await seedAwaitingCategory("mov-9");
     h.mockBrainInterpret.mockResolvedValue({
@@ -2546,6 +2737,30 @@ describe("TelegramService planned registration (previsto:)", () => {
     });
     expect(h.replies.at(-1)).toContain("previsto");
     expect(h.replies.at(-1)).toContain(formatARS(2500));
+  });
+
+  it("brain-absent path: a planned phrasing WITHOUT the prefix never becomes PENDING (prefix is the only producer)", async () => {
+    const hNoBrain = makeHarness({ noBrain: true });
+    seedHarnessCategories(hNoBrain, ["otro"]);
+    hNoBrain.mockBrainInterpret.mockClear();
+
+    await hNoBrain.service.handleUpdate(
+      textUpdate({ text: "dejalo para el mes que viene: 2500 alquiler", messageId: 1 }),
+      hNoBrain.reply,
+    );
+
+    expect(hNoBrain.mockBrainInterpret).not.toHaveBeenCalled();
+    expect(hNoBrain.mockCreateExpense).toHaveBeenCalledWith(
+      expect.objectContaining({ amount: 2500, type: "EXPENSE" }),
+      ownerId,
+      { visibility: "INDIVIDUAL" },
+    );
+    // Without the prefix there is no PENDING: the status key is absent.
+    expect(hNoBrain.mockCreateExpense).not.toHaveBeenCalledWith(
+      expect.objectContaining({ status: "PENDING" }),
+      ownerId,
+      expect.anything(),
+    );
   });
 
   it("registers a matched-category previsto: with the planned confirmation reply", async () => {

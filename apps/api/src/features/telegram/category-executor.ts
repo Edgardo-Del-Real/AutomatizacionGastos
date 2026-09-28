@@ -5,6 +5,7 @@ import {
   ValidationFailedError,
 } from "../../infra/errors";
 import type { CategoryService } from "../categories/categories.service";
+import { ReservedCategoryError } from "../categories/reserved";
 import type {
   BotIntent,
   BotAction,
@@ -12,6 +13,7 @@ import type {
   ConversationEnvelope,
   ExecutionResult,
 } from "./bot-brain";
+import { reservedCategoryReply } from "./reply-text";
 
 /**
  * Deterministic category command executors: run a CRUD intent against the REAL
@@ -50,6 +52,15 @@ export class CategoryExecutor {
       const created = await this.categoryService.createCategory(ownerId, category);
       return this.result("create_category", true, "created", { category: created.name });
     } catch (error) {
+      if (error instanceof ReservedCategoryError) {
+        // The reserved guard must route BEFORE the generic ValidationFailedError
+        // (ReservedCategoryError extends it): the redirect teaches the concept.
+        return this.result("create_category", false, "created", {
+          category,
+          error: "reserved",
+          message: reservedCategoryReply(category, error.concept),
+        });
+      }
       if (error instanceof ValidationFailedError) {
         return this.result("create_category", false, "created", {
           category,
@@ -130,6 +141,16 @@ export class CategoryExecutor {
       }
       return this.result("rename_category", true, "renamed", { category: from, new_name: renamed.name });
     } catch (error) {
+      if (error instanceof ReservedCategoryError) {
+        // Reserved guard first: redirects teach the concept instead of reading
+        // the target as a duplicate.
+        return this.result("rename_category", false, "renamed", {
+          category: from,
+          new_name: to,
+          error: "reserved",
+          message: reservedCategoryReply(to, error.concept),
+        });
+      }
       if (error instanceof SavingsForbiddenError) {
         return this.result("rename_category", false, "renamed", {
           category: from,

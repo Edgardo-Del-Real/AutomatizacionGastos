@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { NotFoundError, ValidationFailedError } from "../../infra/errors";
 import type { CategoryService } from "../categories/categories.service";
+import { ReservedCategoryError } from "../categories/reserved";
 import type { MovementService } from "../movements/movements.service";
 import { MovementCorrector } from "./movement-corrector";
 
@@ -319,5 +320,38 @@ describe("MovementCorrector.correct", () => {
       expect(result.movement.id).toBe("m-paid");
     }
     expect(updateMovement).toHaveBeenCalledWith(ownerId, "m-paid", { category: "gastos hormiga" });
+  });
+
+  it("rejects a reserved target before scoring: status rejected with concept and name, no movement listed or updated", async () => {
+    const { corrector, updateMovement, listMovements, createCategory } = makeCorrector({
+      movements: [movement("m1", 2500, "uber", HOT)],
+      categories: [],
+      createCategory: async () => {
+        throw new ReservedCategoryError('Category "previsto" is the reserved concept "previsto"', "previsto");
+      },
+    });
+
+    const result = await corrector.correct(ownerId, { amount: 2500, note: null }, "previsto", NOW);
+
+    expect(result).toEqual({ status: "rejected", concept: "previsto", name: "previsto" });
+    expect(createCategory).toHaveBeenCalledWith(ownerId, "previsto");
+    expect(listMovements).not.toHaveBeenCalled();
+    expect(updateMovement).not.toHaveBeenCalled();
+  });
+
+  it("resolves a folded target to the existing category without creating (cafes → Cafe)", async () => {
+    const { corrector, createCategory, updateMovement } = makeCorrector({
+      movements: [movement("m1", 2500, "uber", HOT)],
+      categories: ["Cafe"],
+    });
+
+    const result = await corrector.correct(ownerId, { amount: 2500, note: null }, "cafes", NOW);
+
+    expect(createCategory).not.toHaveBeenCalled();
+    expect(result.status).toBe("reassigned");
+    if (result.status === "reassigned") {
+      expect(result.category).toBe("Cafe");
+    }
+    expect(updateMovement).toHaveBeenCalledWith(ownerId, "m1", { category: "Cafe" });
   });
 });

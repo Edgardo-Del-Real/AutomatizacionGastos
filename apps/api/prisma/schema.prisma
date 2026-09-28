@@ -18,6 +18,11 @@ enum MovementVisibility {
   SHARED
 }
 
+enum MovementStatus {
+  PENDING
+  PAID
+}
+
 enum CategoryType {
   NORMAL
   SAVINGS
@@ -34,6 +39,7 @@ model Expense {
   createdAt  DateTime            @default(now())
   type       MovementType        @default(EXPENSE)
   visibility MovementVisibility  @default(INDIVIDUAL)
+  status     MovementStatus      @default(PAID)
 
   @@index([ownerId, occurredAt])
   @@index([ownerId])

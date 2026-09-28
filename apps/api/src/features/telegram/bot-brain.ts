@@ -50,6 +50,14 @@ export type ConversationEnvelope = {
    * when both are present (AD6). Schema default false.
    */
   shared?: boolean;
+  /**
+   * Planned-registration signal, only meaningful with `register_expense` (spec
+   * "Planned Flag Contract"): true registers as a PENDING EXPENSE. A SIGNAL
+   * only — the deterministic `previsto:` prefix is authoritative and wins over
+   * this flag when both are present; materialization happens only through the
+   * deterministic guarded registration path. Schema default false.
+   */
+  planned?: boolean;
 };
 
 export type BotAction =
@@ -71,6 +79,7 @@ export type CategoryCommandErrorCode =
   | "not_found"
   | "otro_forbidden"
   | "savings_forbidden"
+  | "reserved"
   | "unknown";
 
 export type ExecutionResult = {
@@ -189,6 +198,7 @@ export const conversationEnvelopeSchema = z
     dialog_action: z.enum(["resolve", "abandon"]).nullable().default(null),
     then_reassign: z.boolean().default(false),
     shared: z.boolean().default(false),
+    planned: z.boolean().default(false),
   })
   .refine(
     (data) =>
@@ -201,7 +211,7 @@ export const replyEnvelopeSchema = z.object({ reply: z.string().trim().min(1).ma
 export type ChatMessage = { role: "user" | "assistant"; content: string };
 
 export const INTERPRET_SYSTEM_PROMPT = [
-  'Respondé SOLO con un objeto JSON con exactamente estas claves: {"intent": string, "amount": number|null, "category": string|null, "note": string|null, "query_type": string|null, "new_name": string|null, "dialog_action": string|null, "then_reassign": boolean, "shared": boolean}.',
+  'Respondé SOLO con un objeto JSON con exactamente estas claves: {"intent": string, "amount": number|null, "category": string|null, "note": string|null, "query_type": string|null, "new_name": string|null, "dialog_action": string|null, "then_reassign": boolean, "shared": boolean, "planned": boolean}.',
   "No agregues texto ni campos extra.",
   '"intent" es exactamente UNA de: "register_expense" (cualquier movimiento de dinero, gasto o ingreso), "correct_amount", "correct_category", "query", "query_recent", "query_balance", "query_month", "query_planned", "associate_keyword", "create_category", "delete_category", "rename_category", "create_savings_rule", "capabilities", "help", "off_topic".',
   "Si el mensaje tiene señal de gasto (verbo de gasto, $ o un monto) usá register_expense, aunque no tenga monto.",
@@ -222,6 +232,7 @@ export const INTERPRET_SYSTEM_PROMPT = [
   'Para "correct_category": "category" es la categoría DESTINO; "amount" y/o "note" identifican el movimiento a corregir.',
   '"then_reassign" es true SOLO cuando "create_category" pide guardar el movimiento pendiente en la categoría nueva (ej: "creá X y guardalo ahí"); en cualquier otro caso false.',
   '"shared" es true SOLO en "register_expense" cuando el dueño pide que el gasto sea compartido con su pareja ("ponelo compartido", "es compartido"); en cualquier otro caso false. Si el mensaje ya trae el prefijo "compartido:" el bot lo maneja solo: no lo dupliques.',
+  '"planned" es true SOLO en "register_expense" cuando el dueño quiere dejar el gasto para el mes que viene ("dejalo para el mes que viene", "lo pago el mes que viene", "quiero dejar un gasto previsto para el mes que viene"); en cualquier otro caso false. Es una SUGERENCIA: el bot nunca crea el estado previsto por sí mismo. Si el mensaje ya trae el prefijo "previsto:" el bot lo maneja solo: no lo dupliques.',
 ].join(" ");
 
 export const FEW_SHOTS: readonly ChatMessage[] = [
@@ -239,6 +250,11 @@ export const FEW_SHOTS: readonly ChatMessage[] = [
   {
     role: "assistant",
     content: '{"intent":"register_expense","amount":null,"category":null,"note":"alquiler","shared":true}',
+  },
+  { role: "user", content: "dejalo para el mes que viene: 2500 alquiler" },
+  {
+    role: "assistant",
+    content: '{"intent":"register_expense","amount":2500,"category":null,"note":"alquiler","planned":true}',
   },
   { role: "user", content: "cuánto gasté este mes?" },
   {

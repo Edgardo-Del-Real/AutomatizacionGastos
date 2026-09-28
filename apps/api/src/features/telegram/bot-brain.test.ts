@@ -201,6 +201,47 @@ describe("conversationEnvelopeSchema", () => {
     expect(result.success).toBe(false);
   });
 
+  it("carries planned: true on a register_expense envelope", () => {
+    const result = conversationEnvelopeSchema.safeParse({
+      intent: "register_expense",
+      amount: 2500,
+      category: null,
+      note: "alquiler",
+      planned: true,
+    });
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.planned).toBe(true);
+    }
+  });
+
+  it("defaults an absent planned flag to false", () => {
+    const result = conversationEnvelopeSchema.safeParse({
+      intent: "register_expense",
+      amount: 2500,
+      category: null,
+      note: "alquiler",
+    });
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.planned).toBe(false);
+    }
+  });
+
+  it("degrades to null for a malformed planned value (threat: malformed signal)", () => {
+    const result = conversationEnvelopeSchema.safeParse({
+      intent: "register_expense",
+      amount: 2500,
+      category: null,
+      note: "alquiler",
+      planned: "yes",
+    });
+
+    expect(result.success).toBe(false);
+  });
+
   it.each([
     ["empty category", { intent: "register_expense", amount: 100, category: "", note: null }],
     ["whitespace category", { intent: "register_expense", amount: 100, category: "   ", note: null }],
@@ -538,6 +579,7 @@ describe("GroqBotBrain.interpret", () => {
       dialog_action: null,
       then_reassign: false,
       shared: false,
+      planned: false,
     });
     expect(calls).toHaveLength(1);
   });
@@ -560,6 +602,7 @@ describe("GroqBotBrain.interpret", () => {
       dialog_action: null,
       then_reassign: false,
       shared: false,
+      planned: false,
     });
   });
 
@@ -588,6 +631,7 @@ describe("GroqBotBrain.interpret", () => {
       dialog_action: null,
       then_reassign: false,
       shared: false,
+      planned: false,
     });
   });
 
@@ -615,6 +659,7 @@ describe("GroqBotBrain.interpret", () => {
       dialog_action: null,
       then_reassign: false,
       shared: false,
+      planned: false,
     });
   });
 
@@ -727,6 +772,7 @@ describe("GroqBotBrain.interpret", () => {
       dialog_action: null,
       then_reassign: false,
       shared: false,
+      planned: false,
     });
   });
 
@@ -755,6 +801,7 @@ describe("GroqBotBrain.interpret", () => {
       dialog_action: null,
       then_reassign: false,
       shared: false,
+      planned: false,
     });
   });
 
@@ -861,6 +908,7 @@ describe("GroqBotBrain.interpret with dialog context", () => {
       dialog_action: "resolve",
       then_reassign: false,
       shared: false,
+      planned: false,
     });
   });
 
@@ -1137,6 +1185,28 @@ describe("prompt contracts", () => {
     expect(INTERPRET_SYSTEM_PROMPT).toContain('"shared": boolean');
     expect(INTERPRET_SYSTEM_PROMPT).toContain("compartido");
     expect(INTERPRET_SYSTEM_PROMPT).toContain("register_expense");
+  });
+
+  it("documents the planned flag in the interpret JSON key list", () => {
+    expect(INTERPRET_SYSTEM_PROMPT).toContain('"planned": boolean');
+  });
+
+  it("teaches conversational planned phrasings to set planned: true on register_expense", () => {
+    expect(INTERPRET_SYSTEM_PROMPT).toContain("planned");
+    expect(INTERPRET_SYSTEM_PROMPT).toContain("mes que viene");
+    expect(INTERPRET_SYSTEM_PROMPT).toContain("register_expense");
+  });
+
+  it("teaches the previsto: prefix as authoritative and never duplicated", () => {
+    expect(INTERPRET_SYSTEM_PROMPT).toContain('"previsto:"');
+    expect(INTERPRET_SYSTEM_PROMPT).toContain("no lo dupliques");
+  });
+
+  it("models a planned phrasing in the interpret few-shots", () => {
+    const shot = FEW_SHOTS.find(
+      (message) => message.role === "assistant" && message.content.includes('"planned":true'),
+    );
+    expect(shot).toBeDefined();
   });
 
   it("documents correct_category reference extraction in the interpret prompt", () => {

@@ -25,6 +25,14 @@
   },
   {
     "role": "user",
+    "content": "dejalo para el mes que viene: 2500 alquiler"
+  },
+  {
+    "role": "assistant",
+    "content": "{\"intent\":\"register_expense\",\"amount\":2500,\"category\":null,\"note\":\"alquiler\",\"planned\":true}"
+  },
+  {
+    "role": "user",
     "content": "cuánto gasté este mes?"
   },
   {

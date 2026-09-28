@@ -5,6 +5,7 @@ import { loadDotEnvFromDisk } from "../../config/load-env";
 import { ValidationFailedError } from "../../infra/errors";
 import { CategoryService } from "./categories.service";
 import { PrismaCategoryRepository } from "./categories.repository";
+import { ReservedCategoryError } from "./reserved";
 
 loadDotEnvFromDisk();
 
@@ -119,5 +120,30 @@ describe("categories savings guards (D9)", () => {
 
   it("assertOwnerCategory still rejects a category that is not the owner's", async () => {
     await expect(service.assertOwnerCategory("owner-1", "nope")).rejects.toBeInstanceOf(ValidationFailedError);
+  });
+
+  it("rejects ahorros with a reserved error: no category, no SAVINGS upsert, no NORMAL", async () => {
+    await expect(service.createCategory("owner-1", "ahorros")).rejects.toBeInstanceOf(ReservedCategoryError);
+    await expect(service.createCategory("owner-1", "ahorros")).rejects.toMatchObject({ concept: "ahorro" });
+    expect(await prisma.category.count({ where: { ownerId: "owner-1" } })).toBe(0);
+  });
+
+  it("rejects renaming a category TO ahorros (folded reserved), leaving the name unchanged", async () => {
+    await service.createCategory("owner-1", "Guardado");
+
+    await expect(service.renameCategory("owner-1", "Guardado", "ahorros")).rejects.toBeInstanceOf(
+      ReservedCategoryError,
+    );
+    const list = await service.listCategories("owner-1");
+    expect(list.map((category) => category.name)).toEqual(["Guardado"]);
+  });
+
+  it("keeps exact ahorro routed to the SAVINGS upsert alongside the ahorros rejection", async () => {
+    await expect(service.createCategory("owner-1", "ahorros")).rejects.toBeInstanceOf(ReservedCategoryError);
+    const savings = await service.createCategory("owner-1", "ahorro");
+    expect(savings.name).toBe("ahorro");
+    const rows = await prisma.category.findMany({ where: { ownerId: "owner-1" } });
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.type).toBe("SAVINGS");
   });
 });

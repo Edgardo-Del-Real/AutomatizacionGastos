@@ -2,7 +2,8 @@ import { NotFoundError, SavingsForbiddenError, ValidationFailedError } from "../
 import { isUniqueConstraintViolation } from "../messages/message.repository";
 import type { CategoryRepository } from "./categories.repository";
 import type { CategoryEntity, CategoryType, CategoryWithKeywords } from "./categories.types";
-import { matchCategory, normalizeForMatch } from "./matcher";
+import { matchCategory, normalizeForMatch, normalizeForMatchTolerant } from "./matcher";
+import { ReservedCategoryError, resolveReservedConcept } from "./reserved";
 
 const AHORRO = "ahorro";
 
@@ -18,6 +19,17 @@ export class CategoryService {
     // never a duplicate error.
     if (normalizeForMatch(trimmed) === AHORRO) {
       return this.ensureAhorro(ownerId);
+    }
+    // Reserved guard: folded "ahorros" is rejected (never upserted, never
+    // NORMAL); every other folded reserved member gets its educational
+    // redirect. Runs BEFORE availability so reserved names are never
+    // reported as duplicates.
+    const reserved = resolveReservedConcept(trimmed);
+    if (reserved !== null) {
+      throw new ReservedCategoryError(
+        `Category "${trimmed}" is the reserved concept "${reserved}"`,
+        reserved,
+      );
     }
     await this.assertNameAvailable(ownerId, trimmed);
     try {
@@ -52,6 +64,13 @@ export class CategoryService {
     }
     if (normalizeForMatch(to) === AHORRO) {
       throw new SavingsForbiddenError(`Cannot rename a category to "${AHORRO}"`);
+    }
+    // Reserved guard (rename side): folded reserved targets (previsto,
+    // gastos fijos, ahorros, compartidos, otros, provisto) are rejected before
+    // the availability check so they never read as duplicates.
+    const reserved = resolveReservedConcept(to);
+    if (reserved !== null) {
+      throw new ReservedCategoryError(`Category "${to}" is the reserved concept "${reserved}"`, reserved);
     }
     if (normalizeForMatch(from) !== normalizeForMatch(to)) {
       await this.assertNameAvailable(ownerId, to);
@@ -138,10 +157,16 @@ export class CategoryService {
   }
 
   private async assertNameAvailable(ownerId: string, name: string): Promise<void> {
-    const normalized = normalizeForMatch(name);
+    // Duplicate-variant guard (design decision 5): comparison runs through the
+    // tolerant fold, so a plural variant of an existing category is rejected;
+    // the error names the EXISTING category, not the attempted variant.
+    const normalized = normalizeForMatchTolerant(name);
     const categories = await this.repository.listByOwner(ownerId);
-    if (categories.some((candidate) => normalizeForMatch(candidate.name) === normalized)) {
-      throw new ValidationFailedError(`Category "${name}" already exists`);
+    const existing = categories.find(
+      (candidate) => normalizeForMatchTolerant(candidate.name) === normalized,
+    );
+    if (existing !== undefined) {
+      throw new ValidationFailedError(`Category "${existing.name}" already exists`);
     }
   }
 }

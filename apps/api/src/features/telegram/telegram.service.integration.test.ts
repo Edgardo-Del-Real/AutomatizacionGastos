@@ -113,6 +113,11 @@ describe("TelegramService (integration)", () => {
 
   async function seedCategories(names: string[]): Promise<void> {
     for (const name of names) {
+      // "otro" is the reserved fallback: it is created by ensureOtro below,
+      // never through createCategory (reserved guard).
+      if (name === "otro") {
+        continue;
+      }
       await categoryService.createCategory(ownerId, name);
     }
     await categoryService.ensureOtro(ownerId);

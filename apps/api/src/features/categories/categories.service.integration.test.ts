@@ -5,6 +5,7 @@ import { loadDotEnvFromDisk } from "../../config/load-env";
 import { NotFoundError, ValidationFailedError } from "../../infra/errors";
 import { CategoryService } from "./categories.service";
 import { PrismaCategoryRepository } from "./categories.repository";
+import { ReservedCategoryError } from "./reserved";
 
 loadDotEnvFromDisk();
 
@@ -252,6 +253,76 @@ describe("categories service (integration)", () => {
       const movements = await prisma.expense.findMany({ where: { ownerId: "owner-1" } });
       expect(movements).toHaveLength(1);
       expect(movements[0]?.category).toBe("Viajes");
+    });
+  });
+
+  describe("reserved and duplicate-variant guards", () => {
+    it.each([
+      ["gastos fijos", "gasto fijo"],
+      ["previsto", "previsto"],
+      ["provisto", "previsto"],
+      ["compartido", "compartido"],
+      ["compartida", "compartida"],
+      ["otro", "otro"],
+    ])("rejects creating the reserved concept %s with the %s concept and creates nothing", async (name, concept) => {
+      await expect(service.createCategory("owner-1", name)).rejects.toBeInstanceOf(ReservedCategoryError);
+      await expect(service.createCategory("owner-1", name)).rejects.toMatchObject({ concept });
+      expect(await prisma.category.count({ where: { ownerId: "owner-1" } })).toBe(0);
+    });
+
+    it("rejects folded reserved plurals (previstos, otros, compartidos) with the folded concept", async () => {
+      await expect(service.createCategory("owner-1", "previstos")).rejects.toMatchObject({ concept: "previsto" });
+      await expect(service.createCategory("owner-1", "otros")).rejects.toMatchObject({ concept: "otro" });
+      await expect(service.createCategory("owner-1", "compartidos")).rejects.toMatchObject({ concept: "compartido" });
+      await expect(service.createCategory("owner-1", "compartidas")).rejects.toMatchObject({ concept: "compartida" });
+      expect(await prisma.category.count({ where: { ownerId: "owner-1" } })).toBe(0);
+    });
+
+    it("rejects renaming a category TO a reserved concept and leaves the name unchanged", async () => {
+      await service.createCategory("owner-1", "Gastos varios");
+
+      await expect(service.renameCategory("owner-1", "Gastos varios", "previsto")).rejects.toBeInstanceOf(
+        ReservedCategoryError,
+      );
+      const list = await service.listCategories("owner-1");
+      expect(list.map((category) => category.name)).toEqual(["Gastos varios"]);
+    });
+
+    it("rejects a duplicate-variant create naming the existing category", async () => {
+      await service.createCategory("owner-1", "transporte");
+
+      await expect(service.createCategory("owner-1", "transportes")).rejects.toBeInstanceOf(
+        ValidationFailedError,
+      );
+      await expect(service.createCategory("owner-1", "transportes")).rejects.toMatchObject({
+        message: 'Category "transporte" already exists',
+      });
+      expect(await prisma.category.count({ where: { ownerId: "owner-1" } })).toBe(1);
+    });
+
+    it("rejects a duplicate-variant rename when the folded target already exists", async () => {
+      await service.createCategory("owner-1", "cafe");
+      await service.createCategory("owner-1", "Farmacia");
+
+      await expect(service.renameCategory("owner-1", "Farmacia", "cafes")).rejects.toBeInstanceOf(
+        ValidationFailedError,
+      );
+      const list = await service.listCategories("owner-1");
+      expect(list.map((category) => category.name).sort()).toEqual(["Farmacia", "cafe"]);
+    });
+
+    it("phantoms stay deletable: a pre-change reserved-name category can be deleted", async () => {
+      await service.createCategory("owner-1", "Previsto viejo");
+      // Simulate a pre-change phantom named exactly like a reserved concept.
+      await prisma.category.create({
+        data: { ownerId: "owner-1", name: "previsto", type: "NORMAL" },
+      });
+
+      const deleted = await service.deleteCategory("owner-1", "previsto");
+
+      expect(deleted?.name).toBe("previsto");
+      const remaining = await prisma.category.findMany({ where: { ownerId: "owner-1" } });
+      expect(remaining.map((category) => category.name)).toEqual(["Previsto viejo"]);
     });
   });
 });

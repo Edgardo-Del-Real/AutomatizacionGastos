@@ -15,6 +15,39 @@ export function parseSharedPrefix(text: string): { text: string; shared: boolean
   return { text: text.slice(match[0].length).trim(), shared: true };
 }
 
+/**
+ * D10 — the arrival prefixes (`compartido:` and `previsto:`) are parsed ONCE
+ * at arrival by a loop that strips them in ANY order. Both are authoritative
+ * (they work without the bot brain and win over brain signals) and composable:
+ * "compartido: previsto: 2500 alquiler" and "previsto: compartido: 2500
+ * alquiler" produce the same { text, shared, planned } result.
+ */
+export type ArrivalPrefixes = { text: string; shared: boolean; planned: boolean };
+
+const ARRIVAL_PREFIXES: readonly { re: RegExp; apply: (prefixes: ArrivalPrefixes) => void }[] = [
+  { re: /^compartido\s*:\s*/i, apply: (prefixes) => void (prefixes.shared = true) },
+  { re: /^previsto\s*:\s*/i, apply: (prefixes) => void (prefixes.planned = true) },
+];
+
+export function parseArrivalPrefixes(text: string): ArrivalPrefixes {
+  let remaining = text;
+  const prefixes: ArrivalPrefixes = { text: "", shared: false, planned: false };
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const { re, apply } of ARRIVAL_PREFIXES) {
+      const match = re.exec(remaining);
+      if (match !== null) {
+        apply(prefixes);
+        remaining = remaining.slice(match[0].length).trim();
+        changed = true;
+      }
+    }
+  }
+  prefixes.text = remaining;
+  return prefixes;
+}
+
 export type SavingsOverrideParseResult =
   | { ok: true; override: SavingsOverride; text: string }
   | { ok: false; error: "invalid_percent"; percent: number };

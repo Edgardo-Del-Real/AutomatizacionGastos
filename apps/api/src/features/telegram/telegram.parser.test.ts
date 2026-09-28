@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { normalizeTelegramMessage, parseSavingsOverride, parseSharedPrefix } from "./telegram.parser";
+import {
+  normalizeTelegramMessage,
+  parseArrivalPrefixes,
+  parseSavingsOverride,
+  parseSharedPrefix,
+} from "./telegram.parser";
 import type { TelegramMessage } from "./telegram.types";
 
 const OWNER_ID = 123456789;
@@ -109,6 +114,46 @@ describe("parseSharedPrefix", () => {
 
   it("does not treat plain words starting with 'compartido' without the colon as a prefix", () => {
     expect(parseSharedPrefix("compartido el gasto")).toEqual({ text: "compartido el gasto", shared: false });
+  });
+});
+
+describe("parseArrivalPrefixes (D10)", () => {
+  it("detects a previsto: prefix and strips it, trimming the rest", () => {
+    expect(parseArrivalPrefixes("previsto: 2500 alquiler")).toEqual({
+      text: "2500 alquiler",
+      shared: false,
+      planned: true,
+    });
+    expect(parseArrivalPrefixes("PREVISTO:  2500  alquiler  ")).toEqual({
+      text: "2500  alquiler",
+      shared: false,
+      planned: true,
+    });
+  });
+
+  it("keeps the compartido: prefix behavior and strips it", () => {
+    expect(parseArrivalPrefixes("compartido: $2000 super")).toEqual({
+      text: "$2000 super",
+      shared: true,
+      planned: false,
+    });
+  });
+
+  it("strips compartido: and previsto: in either order (composable)", () => {
+    expect(parseArrivalPrefixes("compartido: previsto: 2500 alquiler")).toEqual({
+      text: "2500 alquiler",
+      shared: true,
+      planned: true,
+    });
+    expect(parseArrivalPrefixes("previsto: compartido: 2500 alquiler")).toEqual({
+      text: "2500 alquiler",
+      shared: true,
+      planned: true,
+    });
+  });
+
+  it("returns the text untouched with both flags false when no prefix is present", () => {
+    expect(parseArrivalPrefixes("2500 alquiler")).toEqual({ text: "2500 alquiler", shared: false, planned: false });
   });
 });
 

@@ -1002,4 +1002,101 @@ describe("TelegramService (integration)", () => {
     expect(replies.at(-1)).toContain(formatARS(2500));
     expect(replies.at(-1)).toContain("gastos hormiga");
   });
+
+  it("planned e2e: previsto: registers PENDING EXPENSE rows, the planned query answers real data, and recent/correction exclude them", async () => {
+    await seedCategories(["Vivienda", "otro"]);
+    const replies: string[] = [];
+    const reply = async (text: string): Promise<void> => {
+      replies.push(text);
+    };
+
+    // Deterministic bot (no brain): both prefix orders register PENDING rows.
+    await service.handleUpdate(
+      textUpdate({ messageId: 1, text: "previsto: 2500 alquiler" }),
+      reply,
+    );
+    await service.handleUpdate(
+      textUpdate({ messageId: 2, text: "compartido: previsto: 1500 expensas" }),
+      reply,
+    );
+    await service.handleUpdate(
+      textUpdate({ messageId: 3, text: "previsto: compartido: 1200 luz" }),
+      reply,
+    );
+
+    const rows = await prisma.expense.findMany({ where: { ownerId }, orderBy: { occurredAt: "asc" } });
+    expect(rows).toHaveLength(3);
+    expect(rows.every((row) => row.status === "PENDING")).toBe(true);
+    expect(rows.every((row) => row.type === "EXPENSE")).toBe(true);
+    expect(rows.map((row) => row.visibility).sort()).toEqual(["INDIVIDUAL", "SHARED", "SHARED"]);
+    expect(replies.join("\n")).toContain("previsto");
+    // The KPIs exclude PENDING: only the planned block reports the total.
+    const summary = await new MovementService(new PrismaMovementRepository(prisma), categoryService).getSummary({
+      viewerId: ownerId,
+      partnerId: null,
+      visibility: "all",
+    });
+    expect(summary.kpis.expenses).toBe(0);
+    expect(summary.planned.total).toBe(5200);
+
+    // "¿cuánto tengo previsto?" answers 5200 from real data through the brain path.
+    const queryReplies: string[] = [];
+    const stubbed = buildService(
+      () => undefined,
+      stubBrain({
+        interpret: async () => ({ intent: "query_planned", amount: null, category: null, note: null, dialog_action: null }),
+        reply: async () => null,
+      }),
+    );
+    await stubbed.handleUpdate(
+      textUpdate({ messageId: 4, text: "cuánto tengo previsto?" }),
+      async (text) => {
+        queryReplies.push(text);
+      },
+    );
+    expect(queryReplies.at(-1)).toContain(formatARS(5200));
+
+    // Recent excludes PENDING rows at the telegram layer (repository keeps them).
+    const recentReplies: string[] = [];
+    const recentStubbed = buildService(
+      () => undefined,
+      stubBrain({
+        interpret: async () => ({ intent: "query", amount: null, category: null, note: null, query_type: "recent", dialog_action: null }),
+        reply: async () => null,
+      }),
+    );
+    await recentStubbed.handleUpdate(
+      textUpdate({ messageId: 5, text: "ultimos movimientos" }),
+      async (text) => {
+        recentReplies.push(text);
+      },
+    );
+    expect(recentReplies.at(-1)).toContain("movimientos");
+    expect(recentReplies.at(-1)).not.toContain("previsto");
+
+    // Correction excludes PENDING: a free-form correct_category over the
+    // pending alquiler finds no PAID match → no reassignment.
+    const correctReplies: string[] = [];
+    const correctStubbed = buildService(
+      () => undefined,
+      stubBrain({
+        interpret: async () => ({
+          intent: "correct_category",
+          amount: 2500,
+          category: "gastos hormiga",
+          note: "alquiler",
+          dialog_action: null,
+        }),
+      }),
+    );
+    await correctStubbed.handleUpdate(
+      textUpdate({ messageId: 6, text: "esos 2500 alquiler a gastos hormiga" }),
+      async (text) => {
+        correctReplies.push(text);
+      },
+    );
+    const after = await prisma.expense.findMany({ where: { ownerId }, orderBy: { occurredAt: "asc" } });
+    expect(after.every((row) => row.category === "otro" || row.category === null)).toBe(true);
+    expect(correctReplies.at(-1)).toContain("No encontré");
+  });
 });

@@ -2519,3 +2519,255 @@ describe("TelegramService movement correction (correct_category)", () => {
     expect(h.mockUpdateMovement).not.toHaveBeenCalled();
   });
 });
+
+describe("TelegramService planned registration (previsto:)", () => {
+  let h: Harness;
+
+  beforeEach(() => {
+    h = makeHarness();
+  });
+
+  it("registers 'previsto: 2500 alquiler' as a PENDING EXPENSE deterministically (brain-absent)", async () => {
+    seedHarnessCategories(h, ["otro"]);
+    // matchNote returns null → the "otro" correction tail runs with planned.
+
+    await h.service.handleUpdate(textUpdate({ text: "previsto: 2500 alquiler", messageId: 1 }), h.reply);
+
+    expect(h.mockCreateExpense).toHaveBeenCalledWith(
+      expect.objectContaining({ amount: 2500, category: "otro", type: "EXPENSE", status: "PENDING" }),
+      ownerId,
+      { visibility: "INDIVIDUAL" },
+    );
+    expect(h.mockSetState).toHaveBeenLastCalledWith({
+      ownerId,
+      state: "awaiting_category",
+      pendingMovementId: "mov-1",
+      pendingNote: "alquiler",
+    });
+    expect(h.replies.at(-1)).toContain("previsto");
+    expect(h.replies.at(-1)).toContain(formatARS(2500));
+  });
+
+  it("registers a matched-category previsto: with the planned confirmation reply", async () => {
+    seedHarnessCategories(h, ["Vivienda", "otro"]);
+    h.mockMatchNote.mockResolvedValue("Vivienda");
+
+    await h.service.handleUpdate(textUpdate({ text: "previsto: 2500 alquiler", messageId: 1 }), h.reply);
+
+    expect(h.mockCreateExpense).toHaveBeenCalledWith(
+      expect.objectContaining({ amount: 2500, category: "Vivienda", type: "EXPENSE", status: "PENDING" }),
+      ownerId,
+      { visibility: "INDIVIDUAL" },
+    );
+    expect(h.replies.at(-1)).toContain("previsto");
+    expect(h.replies.at(-1)).toContain(formatARS(2500));
+    expect(h.replies.at(-1)).toContain("Vivienda");
+    expect(h.mockSetState).toHaveBeenLastCalledWith({ ownerId, state: "idle", pendingMovementId: null, pendingNote: null });
+  });
+
+  it("registers a previsto: through the brain path as a PENDING EXPENSE", async () => {
+    seedHarnessCategories(h, ["Vivienda", "otro"]);
+    h.mockBrainInterpret.mockResolvedValue({
+      intent: "register_expense",
+      amount: 2500,
+      category: "Vivienda",
+      note: "alquiler",
+    });
+
+    await h.service.handleUpdate(textUpdate({ text: "previsto: 2500 alquiler", messageId: 1 }), h.reply);
+
+    expect(h.mockCreateExpense).toHaveBeenCalledWith(
+      expect.objectContaining({ amount: 2500, category: "Vivienda", type: "EXPENSE", status: "PENDING" }),
+      ownerId,
+      { visibility: "INDIVIDUAL" },
+    );
+    expect(h.replies.at(-1)).toContain("previsto");
+  });
+
+  it.each([
+    ["compartido: previsto: 2500 alquiler", "compartido first"],
+    ["previsto: compartido: 2500 alquiler", "previsto first"],
+  ])("composes previsto: with compartido: in any order (%s)", async (text) => {
+    seedHarnessCategories(h, ["Vivienda", "otro"]);
+    h.mockMatchNote.mockResolvedValue("Vivienda");
+
+    await h.service.handleUpdate(textUpdate({ text, messageId: 1 }), h.reply);
+
+    expect(h.mockCreateExpense).toHaveBeenCalledWith(
+      expect.objectContaining({ amount: 2500, category: "Vivienda", type: "EXPENSE", status: "PENDING" }),
+      ownerId,
+      { visibility: "SHARED" },
+    );
+  });
+
+  it("never applies a savings split to a previsto: registration (forced EXPENSE)", async () => {
+    seedHarnessCategories(h, ["otro"]);
+    h.mockResolveSplit.mockResolvedValue({ kind: "split", percent: 10 });
+
+    await h.service.handleUpdate(textUpdate({ text: "previsto: 1000 entrenuts", messageId: 1 }), h.reply);
+
+    expect(h.mockCreateExpense).toHaveBeenCalledWith(
+      expect.objectContaining({ amount: 1000, type: "EXPENSE", status: "PENDING" }),
+      ownerId,
+      expect.anything(),
+    );
+  });
+
+  it("persists planned in the amount-confirmation payload and registers PENDING on resolution", async () => {
+    seedHarnessCategories(h, ["Vivienda", "otro"]);
+    h.mockBrainInterpret.mockImplementation(async (message: string) => {
+      if (message === "2500") {
+        // The owner picks the deterministic amount: a resolve envelope.
+        return {
+          intent: "register_expense",
+          amount: 2500,
+          category: "Vivienda",
+          note: "alquiler",
+          dialog_action: "resolve",
+        };
+      }
+      return {
+        intent: "register_expense",
+        amount: 2600,
+        category: "Vivienda",
+        note: "alquiler",
+      };
+    });
+
+    // Deterministic 2500 vs brain 2600 → amount-conflict question.
+    await h.service.handleUpdate(textUpdate({ text: "previsto: 2500 alquiler", messageId: 1 }), h.reply);
+
+    const stored = h.mockSetState.mock.calls.at(-1)?.[0] as BotStateRecord;
+    expect(stored.state).toBe("awaiting_amount_confirmation");
+    const payload = amountConfirmationPayloadSchema.parse(JSON.parse(stored.pendingNote ?? "{}"));
+    expect(payload.planned).toBe(true);
+    expect(payload.shared).toBe(false);
+
+    // The owner picks the deterministic amount; the registration stays planned.
+    h.mockCreateExpense.mockClear();
+    await h.service.handleUpdate(textUpdate({ text: "2500", messageId: 2 }), h.reply);
+
+    expect(h.mockCreateExpense).toHaveBeenCalledWith(
+      expect.objectContaining({ amount: 2500, category: "Vivienda", type: "EXPENSE", status: "PENDING" }),
+      ownerId,
+      { visibility: "INDIVIDUAL" },
+    );
+    expect(h.replies.at(-1)).toContain("previsto");
+  });
+});
+
+describe("TelegramService planned query (query_planned)", () => {
+  let h: Harness;
+
+  beforeEach(() => {
+    h = makeHarness();
+  });
+
+  function summaryWithPlanned(total: number, month = "2026-10") {
+    return {
+      kpis: {
+        income: 5000,
+        expenses: 2000,
+        balance: 3000,
+        savings: 0,
+        avgPerMonth: 0,
+        avgPerMovement: 0,
+        maxAmount: 2000,
+        count: 7,
+        countThisMonth: 2,
+      },
+      mom: { months: [{ month: "2026-09", income: 3000, expenses: 1000, balance: 2000, savings: 0 }] },
+      daily: [],
+      categories: [],
+      top: { expenses: [], income: [] },
+      planned: { month, total },
+    };
+  }
+
+  it("answers a query_planned intent with the real planned total and sends the brain reply verbatim", async () => {
+    seedHarnessCategories(h, ["otro"]);
+    h.mockGetSummary.mockResolvedValue(summaryWithPlanned(4000));
+    h.mockBrainInterpret.mockResolvedValue({
+      intent: "query_planned",
+      amount: null,
+      category: null,
+      note: null,
+      query_type: null,
+    });
+    h.mockBrainReply.mockResolvedValue("El mes que viene tenés previsto $ 4.000,00.");
+
+    await h.service.handleUpdate(textUpdate({ text: "cuánto tengo previsto?", messageId: 1 }), h.reply);
+
+    expect(h.mockCreateExpense).not.toHaveBeenCalled();
+    expect(h.mockSetState).not.toHaveBeenCalled();
+    expect(h.mockGetSummary).toHaveBeenCalledWith({ viewerId: ownerId, partnerId: null, visibility: "all" });
+    expect(h.mockBrainReply).toHaveBeenCalledWith({
+      intent: "query_planned",
+      ok: true,
+      action: "answered",
+      amount: null,
+      category: null,
+      note: null,
+      query_type: "planned",
+      query: { query_type: "planned", month: "2026-10", total: 4000 },
+      planned_month: "2026-10",
+      planned_total: 4000,
+    });
+    expect(h.replies.at(-1)).toBe("El mes que viene tenés previsto $ 4.000,00.");
+  });
+
+  it("answers a query_planned intent with the fixed template when the brain reply is null", async () => {
+    seedHarnessCategories(h, ["otro"]);
+    h.mockGetSummary.mockResolvedValue(summaryWithPlanned(4000));
+    h.mockBrainInterpret.mockResolvedValue({
+      intent: "query_planned",
+      amount: null,
+      category: null,
+      note: null,
+      query_type: null,
+    });
+    h.mockBrainReply.mockResolvedValue(null);
+
+    await h.service.handleUpdate(textUpdate({ text: "cuánto tengo previsto?", messageId: 1 }), h.reply);
+
+    expect(h.mockCreateExpense).not.toHaveBeenCalled();
+    expect(h.replies.at(-1)).toContain("previsto");
+    expect(h.replies.at(-1)).toContain(formatARS(4000));
+    expect(h.replies.at(-1)).not.toBe(queryRedirectReply());
+  });
+
+  it("answers zero when the owner has no planned expenses", async () => {
+    seedHarnessCategories(h, ["otro"]);
+    h.mockGetSummary.mockResolvedValue(summaryWithPlanned(0));
+    h.mockBrainInterpret.mockResolvedValue({
+      intent: "query_planned",
+      amount: null,
+      category: null,
+      note: null,
+      query_type: null,
+    });
+    h.mockBrainReply.mockResolvedValue(null);
+
+    await h.service.handleUpdate(textUpdate({ text: "cuánto tengo previsto?", messageId: 1 }), h.reply);
+
+    expect(h.replies.at(-1)).toContain(formatARS(0));
+  });
+
+  it("redirects honestly when the planned query execution fails", async () => {
+    seedHarnessCategories(h, ["otro"]);
+    h.mockGetSummary.mockRejectedValue(new Error("db down"));
+    h.mockBrainInterpret.mockResolvedValue({
+      intent: "query_planned",
+      amount: null,
+      category: null,
+      note: null,
+      query_type: null,
+    });
+
+    await h.service.handleUpdate(textUpdate({ text: "cuánto tengo previsto?", messageId: 1 }), h.reply);
+
+    expect(h.mockCreateExpense).not.toHaveBeenCalled();
+    expect(h.mockLogger).toHaveBeenCalled();
+    expect(h.replies.at(-1)).toBe(queryRedirectReply());
+  });
+});

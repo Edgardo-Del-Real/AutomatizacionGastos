@@ -72,6 +72,15 @@ export const movementsRoute: FastifyPluginAsync<MovementsRouteOptions> = async (
     return reply.send(updated);
   });
 
+  // D5 — mark-paid transition: scoped by the x-owner-id header; the movement
+  // must be a PENDING EXPENSE (404 missing/other owner, 409 otherwise).
+  app.post("/movements/:id/paid", async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const ownerId = readOwnerId(request.headers);
+    const paid = await movementService.markMovementPaid(ownerId, id);
+    return reply.send(paid);
+  });
+
   app.delete("/movements/:id", async (request, reply) => {
     const { id } = request.params as { id: string };
     const ownerId = readOwnerId(request.headers);

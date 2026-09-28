@@ -1,6 +1,6 @@
 import { Prisma } from "@prisma/client";
 import type { PrismaClient } from "@prisma/client";
-import type { Movement, MovementType, MovementVisibility } from "@rita/contracts";
+import type { Movement, MovementStatus, MovementType, MovementVisibility } from "@rita/contracts";
 import type {
   CategoryBucket,
   DayBucket,
@@ -26,6 +26,7 @@ type MovementRow = {
   createdAt: Date;
   type: MovementType;
   visibility: MovementVisibility;
+  status: MovementStatus;
 };
 
 type DecimalLike = Prisma.Decimal | string | number | null | undefined;
@@ -50,6 +51,7 @@ function mapMovementRow(row: MovementRow): Movement {
     createdAt: row.createdAt,
     type: row.type,
     visibility: row.visibility,
+    status: row.status,
   };
 }
 
@@ -72,6 +74,15 @@ function periodConditions(period: SummaryPeriod): Prisma.Sql[] {
  */
 const SAVINGS_EXCLUDED = Prisma.sql`"type" <> 'SAVINGS'::"MovementType"`;
 
+/**
+ * D2 — the ONE PENDING-exclusion surface: every KPI aggregate that must never
+ * count planned expenses (summaryKpis, summaryDaily, summaryCategories,
+ * topByType, summaryMonths) composes this fragment. It is NEVER applied to
+ * listByOwner (the movement list keeps PENDING rows) or summarySavings
+ * (SAVINGS rows are always PAID by the create refine).
+ */
+const PENDING_EXCLUDED = Prisma.sql`"status" <> 'PENDING'::"MovementStatus"`;
+
 export interface MovementRepository {
   listByOwner(scope: ViewerScope, filters: MovementListFilters): Promise<Movement[]>;
   summaryKpis(scope: ViewerScope, period: SummaryPeriod): Promise<KpiTotals>;
@@ -81,6 +92,13 @@ export interface MovementRepository {
   topByType(scope: ViewerScope, type: MovementType, limit: number, period: SummaryPeriod): Promise<Movement[]>;
   /** D3: current-calendar-month SAVINGS sum (ARS, viewer-scoped). */
   summarySavings(scope: ViewerScope, period: SummaryPeriod): Promise<number>;
+  /**
+   * D4: the owner's PENDING EXPENSE total whose derived month (occurredAt + 1
+   * month, Buenos Aires) equals `month`. Ignores any from/to filters by design.
+   */
+  summaryPlanned(scope: ViewerScope, month: string): Promise<{ month: string; total: number }>;
+  /** D5: guarded single-write mark-paid transition (EXPENSE ∧ PENDING). */
+  markPaidById(id: string, ownerId: string): Promise<Movement | null>;
   findById(id: string, ownerId: string): Promise<Movement | null>;
   updateById(
     id: string,
@@ -141,7 +159,7 @@ export class PrismaMovementRepository implements MovementRepository {
     }
     const where = Prisma.join(conditions, " AND ");
     const rows = await this.prisma.$queryRaw<MovementRow[]>`
-      SELECT "id", "ownerId", "ownerId" AS "registrantId", "amount", "currency", "category", "note", "occurredAt", "createdAt", "type", "visibility"
+      SELECT "id", "ownerId", "ownerId" AS "registrantId", "amount", "currency", "category", "note", "occurredAt", "createdAt", "type", "visibility", "status"
       FROM "Expense"
       WHERE ${where}
       ORDER BY "occurredAt" DESC
@@ -154,6 +172,7 @@ export class PrismaMovementRepository implements MovementRepository {
       this.viewerPredicate(scope),
       Prisma.sql`"currency" = 'ARS'`,
       SAVINGS_EXCLUDED,
+      PENDING_EXCLUDED,
       ...periodConditions(period),
     ];
     const where = Prisma.join(conditions, " AND ");
@@ -189,6 +208,10 @@ export class PrismaMovementRepository implements MovementRepository {
     const conditions: Prisma.Sql[] = [
       this.viewerPredicate(scope),
       Prisma.sql`"currency" = 'ARS'`,
+      // D3 — the trap: PENDING is excluded from the income/expense sums, but the
+      // SAVINGS CASE column stays untouched (PENDING rows are always
+      // EXPENSE-typed, so the savings column never intersects PENDING).
+      PENDING_EXCLUDED,
       Prisma.sql`"occurredAt" >= (date_trunc('month', now() AT TIME ZONE ${BA_TIMEZONE}) - interval '5 months')`,
     ];
     const where = Prisma.join(conditions, " AND ");
@@ -223,6 +246,7 @@ export class PrismaMovementRepository implements MovementRepository {
       this.viewerPredicate(scope),
       Prisma.sql`"currency" = 'ARS'`,
       SAVINGS_EXCLUDED,
+      PENDING_EXCLUDED,
       Prisma.sql`("occurredAt" AT TIME ZONE 'UTC' AT TIME ZONE ${BA_TIMEZONE})
         >= date_trunc('day', now() AT TIME ZONE ${BA_TIMEZONE}) - interval '29 days'`,
     ];
@@ -255,6 +279,7 @@ export class PrismaMovementRepository implements MovementRepository {
       this.viewerPredicate(scope),
       Prisma.sql`"currency" = 'ARS'`,
       SAVINGS_EXCLUDED,
+      PENDING_EXCLUDED,
       ...periodConditions(period),
     ];
     const where = Prisma.join(conditions, " AND ");
@@ -290,11 +315,12 @@ export class PrismaMovementRepository implements MovementRepository {
       this.viewerPredicate(scope),
       Prisma.sql`"currency" = 'ARS'`,
       Prisma.sql`"type" = ${type}::"MovementType"`,
+      PENDING_EXCLUDED,
       ...periodConditions(period),
     ];
     const where = Prisma.join(conditions, " AND ");
     const rows = await this.prisma.$queryRaw<MovementRow[]>`
-      SELECT "id", "ownerId", "ownerId" AS "registrantId", "amount", "currency", "category", "note", "occurredAt", "createdAt", "type", "visibility"
+      SELECT "id", "ownerId", "ownerId" AS "registrantId", "amount", "currency", "category", "note", "occurredAt", "createdAt", "type", "visibility", "status"
       FROM "Expense"
       WHERE ${where}
       ORDER BY "amount" DESC
@@ -317,6 +343,53 @@ export class PrismaMovementRepository implements MovementRepository {
       WHERE ${where}
     `;
     return toNumber(rows[0]?.savings);
+  }
+
+  /**
+   * D4 — the planned block: sum of the owner's PENDING EXPENSE movements whose
+   * derived month equals `month`. The month is derived per row in SQL using the
+   * same BA idiom as the bucketing aggregates (naive-UTC column → BA wall time)
+   * plus one month, so the boundary scenario behaves identically to mom/daily.
+   * No period conditions are composed here — planned ignores from/to by design.
+   */
+  async summaryPlanned(
+    scope: ViewerScope,
+    month: string,
+  ): Promise<{ month: string; total: number }> {
+    const conditions: Prisma.Sql[] = [
+      this.viewerPredicate(scope),
+      Prisma.sql`"currency" = 'ARS'`,
+      Prisma.sql`"type" = 'EXPENSE'::"MovementType"`,
+      Prisma.sql`"status" = 'PENDING'::"MovementStatus"`,
+      Prisma.sql`to_char(date_trunc('month',
+        ("occurredAt" AT TIME ZONE 'UTC' AT TIME ZONE ${BA_TIMEZONE})
+        + interval '1 month'), 'YYYY-MM') = ${month}`,
+    ];
+    const where = Prisma.join(conditions, " AND ");
+    const rows = await this.prisma.$queryRaw<{ total: DecimalLike }[]>`
+      SELECT COALESCE(SUM("amount"), 0) AS "total"
+      FROM "Expense"
+      WHERE ${where}
+    `;
+    return { month, total: toNumber(rows[0]?.total) };
+  }
+
+  /**
+   * D5 — the guarded single-write transition: the guards live in the WHERE
+   * (owner-scoped, EXPENSE, PENDING), and only a successful match rewrites
+   * status + occurredAt together. `occurredAt` moves to the payment date so the
+   * movement enters aggregates on the day it was actually paid.
+   */
+  async markPaidById(id: string, ownerId: string): Promise<Movement | null> {
+    const updated = await this.prisma.expense.updateMany({
+      where: { id, ownerId, type: "EXPENSE", status: "PENDING" },
+      data: { status: "PAID", occurredAt: new Date() },
+    });
+    if (updated.count === 0) {
+      return null;
+    }
+    const row = await this.prisma.expense.findFirst({ where: { id, ownerId } });
+    return row === null ? null : mapMovementRow({ ...row, registrantId: row.ownerId });
   }
 
   /** Resolves the movement for PATCH guards (D9): type decides whether the SAVINGS category is allowed. */

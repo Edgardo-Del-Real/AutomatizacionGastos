@@ -26,6 +26,27 @@ function resolveTestDatabaseUrl(): string {
 
 const BA_OFFSET_MS = 3 * 60 * 60 * 1000;
 
+/** Buenos Aires wall-clock now (the summary buckets by BA, never by UTC). */
+function baNow(): Date {
+  return new Date(Date.now() - BA_OFFSET_MS);
+}
+
+function baMonthKey(d: Date): string {
+  return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}`;
+}
+
+/** The month following the current Buenos Aires month (the `planned` target). */
+function nextBaMonthKey(): string {
+  const now = baNow();
+  return baMonthKey(new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1)));
+}
+
+/** Noon on the 5th of the current Buenos Aires month — inside the mom/daily windows. */
+function thisMonthNoonIso(): string {
+  const now = baNow();
+  return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 5, 12, 0, 0)).toISOString();
+}
+
 type SeedMovement = {
   ownerId: string;
   amount: number;
@@ -33,7 +54,8 @@ type SeedMovement = {
   category?: string | null;
   note?: string | null;
   occurredAt?: string;
-  type: "EXPENSE" | "INCOME";
+  type: "EXPENSE" | "INCOME" | "SAVINGS";
+  status?: "PENDING" | "PAID";
 };
 
 describe("movements route", () => {
@@ -72,6 +94,7 @@ describe("movements route", () => {
         note: movement.note ?? null,
         occurredAt: new Date(movement.occurredAt ?? "2026-08-10T12:00:00.000Z"),
         type: movement.type,
+        status: movement.status ?? "PAID",
       },
     });
   }
@@ -86,6 +109,7 @@ describe("movements route", () => {
         note: movement.note ?? null,
         occurredAt: new Date(movement.occurredAt ?? "2026-08-10T12:00:00.000Z"),
         type: movement.type,
+        status: movement.status ?? "PAID",
       },
     });
   }
@@ -693,6 +717,493 @@ describe("movements route", () => {
       const summary = response.json() as { kpis: { expenses: number; count: number } };
       expect(summary.kpis.expenses).toBe(300);
       expect(summary.kpis.count).toBe(2);
+    });
+  });
+
+  describe("planned expenses (PENDING exclusion + planned summary)", () => {
+    it("excludes PENDING from kpis: income/expenses/balance/count/maxAmount", async () => {
+      const noon = thisMonthNoonIso();
+      await seed({
+        ownerId: "owner-1",
+        amount: 900,
+        category: "salary",
+        note: "sueldo",
+        occurredAt: noon,
+        type: "INCOME",
+      });
+      await seed({
+        ownerId: "owner-1",
+        amount: 300,
+        category: "food",
+        note: "mercado",
+        occurredAt: noon,
+        type: "EXPENSE",
+      });
+      await seed({
+        ownerId: "owner-1",
+        amount: 2500,
+        category: "rent",
+        note: "alquiler",
+        occurredAt: noon,
+        type: "EXPENSE",
+        status: "PENDING",
+      });
+
+      const response = await app.inject({ method: "GET", url: "/movements/summary?ownerId=owner-1" });
+
+      expect(response.statusCode).toBe(200);
+      const summary = response.json();
+      expect(summary.kpis.income).toBe(900);
+      expect(summary.kpis.expenses).toBe(300);
+      expect(summary.kpis.balance).toBe(600);
+      expect(summary.kpis.count).toBe(2);
+      expect(summary.kpis.maxAmount).toBe(900);
+    });
+
+    it("excludes PENDING from the month and day buckets", async () => {
+      const noon = thisMonthNoonIso();
+      const monthKey = baMonthKey(baNow());
+      await seed({
+        ownerId: "owner-1",
+        amount: 300,
+        category: "food",
+        note: "mercado",
+        occurredAt: noon,
+        type: "EXPENSE",
+      });
+      await seed({
+        ownerId: "owner-1",
+        amount: 2500,
+        category: "rent",
+        note: "alquiler",
+        occurredAt: noon,
+        type: "EXPENSE",
+        status: "PENDING",
+      });
+
+      const response = await app.inject({ method: "GET", url: "/movements/summary?ownerId=owner-1" });
+
+      expect(response.statusCode).toBe(200);
+      const summary = response.json();
+      const month = summary.mom.months.find((m: { month: string }) => m.month === monthKey);
+      expect(month).toBeTruthy();
+      expect(month.expenses).toBe(300);
+      const day = summary.daily.find((d: { day: string }) => d.day === noon.slice(0, 10));
+      expect(day).toBeTruthy();
+      expect(day.expenses).toBe(300);
+    });
+
+    it("excludes PENDING from the category breakdown", async () => {
+      const noon = thisMonthNoonIso();
+      await seed({
+        ownerId: "owner-1",
+        amount: 300,
+        category: "food",
+        note: "mercado",
+        occurredAt: noon,
+        type: "EXPENSE",
+      });
+      await seed({
+        ownerId: "owner-1",
+        amount: 2500,
+        category: "food",
+        note: "alquiler",
+        occurredAt: noon,
+        type: "EXPENSE",
+        status: "PENDING",
+      });
+
+      const response = await app.inject({ method: "GET", url: "/movements/summary?ownerId=owner-1" });
+
+      expect(response.statusCode).toBe(200);
+      const summary = response.json();
+      const food = summary.categories.find((c: { name: string }) => c.name === "food");
+      expect(food).toBeTruthy();
+      expect(food.expenseAmount).toBe(300);
+      expect(food.expensePercent).toBe(100);
+    });
+
+    it("excludes PENDING from the top expense list", async () => {
+      const noon = thisMonthNoonIso();
+      await seed({
+        ownerId: "owner-1",
+        amount: 300,
+        category: "food",
+        note: "mercado",
+        occurredAt: noon,
+        type: "EXPENSE",
+      });
+      await seed({
+        ownerId: "owner-1",
+        amount: 2500,
+        category: "rent",
+        note: "alquiler",
+        occurredAt: noon,
+        type: "EXPENSE",
+        status: "PENDING",
+      });
+
+      const response = await app.inject({ method: "GET", url: "/movements/summary?ownerId=owner-1" });
+
+      expect(response.statusCode).toBe(200);
+      const summary = response.json();
+      expect(summary.top.expenses).toHaveLength(1);
+      expect(summary.top.expenses[0].amount).toBe(300);
+      expect(summary.top.expenses[0].note).toBe("mercado");
+    });
+
+    it("keeps the mom SAVINGS column while PENDING is excluded (savings 100, planned 2500)", async () => {
+      const noon = thisMonthNoonIso();
+      const monthKey = baMonthKey(baNow());
+      await seed({
+        ownerId: "owner-1",
+        amount: 100,
+        category: "ahorro",
+        note: "ahorro mensual",
+        occurredAt: noon,
+        type: "SAVINGS",
+      });
+      await seed({
+        ownerId: "owner-1",
+        amount: 2500,
+        category: "rent",
+        note: "alquiler",
+        occurredAt: noon,
+        type: "EXPENSE",
+        status: "PENDING",
+      });
+
+      const response = await app.inject({ method: "GET", url: "/movements/summary?ownerId=owner-1" });
+
+      expect(response.statusCode).toBe(200);
+      const summary = response.json();
+      const month = summary.mom.months.find((m: { month: string }) => m.month === monthKey);
+      expect(month).toBeTruthy();
+      expect(month.savings).toBe(100);
+      expect(month.expenses).toBe(0);
+      expect(summary.planned).toEqual({ month: nextBaMonthKey(), total: 2500 });
+    });
+
+    it("reports the planned total for the next Buenos Aires month", async () => {
+      const noon = thisMonthNoonIso();
+      const nextKey = nextBaMonthKey();
+      await seed({
+        ownerId: "owner-1",
+        amount: 2500,
+        category: "rent",
+        note: "alquiler",
+        occurredAt: noon,
+        type: "EXPENSE",
+        status: "PENDING",
+      });
+      await seed({
+        ownerId: "owner-1",
+        amount: 1500,
+        category: "services",
+        note: "luz",
+        occurredAt: noon,
+        type: "EXPENSE",
+        status: "PENDING",
+      });
+
+      const response = await app.inject({ method: "GET", url: "/movements/summary?ownerId=owner-1" });
+
+      expect(response.statusCode).toBe(200);
+      const summary = response.json();
+      expect(summary.planned).toEqual({ month: nextKey, total: 4000 });
+    });
+
+    it("reports planned even when from/to exclude the row's month (planned ignores filters)", async () => {
+      const now = baNow();
+      const lastKey = baMonthKey(new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 1, 1)));
+      const noon = thisMonthNoonIso();
+      const nextKey = nextBaMonthKey();
+      await seed({
+        ownerId: "owner-1",
+        amount: 2500,
+        category: "rent",
+        note: "alquiler",
+        occurredAt: noon,
+        type: "EXPENSE",
+        status: "PENDING",
+      });
+
+      const response = await app.inject({
+        method: "GET",
+        url: `/movements/summary?ownerId=owner-1&from=${lastKey}-01&to=${lastKey}-28`,
+      });
+
+      expect(response.statusCode).toBe(200);
+      const summary = response.json();
+      // The PENDING row lives in the current month, outside the filtered range,
+      // yet planned still reports the next-month total (filters are ignored).
+      expect(summary.planned).toEqual({ month: nextKey, total: 2500 });
+    });
+
+    it("reports a zero planned total when no PENDING expense targets next month", async () => {
+      const response = await app.inject({ method: "GET", url: "/movements/summary?ownerId=owner-empty" });
+
+      expect(response.statusCode).toBe(200);
+      const summary = response.json();
+      expect(summary.planned).toEqual({ month: nextBaMonthKey(), total: 0 });
+    });
+
+    it("derives the planned month in Buenos Aires (next-month 02:59Z lands in the current month BA)", async () => {
+      const nextKey = nextBaMonthKey();
+      // next-month-01T02:59:00Z == last day of the current month 23:59 in Buenos
+      // Aires: the load month is the CURRENT month, so the derived month is next
+      // month. A naive UTC derivation would derive the month AFTER next and the
+      // row would not be counted.
+      const boundaryIso = `${nextKey}-01T02:59:00.000Z`;
+      await seed({
+        ownerId: "owner-1",
+        amount: 500,
+        category: "rent",
+        note: "alquiler",
+        occurredAt: boundaryIso,
+        type: "EXPENSE",
+        status: "PENDING",
+      });
+
+      const response = await app.inject({ method: "GET", url: "/movements/summary?ownerId=owner-1" });
+
+      expect(response.statusCode).toBe(200);
+      const summary = response.json();
+      expect(summary.planned).toEqual({ month: nextKey, total: 500 });
+    });
+
+    it("excludes PENDING rows whose derived month is not next month (2026-08-01T02:59Z → 2026-08)", async () => {
+      // Spec boundary: 2026-08-01T02:59:00Z == 2026-07-31 23:59 BA → load month
+      // July → derived August. August is never the next month, so planned stays 0.
+      await seed({
+        ownerId: "owner-1",
+        amount: 777,
+        category: "rent",
+        note: "alquiler",
+        occurredAt: "2026-08-01T02:59:00.000Z",
+        type: "EXPENSE",
+        status: "PENDING",
+      });
+
+      const response = await app.inject({ method: "GET", url: "/movements/summary?ownerId=owner-1" });
+
+      expect(response.statusCode).toBe(200);
+      const summary = response.json();
+      expect(summary.planned).toEqual({ month: nextBaMonthKey(), total: 0 });
+    });
+
+    it("returns PENDING rows in the movement list, newest first, with their status", async () => {
+      await seed({
+        ownerId: "owner-1",
+        amount: 300,
+        category: "food",
+        note: "mercado",
+        occurredAt: "2026-08-10T12:00:00.000Z",
+        type: "EXPENSE",
+      });
+      await seed({
+        ownerId: "owner-1",
+        amount: 2500,
+        category: "rent",
+        note: "alquiler",
+        occurredAt: "2026-08-15T12:00:00.000Z",
+        type: "EXPENSE",
+        status: "PENDING",
+      });
+
+      const response = await app.inject({ method: "GET", url: "/movements?ownerId=owner-1" });
+
+      expect(response.statusCode).toBe(200);
+      const movements = response.json();
+      expect(movements).toHaveLength(2);
+      expect(movements[0].status).toBe("PENDING");
+      expect(movements[0].amount).toBe(2500);
+      expect(movements[1].status).toBe("PAID");
+    });
+  });
+
+  describe("POST /movements/:id/paid (mark paid)", () => {
+    it("marks a PENDING EXPENSE as paid: status PAID, occurredAt≈now, enters KPIs", async () => {
+      const noon = thisMonthNoonIso();
+      const movement = await createMovement({
+        ownerId: "owner-1",
+        amount: 2500,
+        category: "rent",
+        note: "alquiler",
+        occurredAt: noon,
+        type: "EXPENSE",
+        status: "PENDING",
+      });
+
+      const beforeSummary = await app.inject({ method: "GET", url: "/movements/summary?ownerId=owner-1" });
+      expect(beforeSummary.json().kpis.expenses).toBe(0);
+      expect(beforeSummary.json().planned.total).toBe(2500);
+
+      const start = Date.now();
+      const response = await app.inject({
+        method: "POST",
+        url: `/movements/${movement.id}/paid`,
+        headers: { "x-owner-id": "owner-1" },
+      });
+
+      expect(response.statusCode).toBe(200);
+      const paid = response.json();
+      expect(paid.status).toBe("PAID");
+      const paidAt = new Date(paid.occurredAt).getTime();
+      expect(paidAt).toBeGreaterThanOrEqual(start - 1000);
+      expect(paidAt).toBeLessThanOrEqual(Date.now() + 1000);
+
+      const row = await prisma.expense.findFirst({ where: { id: movement.id } });
+      expect(row?.status).toBe("PAID");
+
+      const afterSummary = await app.inject({ method: "GET", url: "/movements/summary?ownerId=owner-1" });
+      expect(afterSummary.json().kpis.expenses).toBe(2500);
+      expect(afterSummary.json().planned.total).toBe(0);
+    });
+
+    it("rejects marking an already-PAID movement with 409 and leaves it unchanged", async () => {
+      const movement = await createMovement({
+        ownerId: "owner-1",
+        amount: 2500,
+        category: "rent",
+        note: "alquiler",
+        type: "EXPENSE",
+      });
+
+      const response = await app.inject({
+        method: "POST",
+        url: `/movements/${movement.id}/paid`,
+        headers: { "x-owner-id": "owner-1" },
+      });
+
+      expect(response.statusCode).toBe(409);
+      const row = await prisma.expense.findFirst({ where: { id: movement.id } });
+      expect(row?.status).toBe("PAID");
+    });
+
+    it("rejects marking an INCOME movement with 409", async () => {
+      const movement = await createMovement({
+        ownerId: "owner-1",
+        amount: 3000,
+        category: "salary",
+        note: "sueldo",
+        type: "INCOME",
+      });
+
+      const response = await app.inject({
+        method: "POST",
+        url: `/movements/${movement.id}/paid`,
+        headers: { "x-owner-id": "owner-1" },
+      });
+
+      expect(response.statusCode).toBe(409);
+    });
+
+    it("returns 404 for a missing movement", async () => {
+      const response = await app.inject({
+        method: "POST",
+        url: "/movements/does-not-exist/paid",
+        headers: { "x-owner-id": "owner-1" },
+      });
+
+      expect(response.statusCode).toBe(404);
+    });
+
+    it("returns 404 for another owner's PENDING movement and leaves it PENDING", async () => {
+      const movement = await createMovement({
+        ownerId: "owner-2",
+        amount: 2500,
+        category: "rent",
+        note: "alquiler",
+        type: "EXPENSE",
+        status: "PENDING",
+      });
+
+      const response = await app.inject({
+        method: "POST",
+        url: `/movements/${movement.id}/paid`,
+        headers: { "x-owner-id": "owner-1" },
+      });
+
+      expect(response.statusCode).toBe(404);
+      const row = await prisma.expense.findFirst({ where: { id: movement.id } });
+      expect(row?.status).toBe("PENDING");
+    });
+
+    it("returns 409 on a second mark-paid call after success", async () => {
+      const movement = await createMovement({
+        ownerId: "owner-1",
+        amount: 2500,
+        category: "rent",
+        note: "alquiler",
+        type: "EXPENSE",
+        status: "PENDING",
+      });
+
+      const first = await app.inject({
+        method: "POST",
+        url: `/movements/${movement.id}/paid`,
+        headers: { "x-owner-id": "owner-1" },
+      });
+      expect(first.statusCode).toBe(200);
+
+      const second = await app.inject({
+        method: "POST",
+        url: `/movements/${movement.id}/paid`,
+        headers: { "x-owner-id": "owner-1" },
+      });
+      expect(second.statusCode).toBe(409);
+    });
+  });
+
+  describe("PATCH /movements/:id on a PENDING row", () => {
+    it("edits a PENDING expense amount while keeping it PENDING", async () => {
+      const movement = await createMovement({
+        ownerId: "owner-1",
+        amount: 2500,
+        category: "rent",
+        note: "alquiler",
+        type: "EXPENSE",
+        status: "PENDING",
+      });
+
+      const response = await app.inject({
+        method: "PATCH",
+        url: `/movements/${movement.id}`,
+        headers: { "x-owner-id": "owner-1" },
+        payload: { amount: 2600 },
+      });
+
+      expect(response.statusCode).toBe(200);
+      const updated = response.json();
+      expect(updated.amount).toBe(2600);
+      expect(updated.status).toBe("PENDING");
+    });
+  });
+
+  describe("POST /expenses (planned creation channel)", () => {
+    it("persists a PENDING status created through the registration endpoint", async () => {
+      const response = await app.inject({
+        method: "POST",
+        url: "/expenses",
+        headers: { "x-owner-id": "owner-1" },
+        payload: {
+          amount: 2500,
+          currency: "ARS",
+          category: "rent",
+          note: "alquiler",
+          occurredAt: new Date().toISOString(),
+          type: "EXPENSE",
+          status: "PENDING",
+        },
+      });
+
+      expect(response.statusCode).toBe(201);
+      const list = await app.inject({ method: "GET", url: "/movements?ownerId=owner-1" });
+      const movements = list.json();
+      expect(movements).toHaveLength(1);
+      expect(movements[0].status).toBe("PENDING");
+      expect(movements[0].amount).toBe(2500);
     });
   });
 });

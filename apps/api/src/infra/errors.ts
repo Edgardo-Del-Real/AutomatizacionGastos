@@ -40,6 +40,21 @@ export class NotFoundError extends AppError {
   }
 }
 
+/**
+ * 409 discriminator for the mark-paid transition (D5): the movement exists for
+ * the owner but is not a PENDING EXPENSE (already PAID, non-EXPENSE, or a
+ * concurrent transition won the race). The generic error handler routes it as
+ * a plain 409.
+ */
+export class ConflictError extends AppError {
+  readonly code = "Conflict";
+  readonly statusCode = 409;
+
+  constructor(message: string) {
+    super(message);
+  }
+}
+
 export class UnauthorizedError extends AppError {
   readonly code = "Unauthorized";
   readonly statusCode = 401;

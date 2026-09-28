@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { NotFoundError, ValidationFailedError } from "../../infra/errors";
+import { ConflictError, NotFoundError, ValidationFailedError } from "../../infra/errors";
 import type { CategoryService } from "../categories/categories.service";
 import { MovementService } from "./movements.service";
 import type { MovementRepository } from "./movements.repository";
@@ -172,6 +172,7 @@ describe("MovementService.getSummary", () => {
       summaryCategories: vi.fn(async () => []),
       topByType: vi.fn(async () => []),
       summarySavings: vi.fn(async () => 0),
+      summaryPlanned: vi.fn(async () => ({ month: "2099-01", total: 0 })),
     } as unknown as MovementRepository;
     const service = new MovementService(repository, {} as CategoryService);
     return {
@@ -182,6 +183,7 @@ describe("MovementService.getSummary", () => {
       summaryCategories: vi.mocked(repository.summaryCategories),
       topByType: vi.mocked(repository.topByType),
       summarySavings: vi.mocked(repository.summarySavings),
+      summaryPlanned: vi.mocked(repository.summaryPlanned),
     };
   }
 
@@ -248,5 +250,83 @@ describe("MovementService.getSummary", () => {
     expect(thisMonthPeriod.to).toBe(
       `${thisMonthPeriod.from.slice(0, 7)}-${String(lastDay).padStart(2, "0")}`,
     );
+  });
+
+  it("threads the planned block from the next Buenos Aires month into the summary", async () => {
+    const { service, summaryKpis, summaryPlanned } = makeSummaryHarness();
+    summaryKpis.mockResolvedValue({
+      income: 0,
+      expenses: 0,
+      count: 0,
+      maxAmount: 0,
+      monthsWithData: 0,
+    });
+    summaryPlanned.mockResolvedValue({ month: "2099-01", total: 4000 });
+
+    const summary = await service.getSummary(ritaScope);
+
+    // The planned target is the month after the current Buenos Aires month,
+    // derived with the same BA wall clock as the service's month keys.
+    const baNow = new Date(Date.now() - 3 * 60 * 60 * 1000);
+    const next = new Date(Date.UTC(baNow.getUTCFullYear(), baNow.getUTCMonth() + 1, 1));
+    const expectedKey = `${next.getUTCFullYear()}-${String(next.getUTCMonth() + 1).padStart(2, "0")}`;
+    expect(summaryPlanned).toHaveBeenCalledWith(ritaScope, expectedKey);
+    expect(summary.planned).toEqual({ month: "2099-01", total: 4000 });
+  });
+});
+
+describe("MovementService.markMovementPaid", () => {
+  function makeMarkPaidHarness() {
+    const movement = {
+      id: "m1",
+      ownerId: "default",
+      amount: 2500,
+      currency: "ARS",
+      category: "rent",
+      note: "alquiler",
+      occurredAt: new Date(),
+      createdAt: new Date(),
+      type: "EXPENSE" as const,
+      status: "PAID" as const,
+    };
+    const repository = {
+      markPaidById: vi.fn(),
+      findById: vi.fn(),
+    } as unknown as MovementRepository;
+    const service = new MovementService(repository, {} as CategoryService);
+    return {
+      service,
+      movement,
+      markPaidById: vi.mocked(repository.markPaidById),
+      findById: vi.mocked(repository.findById),
+    };
+  }
+
+  it("returns the paid movement when the guarded update succeeds", async () => {
+    const { service, movement, markPaidById, findById } = makeMarkPaidHarness();
+    markPaidById.mockResolvedValue(movement);
+
+    const result = await service.markMovementPaid("default", "m1");
+
+    expect(markPaidById).toHaveBeenCalledWith("m1", "default");
+    expect(findById).not.toHaveBeenCalled();
+    expect(result.status).toBe("PAID");
+  });
+
+  it("throws NotFound when the movement does not exist for the owner", async () => {
+    const { service, markPaidById, findById } = makeMarkPaidHarness();
+    markPaidById.mockResolvedValue(null);
+    findById.mockResolvedValue(null);
+
+    await expect(service.markMovementPaid("default", "m1")).rejects.toBeInstanceOf(NotFoundError);
+    expect(findById).toHaveBeenCalledWith("m1", "default");
+  });
+
+  it("throws Conflict when the movement exists but is not a PENDING EXPENSE", async () => {
+    const { service, movement, markPaidById, findById } = makeMarkPaidHarness();
+    markPaidById.mockResolvedValue(null);
+    findById.mockResolvedValue(movement);
+
+    await expect(service.markMovementPaid("default", "m1")).rejects.toBeInstanceOf(ConflictError);
   });
 });

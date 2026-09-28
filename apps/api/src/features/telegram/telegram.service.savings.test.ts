@@ -164,6 +164,7 @@ function emptySummary() {
     daily: [],
     categories: [],
     top: { expenses: [], income: [] },
+      planned: { month: "2026-09", total: 0 },
   };
 }
 
@@ -338,6 +339,7 @@ describe("TelegramService savings split tails (D5/D7)", () => {
       daily: [],
       categories: [],
       top: { expenses: [], income: [] },
+      planned: { month: "2026-09", total: 0 },
     });
     const brain = (service as unknown as { deps: { brain?: { interpret: ReturnType<typeof vi.fn> } } }).deps.brain;
     brain?.interpret.mockResolvedValue({

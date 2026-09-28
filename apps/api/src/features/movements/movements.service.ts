@@ -1,5 +1,5 @@
 import { updateMovementSchema, type Movement, type MovementSummary } from "@rita/contracts";
-import { NotFoundError, ValidationFailedError } from "../../infra/errors";
+import { ConflictError, NotFoundError, ValidationFailedError } from "../../infra/errors";
 import type { CategoryService } from "../categories/categories.service";
 import type { MovementRepository } from "./movements.repository";
 import type { MovementListFilters, SummaryPeriod, ViewerScope } from "./movements.types";
@@ -52,10 +52,28 @@ export class MovementService {
     }
   }
 
+  /**
+   * D5 — mark-paid transition. The guarded single-write happens in the
+   * repository; a 0-row result is disambiguated by existence: missing (or
+   * another owner's) movement → 404, existing-but-not-PENDING-EXPENSE (already
+   * PAID, non-EXPENSE, or a concurrent transition) → 409.
+   */
+  async markMovementPaid(ownerId: string, id: string): Promise<Movement> {
+    const paid = await this.repository.markPaidById(id, ownerId);
+    if (paid !== null) {
+      return paid;
+    }
+    const existing = await this.repository.findById(id, ownerId);
+    if (existing === null) {
+      throw new NotFoundError(`Movement ${id} not found`);
+    }
+    throw new ConflictError(`Movement ${id} is not a PENDING EXPENSE`);
+  }
+
   async getSummary(scope: ViewerScope, from?: string, to?: string): Promise<MovementSummary> {
     const period: SummaryPeriod = { from, to };
     const thisMonthPeriod = currentMonthPeriod();
-    const [kpis, thisMonthKpis, savings, months, daily, categories, topExpenses, topIncome] =
+    const [kpis, thisMonthKpis, savings, months, daily, categories, topExpenses, topIncome, planned] =
       await Promise.all([
         this.repository.summaryKpis(scope, period),
         this.repository.summaryKpis(scope, thisMonthPeriod),
@@ -67,6 +85,10 @@ export class MovementService {
         this.repository.summaryCategories(scope, period),
         this.repository.topByType(scope, "EXPENSE", TOP_LIMIT, period),
         this.repository.topByType(scope, "INCOME", TOP_LIMIT, period),
+        // D4: the planned block is ALWAYS the month following the current BA
+        // month and ignores the from/to filters (the repository composes no
+        // period conditions for it).
+        this.repository.summaryPlanned(scope, nextBaMonth()),
       ]);
 
     const balance = kpis.income - kpis.expenses;
@@ -113,12 +135,23 @@ export class MovementService {
       daily: dailySeries,
       categories: categoryBreakdown,
       top: { expenses: topExpenses, income: topIncome },
+      planned,
     };
   }
 }
 
 function currentBaDate(): Date {
   return new Date(Date.now() - BA_OFFSET_MS);
+}
+
+/**
+ * D4 — the planned target month: the month following the current Buenos Aires
+ * month, derived the same way `lastMonths` derives the current month (BA wall
+ * clock, UTC arithmetic) so the service and the SQL derivation agree.
+ */
+function nextBaMonth(): string {
+  const now = currentBaDate();
+  return formatMonthKey(new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1)));
 }
 
 function currentMonthPeriod(): SummaryPeriod {

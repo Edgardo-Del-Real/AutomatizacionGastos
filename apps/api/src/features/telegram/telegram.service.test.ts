@@ -233,6 +233,7 @@ function emptySummary() {
     daily: [],
     categories: [],
     top: { expenses: [], income: [] },
+      planned: { month: "2026-09", total: 0 },
   };
 }
 
@@ -1272,6 +1273,7 @@ describe("TelegramService brain orchestration (llm-conversational-bot)", () => {
       daily: [],
       categories: [],
       top: { expenses: [], income: [] },
+      planned: { month: "2026-09", total: 0 },
     });
     h.mockBrainInterpret.mockResolvedValue({
       intent: "query_balance",
@@ -1322,6 +1324,7 @@ describe("TelegramService brain orchestration (llm-conversational-bot)", () => {
       daily: [],
       categories: [],
       top: { expenses: [], income: [] },
+      planned: { month: "2026-09", total: 0 },
     });
     h.mockBrainInterpret.mockResolvedValue({
       intent: "query_month",

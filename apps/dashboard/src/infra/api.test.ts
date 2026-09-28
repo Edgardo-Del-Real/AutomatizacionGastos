@@ -52,6 +52,7 @@ const validSummary: MovementSummary = {
     expenses: [],
     income: [],
   },
+  planned: { month: "2026-08", total: 0 },
 };
 
 const validMovements: Movement[] = [

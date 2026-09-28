@@ -72,6 +72,7 @@ const summary: MovementSummary = {
     ],
     income: [],
   },
+  planned: { month: "2026-08", total: 0 },
 };
 
 const emptySummary: MovementSummary = {
@@ -90,6 +91,7 @@ const emptySummary: MovementSummary = {
   daily: [],
   categories: [],
   top: { expenses: [], income: [] },
+  planned: { month: "2026-08", total: 0 },
 };
 
 const movements: Movement[] = [

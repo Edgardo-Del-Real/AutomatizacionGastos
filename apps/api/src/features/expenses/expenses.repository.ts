@@ -63,6 +63,9 @@ export class PrismaExpenseRepository implements ExpenseRepository {
         occurredAt: data.occurredAt,
         type: data.type ?? "EXPENSE",
         visibility: data.visibility ?? "INDIVIDUAL",
+        // Planned-expense pass-through: the create contract carries the status
+        // (PENDING for planned expenses); absent status defaults to PAID.
+        status: data.status ?? "PAID",
       },
     });
     return mapExpenseRow(row);

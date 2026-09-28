@@ -276,11 +276,10 @@ describe("movementSummarySchema", () => {
     expect(parsed.planned.total).toBe(2500);
   });
 
-  it("parses a summary without the planned block (additive — required once the producer lands)", () => {
+  it("rejects a summary without the planned block (required since the producer landed)", () => {
     const withoutPlanned: Record<string, unknown> = JSON.parse(JSON.stringify(summaryPayload));
     delete withoutPlanned.planned;
-    const parsed = movementSummarySchema.parse(withoutPlanned);
-    expect(parsed.planned).toBeUndefined();
+    expect(() => movementSummarySchema.parse(withoutPlanned)).toThrow();
   });
 
   it("rejects a summary missing the kpis savings figure", () => {

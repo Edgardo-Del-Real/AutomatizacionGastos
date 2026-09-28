@@ -190,16 +190,13 @@ export const movementSummarySchema = z.object({
     expenses: z.array(movementSchema),
     income: z.array(movementSchema),
   }),
-  // Planned-fixed-expenses block: next-month PENDING EXPENSE total. Optional in
-  // this PR (chained-PR: the movements producer lands in PR 2); the API's
-  // movementSummarySchema response validation keeps accepting older summaries
-  // until getSummary emits planned.
-  planned: z
-    .object({
-      month: z.string(),
-      total: z.number(),
-    })
-    .optional(),
+  // Planned-fixed-expenses block: next-month PENDING EXPENSE total. Required
+  // since PR 2 — getSummary always emits the summaryPlanned producer; the
+  // dashboard's runtime safeParse depends on the API carrying it.
+  planned: z.object({
+    month: z.string(),
+    total: z.number(),
+  }),
 });
 
 export type MovementSummary = z.infer<typeof movementSummarySchema>;

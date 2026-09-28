@@ -32,6 +32,7 @@ const summary: MovementSummary = {
   daily: [{ day: "2026-07-01", income: 100, expenses: 50, balance: 50 }],
   categories: [],
   top: { expenses: [], income: [] },
+  planned: { month: "2026-08", total: 0 },
 };
 
 const fetchMovementSummaryMock = vi.mocked(fetchMovementSummary);

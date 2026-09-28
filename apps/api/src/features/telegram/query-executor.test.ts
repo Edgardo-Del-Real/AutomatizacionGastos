@@ -123,6 +123,7 @@ describe("QueryExecutor.execute", () => {
       daily: [],
       categories: [],
       top: { expenses: [], income: [] },
+      planned: { month: "2026-09", total: 0 },
     });
 
     const result = await executor.execute(scope, "balance");
@@ -159,6 +160,7 @@ describe("QueryExecutor.execute", () => {
       daily: [],
       categories: [],
       top: { expenses: [], income: [] },
+      planned: { month: "2026-09", total: 0 },
     });
 
     const result = await executor.execute(scope, "month");
@@ -191,6 +193,7 @@ describe("QueryExecutor.execute", () => {
       daily: [],
       categories: [],
       top: { expenses: [], income: [] },
+      planned: { month: "2026-09", total: 0 },
     });
 
     const result = await executor.execute(scope, "month");
@@ -227,6 +230,7 @@ describe("QueryExecutor.execute", () => {
       daily: [],
       categories: [],
       top: { expenses: [], income: [] },
+      planned: { month: "2026-09", total: 0 },
     });
 
     const result = await executor.execute(scope, "savings");

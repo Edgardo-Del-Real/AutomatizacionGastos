@@ -33,12 +33,14 @@ describe("deriveQueryType", () => {
     expect(deriveQueryType("query", "balance")).toBe("balance");
     expect(deriveQueryType("query", "month")).toBe("month");
     expect(deriveQueryType("query", "savings")).toBe("savings");
+    expect(deriveQueryType("query", "planned")).toBe("planned");
   });
 
   it("maps the legacy query_* intents without a query_type", () => {
     expect(deriveQueryType("query_recent", null)).toBe("recent");
     expect(deriveQueryType("query_balance", null)).toBe("balance");
     expect(deriveQueryType("query_month", null)).toBe("month");
+    expect(deriveQueryType("query_planned", null)).toBe("planned");
   });
 
   it("returns null for a query intent without a query_type and for non-query intents", () => {
@@ -241,5 +243,114 @@ describe("QueryExecutor.execute", () => {
       month: "2026-09",
       savings: 150,
     });
+  });
+
+  it("answers the planned query from the summary planned block (real data)", async () => {
+    const { executor, mockGetSummary } = makeHarness();
+    mockGetSummary.mockResolvedValue({
+      kpis: {
+        income: 0,
+        expenses: 0,
+        balance: 0,
+        savings: 0,
+        avgPerMonth: 0,
+        avgPerMovement: 0,
+        maxAmount: 0,
+        count: 0,
+        countThisMonth: 0,
+      },
+      mom: { months: [] },
+      daily: [],
+      categories: [],
+      top: { expenses: [], income: [] },
+      planned: { month: "2026-10", total: 4000 },
+    });
+
+    const result = await executor.execute(scope, "planned");
+
+    expect(mockGetSummary).toHaveBeenCalledWith(scope);
+    expect(result).toEqual({
+      query_type: "planned",
+      month: "2026-10",
+      total: 4000,
+    });
+  });
+
+  it("answers zero for the planned query when no PENDING expense targets next month", async () => {
+    const { executor, mockGetSummary } = makeHarness();
+    mockGetSummary.mockResolvedValue({
+      kpis: {
+        income: 0,
+        expenses: 0,
+        balance: 0,
+        savings: 0,
+        avgPerMonth: 0,
+        avgPerMovement: 0,
+        maxAmount: 0,
+        count: 0,
+        countThisMonth: 0,
+      },
+      mom: { months: [] },
+      daily: [],
+      categories: [],
+      top: { expenses: [], income: [] },
+      planned: { month: "2026-10", total: 0 },
+    });
+
+    const result = await executor.execute(scope, "planned");
+
+    expect(result).toEqual({ query_type: "planned", month: "2026-10", total: 0 });
+  });
+
+  it("omits PENDING movements from the recent list", async () => {
+    const { executor, mockListMovements } = makeHarness();
+    mockListMovements.mockResolvedValue([
+      {
+        id: "m1",
+        ownerId,
+        amount: 2500,
+        currency: "ARS",
+        category: "otro",
+        note: "alquiler",
+        occurredAt: new Date("2026-09-18T12:00:00.000Z"),
+        createdAt: new Date(),
+        type: "EXPENSE",
+        status: "PAID",
+      },
+      {
+        id: "m2",
+        ownerId,
+        amount: 2500,
+        currency: "ARS",
+        category: "otro",
+        note: "alquiler",
+        occurredAt: new Date("2026-09-17T12:00:00.000Z"),
+        createdAt: new Date(),
+        type: "EXPENSE",
+        status: "PENDING",
+      },
+      {
+        id: "m3",
+        ownerId,
+        amount: 900,
+        currency: "ARS",
+        category: null,
+        note: null,
+        occurredAt: new Date("2026-09-16T12:00:00.000Z"),
+        createdAt: new Date(),
+        type: "EXPENSE",
+        status: "PAID",
+      },
+    ]);
+
+    const result = await executor.execute(scope, "recent");
+
+    expect(mockListMovements).toHaveBeenCalledWith(scope, {});
+    expect(result.query_type).toBe("recent");
+    if (result.query_type !== "recent") return;
+    expect(result.movements.map((movement) => movement.amount)).toEqual([2500, 900]);
+    // The PENDING row (occurredAt 2026-09-17) is filtered out; the PAID 2500 (2026-09-18) stays.
+    expect(result.movements.some((movement) => movement.date === "2026-09-17")).toBe(false);
+    expect(result.movements.some((movement) => movement.date === "2026-09-18")).toBe(true);
   });
 });

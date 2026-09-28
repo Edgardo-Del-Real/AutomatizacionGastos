@@ -320,7 +320,7 @@ describe("conversationEnvelopeSchema", () => {
   });
 
   it("keeps the legacy query_* intents valid without a query_type", () => {
-    for (const intent of ["query_recent", "query_balance", "query_month"]) {
+    for (const intent of ["query_recent", "query_balance", "query_month", "query_planned"]) {
       const result = conversationEnvelopeSchema.safeParse({
         intent,
         amount: null,
@@ -328,6 +328,20 @@ describe("conversationEnvelopeSchema", () => {
         note: null,
       });
       expect(result.success).toBe(true);
+    }
+  });
+
+  it("decodes a query_planned envelope (spec: Planned query intent decodes)", () => {
+    const result = conversationEnvelopeSchema.safeParse({
+      intent: "query_planned",
+      amount: null,
+      category: null,
+      note: null,
+    });
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.intent).toBe("query_planned");
     }
   });
 
@@ -570,6 +584,33 @@ describe("GroqBotBrain.interpret", () => {
       category: null,
       note: null,
       query_type: "categories",
+      new_name: null,
+      dialog_action: null,
+      then_reassign: false,
+      shared: false,
+    });
+  });
+
+  it("returns a query_planned envelope when the LLM classifies a planned phrasing", async () => {
+    const { fetchImpl } = makeFetch(() =>
+      jsonResponse({
+        choices: [
+          {
+            message: {
+              content: '{"intent":"query_planned","amount":null,"category":null,"note":null}',
+            },
+          },
+        ],
+      }),
+    );
+    const brain = brainWith(fetchImpl);
+
+    await expect(brain.interpret("cuánto tengo previsto?")).resolves.toEqual({
+      intent: "query_planned",
+      amount: null,
+      category: null,
+      note: null,
+      query_type: null,
       new_name: null,
       dialog_action: null,
       then_reassign: false,
@@ -903,6 +944,34 @@ describe("GroqBotBrain.reply", () => {
     expect(body.response_format).toEqual({ type: "json_object" });
   });
 
+  it("posts the planned query facts to the LLM (spec: Planned query reply reflects executed facts)", async () => {
+    const { fetchImpl, calls } = makeFetch(() =>
+      jsonResponse({ choices: [{ message: { content: '{"reply":"En septiembre tenés previsto 4000."}' } }] }),
+    );
+    const brain = brainWith(fetchImpl);
+
+    const result = await brain.reply({
+      intent: "query_planned",
+      ok: true,
+      action: "answered",
+      amount: null,
+      category: null,
+      note: null,
+      query_type: "planned",
+      query: { query_type: "planned", month: "2026-09", total: 4000 },
+      planned_month: "2026-09",
+      planned_total: 4000,
+    });
+
+    expect(result).toBe("En septiembre tenés previsto 4000.");
+    const call = calls[0];
+    const body = JSON.parse(String(call?.init?.body)) as { messages: { content: string }[] };
+    const posted = body.messages.at(-1)?.content ?? "";
+    expect(posted).toContain("planned_month");
+    expect(posted).toContain("planned_total");
+    expect(posted).toContain("4000");
+  });
+
   it.each([429, 500])("degrades to null on HTTP %s", async (status) => {
     const { fetchImpl } = makeFetch(() => jsonResponse({ error: "boom" }, status));
     const brain = brainWith(fetchImpl);
@@ -1084,6 +1153,31 @@ describe("prompt contracts", () => {
   it("classifies the month-savings question into the query intent with query_type savings", () => {
     expect(INTERPRET_SYSTEM_PROMPT).toContain('"savings"');
     expect(INTERPRET_SYSTEM_PROMPT).toContain("ahorré");
+  });
+
+  it("classifies planned-query phrasings into query_planned in the interpret prompt", () => {
+    expect(INTERPRET_SYSTEM_PROMPT).toContain("query_planned");
+    expect(INTERPRET_SYSTEM_PROMPT).toContain("previsto");
+    expect(INTERPRET_SYSTEM_PROMPT).toContain("gastos fijos previstos");
+    expect(INTERPRET_SYSTEM_PROMPT).toContain("mes que viene");
+  });
+
+  it("teaches the reply to confirm the planned total from the executed facts unconditionally", () => {
+    expect(REPLY_SYSTEM_PROMPT).toContain("planned_month");
+    expect(REPLY_SYSTEM_PROMPT).toContain("planned_total");
+    expect(REPLY_SYSTEM_PROMPT).toContain("previsto");
+  });
+
+  it("teaches the reply that a planned registration does not count in the balance yet", () => {
+    expect(REPLY_SYSTEM_PROMPT).toContain("planned");
+    expect(REPLY_SYSTEM_PROMPT).toContain("saldo");
+  });
+
+  it("models the planned-query phrasing in the interpret few-shots", () => {
+    const shot = FEW_SHOTS.find(
+      (message) => message.role === "assistant" && message.content.includes("query_planned"),
+    );
+    expect(shot).toBeDefined();
   });
 
   it("teaches the reply to confirm the savings split from the executed facts", () => {

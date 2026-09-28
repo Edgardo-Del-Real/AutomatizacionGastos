@@ -32,6 +32,8 @@ export class QueryExecutor {
         return this.month(scope);
       case "savings":
         return this.savings(scope);
+      case "planned":
+        return this.planned(scope);
     }
   }
 
@@ -48,15 +50,22 @@ export class QueryExecutor {
 
   private async recent(scope: ViewerScope): Promise<QueryExecutionResult> {
     const movements = await this.movementService.listMovements(scope, {});
+    // Planned expenses are visible ONLY through the planned query (spec
+    // telegram-bot "Recent Movements Exclude Planned"): the PENDING rows are
+    // filtered here, at the telegram layer, never at the repository (the
+    // dashboard reads PENDING from the movement list).
     return {
       query_type: "recent",
-      movements: movements.slice(0, RECENT_LIMIT).map((movement) => ({
-        amount: movement.amount,
-        category: movement.category,
-        note: movement.note,
-        date: movement.occurredAt.toISOString().slice(0, 10),
-        type: movement.type,
-      })),
+      movements: movements
+        .filter((movement) => movement.status !== "PENDING")
+        .slice(0, RECENT_LIMIT)
+        .map((movement) => ({
+          amount: movement.amount,
+          category: movement.category,
+          note: movement.note,
+          date: movement.occurredAt.toISOString().slice(0, 10),
+          type: movement.type,
+        })),
     };
   }
 
@@ -90,6 +99,16 @@ export class QueryExecutor {
       query_type: "savings",
       month: summary.mom.months.at(-1)?.month ?? "",
       savings: summary.kpis.savings,
+    };
+  }
+
+  /** D6/D7: "cuánto tengo previsto" — the next-month PENDING EXPENSE total. */
+  private async planned(scope: ViewerScope): Promise<QueryExecutionResult> {
+    const summary = await this.movementService.getSummary(scope);
+    return {
+      query_type: "planned",
+      month: summary.planned.month,
+      total: summary.planned.total,
     };
   }
 }

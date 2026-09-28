@@ -9,6 +9,7 @@ export const BOT_INTENTS = [
   "query_recent",
   "query_balance",
   "query_month",
+  "query_planned",
   "associate_keyword",
   "create_category",
   "delete_category",
@@ -90,6 +91,11 @@ export type ExecutionResult = {
   gross_amount?: number | null;
   net_amount?: number | null;
   savings_amount?: number | null;
+  /** Planned-query facts (D7): carried when the planned executor answered. */
+  planned_month?: string | null;
+  planned_total?: number | null;
+  /** Planned-registration fact (D11): true when the expense was registered previsto. */
+  planned?: boolean;
 };
 
 /**
@@ -197,15 +203,16 @@ export type ChatMessage = { role: "user" | "assistant"; content: string };
 export const INTERPRET_SYSTEM_PROMPT = [
   'Respondé SOLO con un objeto JSON con exactamente estas claves: {"intent": string, "amount": number|null, "category": string|null, "note": string|null, "query_type": string|null, "new_name": string|null, "dialog_action": string|null, "then_reassign": boolean, "shared": boolean}.',
   "No agregues texto ni campos extra.",
-  '"intent" es exactamente UNA de: "register_expense" (cualquier movimiento de dinero, gasto o ingreso), "correct_amount", "correct_category", "query", "query_recent", "query_balance", "query_month", "associate_keyword", "create_category", "delete_category", "rename_category", "create_savings_rule", "capabilities", "help", "off_topic".',
+  '"intent" es exactamente UNA de: "register_expense" (cualquier movimiento de dinero, gasto o ingreso), "correct_amount", "correct_category", "query", "query_recent", "query_balance", "query_month", "query_planned", "associate_keyword", "create_category", "delete_category", "rename_category", "create_savings_rule", "capabilities", "help", "off_topic".',
   "Si el mensaje tiene señal de gasto (verbo de gasto, $ o un monto) usá register_expense, aunque no tenga monto.",
   "NUNCA inventes un monto: usá null cuando el mensaje no tiene monto.",
   'Todo es en pesos argentinos (ARS): ignorá símbolos o nombres de moneda ($, usd, €) y no conviertas.',
   '"1.234,50" y "1234,50" significan 1234.50; "1234.5" significa 1234.5; "5 mil" o "cinco mil" significan 5000 — devolvé el número.',
   '"category" es una sugerencia de categoría (ej: "Supermercado", "Transporte"), máximo 60 caracteres, null si no estás seguro.',
   '"note" es la descripción concreta del gasto o ingreso, máximo 200 caracteres, null si no hay.',
-  'Para preguntas sobre los datos del dueño usá "query" con su "query_type": "categories" (qué categorías tiene/disponibles), "recent" (últimos movimientos), "balance" (saldo, "cuánto me queda", "cuál es mi saldo"), "month" (resumen del mes), "savings" (cuánto ahorró este mes: "cuánto ahorré", "cuánto ahorré este mes").',
-  '"query_recent", "query_balance" y "query_month" se mantienen por compatibilidad: preferí "query".',
+  'Para preguntas sobre los datos del dueño usá "query" con su "query_type": "categories" (qué categorías tiene/disponibles), "recent" (últimos movimientos), "balance" (saldo, "cuánto me queda", "cuál es mi saldo"), "month" (resumen del mes), "savings" (cuánto ahorró este mes: "cuánto ahorré", "cuánto ahorré este mes"), "planned" (gastos fijos previstos del mes que viene: "cuánto tengo previsto", "gastos fijos previstos", "cuánto voy a gastar el mes que viene").',
+  'Para preguntas sobre gastos fijos previstos usá "query_planned": "cuánto tengo previsto", "gastos fijos previstos", "cuánto voy a gastar el mes que viene" (también válido como "query" con "query_type": "planned").',
+  '"query_recent", "query_balance", "query_month" y "query_planned" se mantienen por compatibilidad: preferí "query".',
   '"query_type" es null para cualquier intent que no sea "query".',
   'Para crear, borrar o renombrar categorías usá "create_category", "delete_category" o "rename_category": "create_category" y "delete_category" llevan el nombre en "category"; "rename_category" lleva el nombre actual en "category" y el nuevo en "new_name". "new_name" es null salvo en "rename_category".',
   'Para definir un ahorro automático sobre un ingreso usá "create_savings_rule": el bot redirige al comando "registrar ahorro: <palabra> al <X>%" y no ejecuta nada él mismo.',
@@ -263,6 +270,11 @@ export const FEW_SHOTS: readonly ChatMessage[] = [
     role: "assistant",
     content: '{"intent":"query","amount":null,"category":null,"note":null,"query_type":"savings"}',
   },
+  { role: "user", content: "cuánto tengo previsto?" },
+  {
+    role: "assistant",
+    content: '{"intent":"query_planned","amount":null,"category":null,"note":null}',
+  },
   { role: "user", content: "guarda un ahorro del 10% para entrenuts" },
   {
     role: "assistant",
@@ -307,6 +319,8 @@ export const REPLY_SYSTEM_PROMPT = [
   "Máximo 2 oraciones, sin markdown.",
   "Según action: registered = el movimiento se guardó o actualizó — confirmalo con los datos presentes; asked_amount = el monto es ambiguo — pedí el número exacto sin afirmar cuál es el correcto; asked_category = el movimiento quedó guardado en la categoría — ofrecé reasignarla; answered = respondé la consulta usando SOLO los datos del campo query (query_type y sus valores), sin inventar montos, categorías ni fechas; redirected = todavía no se puede — decilo con honestidad; none = no se ejecutó nada — guiá al dueño; created = la categoría se creó — confirmalo con category; deleted = la categoría se borró — confirmalo con category; renamed = la categoría se renombró — confirmá category a new_name; capabilities = enumerá lo que el bot puede hacer (registrar gastos, corregir, consultar categorías/últimos movimientos/saldo/resumen del mes/ahorro del mes, crear/borrar/renombrar categorías, asociar palabras, ayuda); asked_movement = el bot preguntó qué movimiento corregir — enumerá SOLO los candidatos recibidos, sin inventar datos; created_reassigned = la categoría se creó y el movimiento pendiente se reasignó — confirmá ambos hechos.",
   "Si vienen gross_amount, net_amount y savings_amount (un ingreso con ahorro automático): confirmá el ingreso neto (net_amount) y cuánto ahorraste (savings_amount), sin inventar otros montos.",
+  "Si vienen planned_month y planned_total (una consulta de gastos previstos): confirmá el total previsto para ese mes con esos datos exactos, sin inventar montos.",
+  "Si planned es true en un registro (gasto previsto): confirmá el registro sin afirmar que ya cuenta en el saldo ni en los gastos.",
   "Si ok es false y viene message, transmití ese error de forma amable y honesta sin inventar causas.",
 ].join(" ");
 

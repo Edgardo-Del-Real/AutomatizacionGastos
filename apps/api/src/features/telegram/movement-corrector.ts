@@ -66,11 +66,14 @@ export class MovementCorrector {
     const category = await this.resolveTargetCategory(ownerId, targetCategory);
     // Correction candidates are ALWAYS the owner's own movements (registrant-only
     // mutation, AD4): a mine-scope with no partner keeps partner rows out.
+    // PENDING rows are excluded BEFORE the slice (spec movement-correction:
+    // planned expenses are not correctable until marked paid — the repository
+    // list keeps them for the dashboard).
     const movements = await this.movementService.listMovements(
       { viewerId: ownerId, partnerId: null, visibility: "mine" },
       {},
     );
-    const window = movements.slice(0, WINDOW_SIZE).map(toCandidate);
+    const window = movements.filter((movement) => movement.status !== "PENDING").slice(0, WINDOW_SIZE).map(toCandidate);
 
     // No reference: the bot must ask which movement (spec "No reference asks").
     if (reference.amount === null && reference.note === null) {

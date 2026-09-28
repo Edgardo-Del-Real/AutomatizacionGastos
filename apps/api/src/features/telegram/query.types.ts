@@ -1,4 +1,4 @@
-export const QUERY_TYPES = ["categories", "recent", "balance", "month", "savings"] as const;
+export const QUERY_TYPES = ["categories", "recent", "balance", "month", "savings", "planned"] as const;
 
 export type QueryType = (typeof QUERY_TYPES)[number];
 
@@ -41,17 +41,27 @@ export type SavingsQueryResult = {
   savings: number;
 };
 
+/** D6/D7 — next-month planned total from `summary.planned` (PENDING EXPENSE only). */
+export type PlannedQueryResult = {
+  query_type: "planned";
+  month: string;
+  total: number;
+};
+
 export type QueryExecutionResult =
   | CategoriesQueryResult
   | RecentQueryResult
   | BalanceQueryResult
   | MonthQueryResult
-  | SavingsQueryResult;
+  | SavingsQueryResult
+  | PlannedQueryResult;
 
 /**
  * Resolves the concrete query type from the interpreted intent. The `query`
  * intent carries its type in `query_type`; the legacy `query_*` intents map
- * directly. Anything else is not a query and resolves to null.
+ * directly (including `query_planned`, which the brain emits for planned
+ * phrasings — the `query` + `query_type: "planned"` route converges here).
+ * Anything else is not a query and resolves to null.
  */
 export function deriveQueryType(intent: string, queryType: QueryType | null): QueryType | null {
   switch (intent) {
@@ -63,6 +73,8 @@ export function deriveQueryType(intent: string, queryType: QueryType | null): Qu
       return "balance";
     case "query_month":
       return "month";
+    case "query_planned":
+      return "planned";
     default:
       return null;
   }

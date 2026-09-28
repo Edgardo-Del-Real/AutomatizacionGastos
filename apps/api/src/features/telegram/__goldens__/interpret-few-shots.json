@@ -73,6 +73,14 @@
   },
   {
     "role": "user",
+    "content": "cuánto tengo previsto?"
+  },
+  {
+    "role": "assistant",
+    "content": "{\"intent\":\"query_planned\",\"amount\":null,\"category\":null,\"note\":null}"
+  },
+  {
+    "role": "user",
     "content": "guarda un ahorro del 10% para entrenuts"
   },
   {

@@ -32,6 +32,15 @@ export function successSplitReply(gross: number, net: number, savings: number): 
   return `Registrado: ingreso neto ${formatARS(net)} de ${formatARS(gross)} — Ahorrado: ${formatARS(savings)} (categoría ahorro)`;
 }
 
+/**
+ * Planned-registration confirmation (D11): reports the previsto honestly —
+ * the amount is NOT in the balance yet; it enters when marked paid.
+ */
+export function plannedReply(amount: number, note: string | null, category: string): string {
+  const notePart = note === null ? "" : ` (${truncateNote(note)})`;
+  return `Registrado como previsto: ${formatARS(amount)}${notePart} — Categoría: ${category}. Se suma cuando lo marques pagado.`;
+}
+
 export function savingsRuleRedirectReply(): string {
   return "Para definir un ahorro automático usá el comando: registrar ahorro: <palabra> al <X>% (por ejemplo: registrar ahorro: entrenuts al 10%).";
 }
@@ -154,6 +163,12 @@ export function savingsQueryReply(savings: number, month: string): string {
   return `En ${label} ahorraste ${formatARS(savings)}.`;
 }
 
+/** D7/D11: "cuánto tengo previsto" — next-month planned total from real data. */
+export function plannedQueryReply(month: string, total: number): string {
+  const label = formatMonthLabel(month);
+  return `En ${label} tenés previsto ${formatARS(total)}.`;
+}
+
 function formatMonthLabel(monthKey: string): string {
   const [year, month] = monthKey.split("-").map(Number);
   if (year === undefined || month === undefined || Number.isNaN(year) || Number.isNaN(month)) {
@@ -177,6 +192,8 @@ export function queryReplyTemplate(result: QueryExecutionResult): string {
       return monthQueryReply(result.month, result.monthIncome, result.monthExpenses, result.monthCount);
     case "savings":
       return savingsQueryReply(result.savings, result.month);
+    case "planned":
+      return plannedQueryReply(result.month, result.total);
   }
 }
 

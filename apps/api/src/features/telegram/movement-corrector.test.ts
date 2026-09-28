@@ -13,10 +13,11 @@ type MovementFixture = {
   note: string | null;
   occurredAt: Date;
   category?: string | null;
+  status?: "PENDING" | "PAID";
 };
 
-function movement(id: string, amount: number, note: string | null, occurredAt: Date): MovementFixture {
-  return { id, amount, note, occurredAt, category: null };
+function movement(id: string, amount: number, note: string | null, occurredAt: Date, status: "PENDING" | "PAID" = "PAID"): MovementFixture {
+  return { id, amount, note, occurredAt, category: null, status };
 }
 
 function toMovement(row: MovementFixture) {
@@ -30,6 +31,7 @@ function toMovement(row: MovementFixture) {
     occurredAt: row.occurredAt,
     createdAt: new Date("2026-01-01T00:00:00.000Z"),
     type: "EXPENSE" as const,
+    status: row.status ?? "PAID",
   };
 }
 
@@ -289,5 +291,33 @@ describe("MovementCorrector.correct", () => {
     await corrector.correct(ownerId, { amount: 2500, note: null }, "gastos hormiga", NOW);
 
     expect(createCategory).not.toHaveBeenCalled();
+  });
+
+  it("excludes a PENDING row from the window: the only 2500 match is PENDING → no_match", async () => {
+    const { corrector, updateMovement } = makeCorrector({
+      movements: [movement("m-pending", 2500, "alquiler", HOT, "PENDING")],
+    });
+
+    const result = await corrector.correct(ownerId, { amount: 2500, note: "alquiler" }, "gastos hormiga", NOW);
+
+    expect(result).toEqual({ status: "no_match" });
+    expect(updateMovement).not.toHaveBeenCalled();
+  });
+
+  it("keeps PAID rows in the window when a PENDING row also matches", async () => {
+    const { corrector, updateMovement } = makeCorrector({
+      movements: [
+        movement("m-paid", 2500, "alquiler", HOT, "PAID"),
+        movement("m-pending", 2500, "alquiler", WARM, "PENDING"),
+      ],
+    });
+
+    const result = await corrector.correct(ownerId, { amount: 2500, note: "alquiler" }, "gastos hormiga", NOW);
+
+    expect(result.status).toBe("reassigned");
+    if (result.status === "reassigned") {
+      expect(result.movement.id).toBe("m-paid");
+    }
+    expect(updateMovement).toHaveBeenCalledWith(ownerId, "m-paid", { category: "gastos hormiga" });
   });
 });

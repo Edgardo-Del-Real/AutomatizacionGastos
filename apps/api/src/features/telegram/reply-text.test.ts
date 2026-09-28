@@ -32,6 +32,8 @@ import {
   movementSelectionAbandonedReply,
   otroDeleteForbiddenReply,
   otroKeptReply,
+  plannedQueryReply,
+  plannedReply,
   queryReplyTemplate,
   questionDroppedReply,
   recentQueryReply,
@@ -255,6 +257,32 @@ describe("query reply templates", () => {
     expect(
       queryReplyTemplate({ query_type: "month", month: "2026-09", monthIncome: 1, monthExpenses: 2, monthCount: 3 }),
     ).toContain("septiembre");
+    expect(queryReplyTemplate({ query_type: "planned", month: "2026-10", total: 4000 })).toContain("previsto");
+    expect(queryReplyTemplate({ query_type: "planned", month: "2026-10", total: 4000 })).toContain(formatARS(4000));
+  });
+
+  it("builds the planned-query reply from the executed month and total", () => {
+    const text = plannedQueryReply("2026-10", 4000);
+
+    expect(text).toContain("previsto");
+    expect(text).toContain(formatARS(4000));
+  });
+
+  it("answers zero for the planned-query reply when nothing is pending", () => {
+    expect(plannedQueryReply("2026-10", 0)).toContain(formatARS(0));
+  });
+
+  it("confirms a planned registration without implying it already counts in the balance", () => {
+    const text = plannedReply(2500, "alquiler", "Vivienda");
+
+    expect(text).toContain("previsto");
+    expect(text).toContain(formatARS(2500));
+    expect(text).toContain("Vivienda");
+    expect(text).toContain("alquiler");
+  });
+
+  it("confirms a planned registration without a note", () => {
+    expect(plannedReply(2500, null, "Vivienda")).toContain(formatARS(2500));
   });
 });
 

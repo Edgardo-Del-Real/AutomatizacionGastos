@@ -138,7 +138,40 @@ describe("SavingsRuleService.matchNote", () => {
         { id: "1", ownerId: "owner-1", keyword: "entrenuts", percent: 10, createdAt: new Date("2026-09-01T12:00:00.000Z") },
       ]),
     );
-    await expect(service.matchNote("owner-1", "cobro entrenut 1000")).resolves.toBeNull();
+    // The tolerant fold makes the singular "entrenut" match the stored
+    // "entrenuts" keyword (both sides fold identically)...
+    await expect(service.matchNote("owner-1", "cobro entrenut 1000")).resolves.toBe(10);
+    // ...but a non-folding near-brand ("entrenutsa") still never matches.
+    await expect(service.matchNote("owner-1", "cobro entrenutsa 1000")).resolves.toBeNull();
+  });
+
+  it("matches a plural note against a singular rule keyword (sueldos ↔ sueldo)", async () => {
+    const service = new SavingsRuleService(
+      fakeRepository([
+        { id: "1", ownerId: "owner-1", keyword: "sueldo", percent: 10, createdAt: new Date("2026-09-01T12:00:00.000Z") },
+      ]),
+    );
+    await expect(service.matchNote("owner-1", "cobré sueldos 1000")).resolves.toBe(10);
+  });
+
+  it("matches a singular note against a stored plural keyword (sueldos matches both sides)", async () => {
+    const service = new SavingsRuleService(
+      fakeRepository([
+        { id: "1", ownerId: "owner-1", keyword: "sueldos", percent: 10, createdAt: new Date("2026-09-01T12:00:00.000Z") },
+      ]),
+    );
+    await expect(service.matchNote("owner-1", "cobré sueldo 1000")).resolves.toBe(10);
+    await expect(service.matchNote("owner-1", "cobré sueldos 1000")).resolves.toBe(10);
+  });
+
+  it("stores the keyword literal-normalized through defineRule and matches both variants later", async () => {
+    const repo = fakeRepository();
+    const service = new SavingsRuleService(repo);
+    const rule = await service.defineRule("owner-1", "sueldos", 10);
+    expect(rule.keyword).toBe("sueldos");
+    expect(repo.rules[0]?.keyword).toBe("sueldos");
+    await expect(service.matchNote("owner-1", "cobré sueldo 1000")).resolves.toBe(10);
+    await expect(service.matchNote("owner-1", "cobré sueldos 1000")).resolves.toBe(10);
   });
 
   it("is oldest-wins when several rules match the same note", async () => {

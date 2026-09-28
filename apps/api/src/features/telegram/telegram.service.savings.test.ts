@@ -3,7 +3,9 @@ import type { ExpenseService } from "../expenses/expenses.service";
 import type { ProcessedMessageRepository } from "../messages/message.repository";
 import type { MovementService } from "../movements/movements.service";
 import type { CategoryService } from "../categories/categories.service";
-import type { SavingsRuleService } from "../savings/savings.service";
+import type { SavingsRuleRepository } from "../savings/savings.repository";
+import { SavingsRuleService } from "../savings/savings.service";
+import type { SavingsRuleEntity } from "../savings/savings.types";
 import type { HouseholdService } from "../household/household.service";
 import type { BotStateRepository, BotStateRecord } from "./bot-state.repository";
 import type { ConversationEnvelope, ExecutionResult } from "./bot-brain";
@@ -362,5 +364,37 @@ describe("TelegramService savings split tails (D5/D7)", () => {
     mockGetSummary.mockRejectedValue(new Error("db down"));
     await service.handleUpdate(textUpdate({ text: "cuánto ahorré este mes?", messageId: 44 }), reply);
     expect(replies.join("\n")).toContain("No pude consultar");
+  });
+
+  it("money pin: 'cobro sueldos' splits against a stored sueldo rule through the REAL savings service", async () => {
+    const { service, mockCreateIncomeWithSavings, mockCreateExpense, replies, reply } = h;
+    // Replace the mocked savings service with the real one over an in-memory
+    // repository holding a "sueldo" rule: the tolerant fold must make the
+    // plural "sueldos" in the note match where the literal matcher would not,
+    // and the split must apply (INCOME 900 / SAVINGS 100 on gross 1000).
+    const rules: SavingsRuleEntity[] = [
+      { id: "1", ownerId, keyword: "sueldo", percent: 10, createdAt: new Date("2026-09-01T12:00:00.000Z") },
+    ];
+    const repository = {
+      rules,
+      async upsert(): Promise<SavingsRuleEntity> {
+        throw new Error("defineRule is not exercised by this pin");
+      },
+      async listByOwner(ownerIdArg: string): Promise<SavingsRuleEntity[]> {
+        return ownerIdArg === ownerId ? rules : [];
+      },
+    } as unknown as SavingsRuleRepository;
+    const deps = (service as unknown as { deps: { savingsService: SavingsRuleService } }).deps;
+    deps.savingsService = new SavingsRuleService(repository);
+
+    await service.handleUpdate(textUpdate({ text: "cobro sueldos 1000", messageId: 60 }), reply);
+
+    expect(mockCreateExpense).not.toHaveBeenCalled();
+    expect(mockCreateIncomeWithSavings).toHaveBeenCalledTimes(1);
+    expect(mockCreateIncomeWithSavings).toHaveBeenCalledWith(
+      expect.objectContaining({ ownerId, gross: 1000, percent: 10, category: "ahorro" }),
+    );
+    expect(replies.join("\n")).toContain("900,00");
+    expect(replies.join("\n")).toContain("100,00");
   });
 });

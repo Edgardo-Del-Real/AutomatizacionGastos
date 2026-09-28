@@ -1,6 +1,6 @@
 import { Prisma } from "@prisma/client";
 import { ValidationFailedError } from "../../infra/errors";
-import { boundaryRegex, normalizeForMatch } from "../categories/matcher";
+import { boundaryRegex, normalizeForMatch, normalizeForMatchTolerant } from "../categories/matcher";
 import type { SavingsRuleRepository } from "./savings.repository";
 import type { SavingsOverride, SavingsRuleEntity, SplitResult } from "./savings.types";
 
@@ -30,15 +30,16 @@ export class SavingsRuleService {
 
   /**
    * Matches a note against the owner's savings rules. Matching is
-   * diacritic-insensitive, word-boundary based, and oldest-learned wins
-   * (repository orders createdAt ASC). Returns the matching rule percent,
-   * or null when no rule matches.
+   * diacritic-insensitive, word-boundary based, oldest-learned wins
+   * (repository orders createdAt ASC), and singular/plural variants fold on
+   * BOTH sides through `normalizeForMatchTolerant` (shared matcher semantics).
+   * Returns the matching rule percent, or null when no rule matches.
    */
   async matchNote(ownerId: string, note: string): Promise<number | null> {
     const rules = await this.repository.listByOwner(ownerId);
-    const normalized = normalizeForMatch(note);
+    const normalized = normalizeForMatchTolerant(note);
     for (const rule of rules) {
-      if (boundaryRegex(rule.keyword).test(normalized)) {
+      if (boundaryRegex(normalizeForMatchTolerant(rule.keyword)).test(normalized)) {
         return rule.percent;
       }
     }

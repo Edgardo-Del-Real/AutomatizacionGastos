@@ -443,4 +443,30 @@ describe("App", () => {
       expect(fetchMovementsMock).toHaveBeenLastCalledWith("default", {}, "all"),
     );
   });
+
+  it("renders the planned section after the KPI cards in the kpis tab", async () => {
+    fetchMovementSummaryMock.mockResolvedValue({
+      ...summary,
+      planned: { month: "2026-09", total: 4000 },
+    });
+    fetchCategoriesMock.mockResolvedValue([]);
+
+    render(<App />);
+
+    const kpisHeading = await screen.findByRole("heading", {
+      name: "Ingresos",
+    });
+    const plannedHeading = screen.getByRole("heading", {
+      name: "Gastos fijos previstos",
+    });
+
+    // D9: the planned section renders immediately after the KPI cards (the
+    // KPI heading precedes the planned heading in document order).
+    expect(
+      plannedHeading.compareDocumentPosition(kpisHeading) &
+        Node.DOCUMENT_POSITION_PRECEDING,
+    ).toBeTruthy();
+    expect(screen.getByText("septiembre de 2026")).toBeInTheDocument();
+    expect(screen.getByText("$ 4.000,00")).toBeInTheDocument();
+  });
 });

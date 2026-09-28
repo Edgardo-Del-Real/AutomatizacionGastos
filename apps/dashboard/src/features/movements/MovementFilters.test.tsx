@@ -111,4 +111,10 @@ describe("MovementFilters", () => {
 
     expect(onChange).toHaveBeenCalledWith({});
   });
+
+  it("offers no status filter (planned expenses surface in their own section)", () => {
+    render(<MovementFilters value={{}} onChange={() => {}} />);
+
+    expect(screen.queryByLabelText(/estado|status/i)).toBeNull();
+  });
 });

@@ -9,6 +9,7 @@ import { CategoryCards } from "./features/movements/CategoryCards";
 import { CategoryPieChart } from "./features/movements/CategoryPieChart";
 import { KpiCards } from "./features/movements/KpiCards";
 import { MovementList } from "./features/movements/MovementList";
+import { PlannedSection } from "./features/movements/PlannedSection";
 import { SummarySection } from "./features/movements/SummarySection";
 import { TopMovements } from "./features/movements/TopMovements";
 import { useMovementSummary } from "./features/movements/useMovementSummary";
@@ -111,6 +112,13 @@ function Dashboard() {
             {(data) => (
               <div className="space-y-6">
                 <KpiCards kpis={data.kpis} />
+                {/* D9: the planned expenses section sits immediately after the
+                    KPI cards; its form and total share one refresh token. */}
+                <PlannedSection
+                  planned={data.planned}
+                  refreshToken={refreshKey}
+                  onMutated={bumpRefresh}
+                />
                 <CategoryCards
                   categories={data.categories}
                   refreshToken={refreshKey}

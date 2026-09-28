@@ -7,10 +7,12 @@ import {
   listMovementsSchema,
   movementFiltersSchema,
   movementSchema,
+  movementStatusSchema,
   movementSummarySchema,
   movementTypeSchema,
   movementVisibilitySchema,
   savingsRuleSchema,
+  updateMovementSchema,
   visibilityFilterSchema,
 } from "./index";
 
@@ -31,6 +33,18 @@ describe("movementTypeSchema", () => {
     expect(movementTypeSchema.parse("INCOME")).toBe("INCOME");
     expect(movementTypeSchema.parse("EXPENSE")).toBe("EXPENSE");
     expect(movementTypeSchema.parse("SAVINGS")).toBe("SAVINGS");
+  });
+});
+
+describe("movementStatusSchema", () => {
+  it("accepts PAID and PENDING", () => {
+    expect(movementStatusSchema.parse("PAID")).toBe("PAID");
+    expect(movementStatusSchema.parse("PENDING")).toBe("PENDING");
+  });
+
+  it("rejects an unknown status value", () => {
+    const result = movementStatusSchema.safeParse("PARTIAL");
+    expect(result.success).toBe(false);
   });
 });
 
@@ -96,6 +110,21 @@ describe("movementSchema", () => {
     });
     expect(parsed.visibility).toBe("SHARED");
     expect(parsed.registrantId).toBe("owner-1");
+  });
+
+  it("parses an optional status field when present", () => {
+    const parsed = movementSchema.parse({ ...movementPayload, status: "PENDING" });
+    expect(parsed.status).toBe("PENDING");
+  });
+
+  it("parses without a status field (optional)", () => {
+    const parsed = movementSchema.parse(movementPayload);
+    expect(parsed.status).toBeUndefined();
+  });
+
+  it("rejects an unknown status value", () => {
+    const result = movementSchema.safeParse({ ...movementPayload, status: "PARTIAL" });
+    expect(result.success).toBe(false);
   });
 });
 
@@ -223,6 +252,7 @@ const summaryPayload = {
     expenses: [{ ...movementPayload, type: "EXPENSE" }],
     income: [movementPayload],
   },
+  planned: { month: "2026-09", total: 2500 },
 };
 
 describe("movementSummarySchema", () => {
@@ -238,6 +268,19 @@ describe("movementSummarySchema", () => {
     expect(parsed.categories[0]?.incomePercent).toBe(100);
     expect(parsed.top.income[0]?.type).toBe("INCOME");
     expect(parsed.top.expenses[0]?.type).toBe("EXPENSE");
+  });
+
+  it("parses the planned block with month and total", () => {
+    const parsed = movementSummarySchema.parse(summaryPayload);
+    expect(parsed.planned.month).toBe("2026-09");
+    expect(parsed.planned.total).toBe(2500);
+  });
+
+  it("parses a summary without the planned block (additive — required once the producer lands)", () => {
+    const withoutPlanned: Record<string, unknown> = JSON.parse(JSON.stringify(summaryPayload));
+    delete withoutPlanned.planned;
+    const parsed = movementSummarySchema.parse(withoutPlanned);
+    expect(parsed.planned).toBeUndefined();
   });
 
   it("rejects a summary missing the kpis savings figure", () => {
@@ -318,6 +361,97 @@ describe("createMovementSchema", () => {
       occurredAt: "2026-08-01T12:00:00.000Z",
       type: "REFUND",
     });
+    expect(result.success).toBe(false);
+  });
+
+  it("accepts PENDING for EXPENSE", () => {
+    const parsed = createMovementSchema.parse({
+      amount: 1000,
+      occurredAt: "2026-08-01T12:00:00.000Z",
+      type: "EXPENSE",
+      status: "PENDING",
+    });
+    expect(parsed.status).toBe("PENDING");
+  });
+
+  it("accepts PENDING without an explicit type (absent type counts as EXPENSE)", () => {
+    const parsed = createMovementSchema.parse({
+      amount: 1000,
+      occurredAt: "2026-08-01T12:00:00.000Z",
+      status: "PENDING",
+    });
+    expect(parsed.status).toBe("PENDING");
+  });
+
+  it("accepts PAID for INCOME", () => {
+    const parsed = createMovementSchema.parse({
+      amount: 1000,
+      occurredAt: "2026-08-01T12:00:00.000Z",
+      type: "INCOME",
+      status: "PAID",
+    });
+    expect(parsed.status).toBe("PAID");
+  });
+
+  it("rejects PENDING for INCOME", () => {
+    const result = createMovementSchema.safeParse({
+      amount: 1000,
+      occurredAt: "2026-08-01T12:00:00.000Z",
+      type: "INCOME",
+      status: "PENDING",
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects PENDING for SAVINGS", () => {
+    const result = createMovementSchema.safeParse({
+      amount: 1000,
+      occurredAt: "2026-08-01T12:00:00.000Z",
+      type: "SAVINGS",
+      status: "PENDING",
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects an unknown status value", () => {
+    const result = createMovementSchema.safeParse({
+      amount: 1000,
+      occurredAt: "2026-08-01T12:00:00.000Z",
+      type: "EXPENSE",
+      status: "PARTIAL",
+    });
+    expect(result.success).toBe(false);
+  });
+});
+
+describe("updateMovementSchema", () => {
+  it("accepts a payload with only note", () => {
+    const parsed = updateMovementSchema.parse({ note: "uber" });
+    expect(parsed.note).toBe("uber");
+  });
+
+  it("accepts category null (clears the category)", () => {
+    const parsed = updateMovementSchema.parse({ category: null });
+    expect(parsed.category).toBeNull();
+  });
+
+  it("rejects a non-positive amount", () => {
+    const result = updateMovementSchema.safeParse({ amount: 0 });
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects an empty patch", () => {
+    const result = updateMovementSchema.safeParse({});
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects a status-only patch (status is not editable through PATCH)", () => {
+    const result = updateMovementSchema.safeParse({ status: "PENDING" });
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects an occurredAt-only patch (occurredAt is not editable through PATCH)", () => {
+    const result = updateMovementSchema.safeParse({ occurredAt: "2026-08-01T12:00:00.000Z" });
     expect(result.success).toBe(false);
   });
 });

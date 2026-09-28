@@ -45,6 +45,10 @@ export const movementTypeSchema = z.enum(["EXPENSE", "INCOME", "SAVINGS"]);
 
 export type MovementType = z.infer<typeof movementTypeSchema>;
 
+export const movementStatusSchema = z.enum(["PAID", "PENDING"]);
+
+export type MovementStatus = z.infer<typeof movementStatusSchema>;
+
 export const movementVisibilitySchema = z.enum(["INDIVIDUAL", "SHARED"]);
 
 export type MovementVisibility = z.infer<typeof movementVisibilitySchema>;
@@ -59,6 +63,9 @@ export const movementSchema = expenseSchema.extend({
   // existing consumers keep parsing movements without them.
   visibility: movementVisibilitySchema.optional(),
   registrantId: z.string().optional(),
+  // Additive contract: status is carried when present; existing consumers keep
+  // parsing movements without it (PAID is the persisted default).
+  status: movementStatusSchema.optional(),
 });
 
 export type Movement = z.infer<typeof movementSchema>;
@@ -93,9 +100,17 @@ export const householdMembersSchema = z.array(householdMemberSchema).min(1);
 
 export type HouseholdMembers = z.infer<typeof householdMembersSchema>;
 
-export const createMovementSchema = createExpenseSchema.extend({
-  type: movementTypeSchema.optional(),
-});
+export const createMovementSchema = createExpenseSchema
+  .extend({
+    type: movementTypeSchema.optional(),
+    status: movementStatusSchema.optional(),
+  })
+  // Planned-expense guard: PENDING is meaningful only for EXPENSE (absent type
+  // counts as EXPENSE, matching the persisted default); INCOME/SAVINGS are always PAID.
+  .refine(
+    (data) => data.status !== "PENDING" || (data.type ?? "EXPENSE") === "EXPENSE",
+    { message: "PENDING status is only valid for EXPENSE movements", path: ["status"] },
+  );
 
 export type CreateMovementInput = z.infer<typeof createMovementSchema>;
 
@@ -175,6 +190,16 @@ export const movementSummarySchema = z.object({
     expenses: z.array(movementSchema),
     income: z.array(movementSchema),
   }),
+  // Planned-fixed-expenses block: next-month PENDING EXPENSE total. Optional in
+  // this PR (chained-PR: the movements producer lands in PR 2); the API's
+  // movementSummarySchema response validation keeps accepting older summaries
+  // until getSummary emits planned.
+  planned: z
+    .object({
+      month: z.string(),
+      total: z.number(),
+    })
+    .optional(),
 });
 
 export type MovementSummary = z.infer<typeof movementSummarySchema>;

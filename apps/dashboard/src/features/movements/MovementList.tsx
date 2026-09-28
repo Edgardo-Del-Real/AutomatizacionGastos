@@ -29,6 +29,10 @@ const ACTION_CLASS =
 const BADGE_CLASS =
   "inline-flex items-center rounded-full bg-accent-soft px-2 py-0.5 text-xs font-medium text-accent";
 
+/** "Previsto" badge: a PENDING expense that does not count in the KPIs yet. */
+const PENDING_BADGE_CLASS =
+  "inline-flex items-center rounded-full bg-expense-soft px-2 py-0.5 text-xs font-medium text-expense";
+
 function sortByOccurredAtDesc(a: Date, b: Date): number {
   return b.getTime() - a.getTime();
 }
@@ -66,7 +70,8 @@ export function MovementList({
     effectiveVisibility,
     refreshToken,
   );
-  const { removeMovement, deleteError, busy } = useMovementMutations(onMutated);
+  const { removeMovement, markPaid, deleteError, markPaidError, busy } =
+    useMovementMutations(onMutated);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [confirmingId, setConfirmingId] = useState<string | null>(null);
 
@@ -148,6 +153,16 @@ export function MovementList({
           </p>
         </div>
         <MovementFilters value={{ ...filters, visibility: effectiveVisibility }} onChange={handleFiltersChange} />
+        {markPaidError ? (
+          <p
+            role="alert"
+            className="border-t border-border px-4 py-3 text-sm font-medium text-danger sm:px-6"
+          >
+            {markPaidError.status === 409
+              ? "El movimiento ya no está pendiente."
+              : "No se pudo marcar como pagado."}
+          </p>
+        ) : null}
         <div className="overflow-x-auto">
             <table className="w-full min-w-full text-left text-sm">
               <thead>
@@ -192,6 +207,11 @@ export function MovementList({
                         <span className={TYPE_BADGE_CLASS[movement.type]}>
                           {TYPE_LABELS[movement.type]}
                         </span>
+                        {movement.status === "PENDING" ? (
+                          <span className={`${PENDING_BADGE_CLASS} ml-2`}>
+                            Previsto
+                          </span>
+                        ) : null}
                       </td>
                       <td
                         className={`px-4 py-3 text-right whitespace-nowrap sm:px-6 ${
@@ -225,6 +245,16 @@ export function MovementList({
                       <td className="px-4 py-3 whitespace-nowrap sm:px-6">
                         {registrantOf(movement) === viewerId ? (
                           <div className="flex items-center gap-2">
+                            {movement.status === "PENDING" ? (
+                              <button
+                                type="button"
+                                onClick={() => void markPaid(movement.id)}
+                                disabled={busy === "markPaid"}
+                                className={ACTION_CLASS}
+                              >
+                                Marcar pagado
+                              </button>
+                            ) : null}
                             <button
                               type="button"
                               onClick={() => setEditingId(movement.id)}

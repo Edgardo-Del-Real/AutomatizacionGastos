@@ -11,6 +11,7 @@ import {
   fetchCategories,
   fetchHouseholdMembers,
   fetchMovements,
+  markMovementPaid,
   patchMovement,
 } from "../../infra/api";
 import { ViewerProvider } from "../household/ViewerContext";
@@ -23,6 +24,7 @@ vi.mock("../../infra/api", async (importOriginal) => ({
   fetchHouseholdMembers: vi.fn(),
   patchMovement: vi.fn(),
   deleteMovement: vi.fn(),
+  markMovementPaid: vi.fn(),
 }));
 
 const movements: Movement[] = [
@@ -55,6 +57,34 @@ const fetchCategoriesMock = vi.mocked(fetchCategories);
 const fetchHouseholdMembersMock = vi.mocked(fetchHouseholdMembers);
 const patchMovementMock = vi.mocked(patchMovement);
 const deleteMovementMock = vi.mocked(deleteMovement);
+const markMovementPaidMock = vi.mocked(markMovementPaid);
+
+/** A PENDING EXPENSE row plus a regular PAID row for contrast. */
+const pendingMovements: Movement[] = [
+  {
+    id: "p1",
+    ownerId: "default",
+    amount: 2500,
+    currency: "ARS",
+    type: "EXPENSE",
+    category: "alquiler",
+    note: null,
+    occurredAt: new Date("2026-08-13T12:00:00Z"),
+    createdAt: new Date("2026-08-13T12:00:00Z"),
+    status: "PENDING",
+  },
+  {
+    id: "e1",
+    ownerId: "default",
+    amount: 1200,
+    currency: "ARS",
+    type: "EXPENSE",
+    category: "alquiler",
+    note: null,
+    occurredAt: new Date("2026-08-12T12:00:00Z"),
+    createdAt: new Date("2026-08-12T12:00:00Z"),
+  },
+];
 
 const duo: HouseholdMember[] = [
   { ownerId: "rita", name: "Rita" },
@@ -395,5 +425,121 @@ describe("MovementList", () => {
       within(rows[3]!).queryByRole("button", { name: /eliminar/i }),
     ).toBeNull();
     expect(screen.getByText("Compartido · Edgardo")).toBeInTheDocument();
+  });
+
+  it("renders a PENDING row with the Previsto badge and a Marcar pagado action on own rows", async () => {
+    fetchMovementsMock.mockResolvedValue(pendingMovements);
+
+    render(<MovementList />);
+    await waitFor(() => expect(screen.getByRole("table")).toBeInTheDocument());
+
+    const rows = screen.getAllByRole("row");
+    const pendingRow = within(rows[1]!); // newest first: the PENDING row
+    expect(pendingRow.getByText("Previsto")).toBeInTheDocument();
+    expect(
+      pendingRow.getByRole("button", { name: /marcar pagado/i }),
+    ).toBeInTheDocument();
+
+    const paidRow = within(rows[2]!);
+    expect(paidRow.queryByText("Previsto")).toBeNull();
+    expect(
+      paidRow.queryByRole("button", { name: /marcar pagado/i }),
+    ).toBeNull();
+  });
+
+  it("keeps the Marcar pagado action off partner rows", async () => {
+    const partnerPending: Movement[] = [
+      {
+        id: "pp1",
+        ownerId: "edgardo",
+        registrantId: "edgardo",
+        visibility: "SHARED",
+        amount: 1500,
+        currency: "ARS",
+        type: "EXPENSE",
+        category: "expensas",
+        note: null,
+        occurredAt: new Date("2026-08-13T12:00:00Z"),
+        createdAt: new Date("2026-08-13T12:00:00Z"),
+        status: "PENDING",
+      },
+      {
+        id: "p2",
+        ownerId: "rita",
+        registrantId: "rita",
+        visibility: "SHARED",
+        amount: 2500,
+        currency: "ARS",
+        type: "EXPENSE",
+        category: "alquiler",
+        note: null,
+        occurredAt: new Date("2026-08-12T12:00:00Z"),
+        createdAt: new Date("2026-08-12T12:00:00Z"),
+        status: "PENDING",
+      },
+    ];
+    fetchMovementsMock.mockResolvedValue(partnerPending);
+
+    renderWithViewer(<MovementList />, duo);
+    await waitFor(() => expect(screen.getByRole("table")).toBeInTheDocument());
+
+    const rows = screen.getAllByRole("row");
+    // rows[1] = the partner's PENDING row (newest, occurredAt 08-13) → read-only.
+    expect(
+      within(rows[1]!).queryByRole("button", { name: /marcar pagado/i }),
+    ).toBeNull();
+    // rows[2] = the viewer's own PENDING row → keeps the action.
+    expect(
+      within(rows[2]!).getByRole("button", { name: /marcar pagado/i }),
+    ).toBeInTheDocument();
+  });
+
+  it("marks a pending row paid and bumps refresh on success", async () => {
+    const user = userEvent.setup();
+    fetchMovementsMock.mockResolvedValue(pendingMovements);
+    markMovementPaidMock.mockResolvedValue({
+      ...pendingMovements[0]!,
+      status: "PAID",
+    });
+    const onMutated = vi.fn();
+
+    render(<MovementList onMutated={onMutated} refreshToken={0} />);
+    await waitFor(() => expect(screen.getByRole("table")).toBeInTheDocument());
+
+    const pendingRow = within(screen.getAllByRole("row")[1]!);
+    await user.click(
+      pendingRow.getByRole("button", { name: /marcar pagado/i }),
+    );
+
+    await waitFor(() =>
+      expect(markMovementPaidMock).toHaveBeenCalledWith("p1", "default"),
+    );
+    await waitFor(() => expect(onMutated).toHaveBeenCalledTimes(1));
+  });
+
+  it("shows a Spanish error and keeps the row when mark-paid returns 409", async () => {
+    const user = userEvent.setup();
+    fetchMovementsMock.mockResolvedValue(pendingMovements);
+    markMovementPaidMock.mockRejectedValue(
+      new ApiError("http", { status: 409 }),
+    );
+    const onMutated = vi.fn();
+
+    render(<MovementList onMutated={onMutated} />);
+    await waitFor(() => expect(screen.getByRole("table")).toBeInTheDocument());
+
+    const pendingRow = within(screen.getAllByRole("row")[1]!);
+    await user.click(
+      pendingRow.getByRole("button", { name: /marcar pagado/i }),
+    );
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      /ya no está pendiente|no se pudo marcar/i,
+    );
+    expect(onMutated).not.toHaveBeenCalled();
+    // The row stays rendered as PENDING.
+    expect(
+      within(screen.getAllByRole("row")[1]!).getByText("Previsto"),
+    ).toBeInTheDocument();
   });
 });

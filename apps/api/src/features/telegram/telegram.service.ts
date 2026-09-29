@@ -53,6 +53,7 @@ import {
   correctionDoneReply,
   correctionOfferReply,
   duplicateCategoryReply,
+  greetingReply,
   helpReply,
   keptCollectingReply,
   keywordAssociatedReply,
@@ -1585,6 +1586,14 @@ private async handleDialogMessage(
         return;
       case "off_topic":
         await this.sendRedirect("off_topic", offTopicRedirectReply(), reply);
+        return;
+      case "greeting":
+        // D4: a warm expense-scoped greeting; the pending is untouched by
+        // construction (only register_expense clears it).
+        await this.makeSender(true, reply)(
+          { intent: "greeting", ok: true, action: "none", amount: null, category: null, note: null },
+          greetingReply(),
+        );
         return;
       case "help":
       case "correct_amount":

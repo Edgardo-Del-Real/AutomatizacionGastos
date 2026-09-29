@@ -16,6 +16,7 @@ import {
   associateKeywordRedirectReply,
   collectAbandonedReply,
   formatARS,
+  greetingReply,
   helpReply,
   keptCollectingReply,
   offTopicRedirectReply,
@@ -2314,7 +2315,8 @@ describe("TelegramService brain orchestration (llm-conversational-bot)", () => {
     });
     h.mockBrainReply.mockResolvedValue("Solo registro gastos: mandame un monto.");
 
-    await h.service.handleUpdate(textUpdate({ text: "hola, cómo andás?", messageId: 1 }), h.reply);
+    // Genuinely off-topic text: "hola" is now greeting-classified (3.4 flip).
+    await h.service.handleUpdate(textUpdate({ text: "me contás un chiste?", messageId: 1 }), h.reply);
 
     expect(h.mockCreateExpense).not.toHaveBeenCalled();
     expect(h.mockSetState).not.toHaveBeenCalled();
@@ -2331,10 +2333,75 @@ describe("TelegramService brain orchestration (llm-conversational-bot)", () => {
       note: null,
     });
 
-    await h.service.handleUpdate(textUpdate({ text: "hola", messageId: 1 }), h.reply);
+    await h.service.handleUpdate(textUpdate({ text: "cuál es tu color favorito?", messageId: 1 }), h.reply);
 
     expect(h.mockCreateExpense).not.toHaveBeenCalled();
     expect(h.replies.at(-1)).toBe(offTopicRedirectReply());
+  });
+
+  it("greeting: a greeting intent in idle sends a warm expense-scoped greeting, creating nothing", async () => {
+    seedHarnessCategories(h, ["otro"]);
+    h.mockBrainInterpret.mockResolvedValue({
+      intent: "greeting",
+      amount: null,
+      category: null,
+      note: null,
+    });
+    h.mockBrainReply.mockResolvedValue("¡Hola! Mandame un gasto y lo cargo.");
+
+    await h.service.handleUpdate(textUpdate({ text: "hola", messageId: 1 }), h.reply);
+
+    expect(h.mockCreateExpense).not.toHaveBeenCalled();
+    expect(h.mockSetState).not.toHaveBeenCalled();
+    expect(h.mockBrainReply).toHaveBeenCalledWith(
+      expect.objectContaining({ intent: "greeting", ok: true, action: "none" }),
+    );
+    expect(h.replies.at(-1)).toBe("¡Hola! Mandame un gasto y lo cargo.");
+  });
+
+  it("greeting: the fixed fallback replies when the brain reply is null", async () => {
+    seedHarnessCategories(h, ["otro"]);
+    h.mockBrainInterpret.mockResolvedValue({
+      intent: "greeting",
+      amount: null,
+      category: null,
+      note: null,
+    });
+    h.mockBrainReply.mockResolvedValue(null);
+
+    await h.service.handleUpdate(textUpdate({ text: "hola", messageId: 1 }), h.reply);
+
+    expect(h.replies.at(-1)).toBe(greetingReply());
+    expect(h.mockCreateExpense).not.toHaveBeenCalled();
+  });
+
+  it("greeting: a greeting during an open dialog leaves the pending untouched", async () => {
+    const payload = registrationCollectPayloadSchema.parse({
+      body: "quiero cargar un gasto",
+      note: "gym",
+      amount: 5000,
+      category: null,
+    });
+    await h.botStateRepository.set({
+      ownerId,
+      state: "awaiting_registration",
+      pendingMovementId: null,
+      pendingNote: JSON.stringify(payload),
+    });
+    h.mockBrainInterpret.mockResolvedValue({
+      intent: "greeting",
+      amount: null,
+      category: null,
+      note: null,
+      dialog_action: null,
+    });
+
+    await h.service.handleUpdate(textUpdate({ text: "hola", messageId: 2 }), h.reply);
+
+    expect(h.mockCreateExpense).not.toHaveBeenCalled();
+    const state = await h.botStateRepository.get(ownerId);
+    expect(state?.state).toBe("awaiting_registration");
+    expect(h.replies.at(-1)).toBe(greetingReply());
   });
 
   it("redirects associate_keyword to the explicit command", async () => {

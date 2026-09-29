@@ -18,6 +18,7 @@ export const BOT_INTENTS = [
   "capabilities",
   "help",
   "off_topic",
+  "greeting",
 ] as const;
 
 export type BotIntent = (typeof BOT_INTENTS)[number];
@@ -225,9 +226,10 @@ export type ChatMessage = { role: "user" | "assistant"; content: string };
 export const INTERPRET_SYSTEM_PROMPT = [
   'Respondé SOLO con un objeto JSON con exactamente estas claves: {"intent": string, "amount": number|null, "category": string|null, "note": string|null, "query_type": string|null, "new_name": string|null, "dialog_action": string|null, "then_reassign": boolean, "shared": boolean, "planned": boolean}.',
   "No agregues texto ni campos extra.",
-  '"intent" es exactamente UNA de: "register_expense" (cualquier movimiento de dinero, gasto o ingreso), "correct_amount", "correct_category", "query", "query_recent", "query_balance", "query_month", "query_planned", "associate_keyword", "create_category", "delete_category", "rename_category", "create_savings_rule", "capabilities", "help", "off_topic".',
+  '"intent" es exactamente UNA de: "register_expense" (cualquier movimiento de dinero, gasto o ingreso), "correct_amount", "correct_category", "query", "query_recent", "query_balance", "query_month", "query_planned", "associate_keyword", "create_category", "delete_category", "rename_category", "create_savings_rule", "capabilities", "help", "off_topic", "greeting".',
   "Si el mensaje tiene señal de gasto (verbo de gasto, $ o un monto) usá register_expense, aunque no tenga monto.",
   "NUNCA inventes un monto: usá null cuando el mensaje no tiene monto.",
+  'Un "register_expense" con amount null abre el diálogo de registro: el bot pregunta el monto y luego la categoría (no es un mensaje sin sentido).',
   'Todo es en pesos argentinos (ARS): ignorá símbolos o nombres de moneda ($, usd, €) y no conviertas.',
   '"1.234,50" y "1234,50" significan 1234.50; "1234.5" significa 1234.5; "5 mil" o "cinco mil" significan 5000 — devolvé el número.',
   '"category" es una sugerencia de categoría (ej: "Supermercado", "Transporte"), máximo 60 caracteres, null si no estás seguro.',
@@ -240,6 +242,7 @@ export const INTERPRET_SYSTEM_PROMPT = [
   'Para definir un ahorro automático sobre un ingreso usá "create_savings_rule": el bot redirige al comando "registrar ahorro: <palabra> al <X>%" y no ejecuta nada él mismo.',
   'Para preguntas sobre lo que el bot SABE hacer (¿podes borrar categorías?, ¿qué sabés hacer?, ¿qué podes hacer?) usá "capabilities": es una pregunta de capacidades, NUNCA la trates como off_topic ni dejes la acción vacía.',
   'off_topic es para mensajes sin relación con gastos: clasificalo, NUNCA lo respondas como charla general.',
+  'Los saludos ("hola", "buenas", "qué tal", "cómo andás") son "greeting": un saludo cálido, NO off_topic.',
   '"dialog_action" se usa SOLO cuando hay un diálogo abierto (pregunta pendiente del bot): "resolve" si el mensaje responde la pregunta con un valor presentado, "abandon" si el dueño abandona explícitamente ("no, dejalo"), null en cualquier otro caso. Fuera de diálogo siempre null.',
   'Para "correct_category": "category" es la categoría DESTINO; "amount" y/o "note" identifican el movimiento a corregir.',
   '"then_reassign" es true SOLO cuando "create_category" pide guardar el movimiento pendiente en la categoría nueva (ej: "creá X y guardalo ahí"); en cualquier otro caso false.',
@@ -314,7 +317,7 @@ export const FEW_SHOTS: readonly ChatMessage[] = [
     content: '{"intent":"create_savings_rule","amount":null,"category":"entrenuts","note":"al 10%"}',
   },
   { role: "user", content: "hola, cómo andás?" },
-  { role: "assistant", content: '{"intent":"off_topic","amount":null,"category":null,"note":null}' },
+  { role: "assistant", content: '{"intent":"greeting","amount":null,"category":null,"note":null}' },
   { role: "user", content: "de ahora en más uber va a transporte" },
   { role: "assistant", content: '{"intent":"associate_keyword","amount":null,"category":null,"note":null}' },
   { role: "user", content: "creá una categoria llamada mascotas" },
@@ -350,7 +353,8 @@ export const REPLY_SYSTEM_PROMPT = [
   "Recibís SOLO el JSON del resultado ejecutado y respondés con un objeto JSON: {\"reply\": string}.",
   "NUNCA afirmes un dato que no esté en el resultado: si amount es null no menciones montos.",
   "Máximo 2 oraciones, sin markdown.",
-  "Según action: registered = el movimiento se guardó o actualizó — confirmalo con los datos presentes; asked_amount = el monto es ambiguo — pedí el número exacto sin afirmar cuál es el correcto; asked_category = el movimiento quedó guardado en la categoría — ofrecé reasignarla; answered = respondé la consulta usando SOLO los datos del campo query (query_type y sus valores), sin inventar montos, categorías ni fechas; redirected = todavía no se puede — decilo con honestidad; none = no se ejecutó nada — guiá al dueño; created = la categoría se creó — confirmalo con category; deleted = la categoría se borró — confirmalo con category; renamed = la categoría se renombró — confirmá category a new_name; capabilities = enumerá lo que el bot puede hacer (registrar gastos, corregir, consultar categorías/últimos movimientos/saldo/resumen del mes/ahorro del mes, crear/borrar/renombrar categorías, asociar palabras, ayuda); asked_movement = el bot preguntó qué movimiento corregir — enumerá SOLO los candidatos recibidos, sin inventar datos; created_reassigned = la categoría se creó y el movimiento pendiente se reasignó — confirmá ambos hechos.",
+  "Según action: registered = el movimiento se guardó o actualizó — confirmalo con los datos presentes; asked_amount = el monto es ambiguo — pedí el número exacto sin afirmar cuál es el correcto; asked_category = el movimiento quedó guardado en la categoría — ofrecé reasignarla; answered = respondé la consulta usando SOLO los datos del campo query (query_type y sus valores), sin inventar montos, categorías ni fechas; redirected = todavía no se puede — decilo con honestidad; none = no se ejecutó nada — guiá al dueño; created = la categoría se creó — confirmalo con category; deleted = la categoría se borró — confirmalo con category; renamed = la categoría se renombró — confirmá category a new_name; capabilities = enumerá lo que el bot puede hacer (registrar gastos, corregir, consultar categorías/últimos movimientos/saldo/resumen del mes/ahorro del mes, crear/borrar/renombrar categorías, asociar palabras, ayuda); asked_movement = el bot preguntó qué movimiento corregir — enumerá SOLO los candidatos recibidos, sin inventar datos; created_reassigned = la categoría se creó y el movimiento pendiente se reasignó — confirmá ambos hechos; asked_registration = el bot está juntando un registro — preguntá SOLO el campo de asked_field (\"amount\": pedí el monto; \"category\": pedí el nombre de la categoría), nunca inventes el otro campo.",
+  "Si intent es greeting con action none: respondé con un saludo cálido de una línea orientado a gastos, sin cerrar ningún diálogo abierto.",
   "Si vienen gross_amount, net_amount y savings_amount (un ingreso con ahorro automático): confirmá el ingreso neto (net_amount) y cuánto ahorraste (savings_amount), sin inventar otros montos.",
   "Si vienen planned_month y planned_total (una consulta de gastos previstos): confirmá el total previsto para ese mes con esos datos exactos, sin inventar montos.",
   "Si planned es true en un registro (gasto previsto): confirmá el registro sin afirmar que ya cuenta en el saldo ni en los gastos.",

@@ -109,7 +109,7 @@
   },
   {
     "role": "assistant",
-    "content": "{\"intent\":\"off_topic\",\"amount\":null,\"category\":null,\"note\":null}"
+    "content": "{\"intent\":\"greeting\",\"amount\":null,\"category\":null,\"note\":null}"
   },
   {
     "role": "user",

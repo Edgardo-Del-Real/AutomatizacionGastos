@@ -459,6 +459,48 @@ describe("conversationEnvelopeSchema", () => {
     }
   });
 
+  it("decodes a greeting envelope (spec: Greeting intent decodes)", () => {
+    const result = conversationEnvelopeSchema.safeParse({
+      intent: "greeting",
+      amount: null,
+      category: null,
+      note: null,
+    });
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.intent).toBe("greeting");
+    }
+  });
+
+  it("keeps a null-amount register_expense valid and routed to collection (spec: Null-amount register remains valid)", () => {
+    const result = conversationEnvelopeSchema.safeParse({
+      intent: "register_expense",
+      amount: null,
+      category: null,
+      note: "gym",
+    });
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.amount).toBeNull();
+      expect(result.data.note).toBe("gym");
+    }
+  });
+
+  it("accepts an awaiting_registration context in the interpret union", () => {
+    const context: InterpretContext = {
+      state: "awaiting_registration",
+      pending: { amount: 5000, category: null, note: "gym" },
+      openQuestion: "¿En qué categoría lo guardo (gym)? Mandame el nombre.",
+    };
+
+    // The union member exists: renderDialogContext renders it without throwing.
+    expect(renderDialogContext(context)).toContain("awaiting_registration");
+    expect(renderDialogContext(context)).toContain("monto: 5000");
+    expect(renderDialogContext(context)).toContain("categoría: pendiente");
+  });
+
   it("defaults then_reassign to false when the key is omitted", () => {
     const result = conversationEnvelopeSchema.safeParse({
       intent: "create_category",
@@ -1099,6 +1141,18 @@ describe("prompt goldens", () => {
     );
   });
 
+  it("pins the awaiting_registration dialog addendum", async () => {
+    await expect(DIALOG_INTERPRET_ADDENDUM["awaiting_registration"]).toMatchFileSnapshot(
+      "./__goldens__/dialog-awaiting-registration-addendum.txt",
+    );
+  });
+
+  it("pins the awaiting_registration dialog few-shots", async () => {
+    await expect(JSON.stringify(DIALOG_FEW_SHOTS["awaiting_registration"], null, 2)).toMatchFileSnapshot(
+      "./__goldens__/dialog-awaiting-registration-few-shots.json",
+    );
+  });
+
   it("pins the rendered dialog context fixture", async () => {
     const context: InterpretContext = {
       state: "awaiting_category",
@@ -1126,6 +1180,42 @@ describe("prompt contracts", () => {
   it("classifies off-topic and never answers as general chat", () => {
     expect(INTERPRET_SYSTEM_PROMPT).toContain("off_topic");
     expect(INTERPRET_SYSTEM_PROMPT).toContain("charla general");
+  });
+
+  it("keeps off_topic strictly redirect-only while greeting is a separate intent", () => {
+    expect(INTERPRET_SYSTEM_PROMPT).toContain("off_topic");
+    expect(INTERPRET_SYSTEM_PROMPT).toContain("greeting");
+    // The greeting classification must NOT weaken the off_topic redirect rule.
+    expect(INTERPRET_SYSTEM_PROMPT).toContain("charla general");
+  });
+
+  it("teaches the greeting classification separately from off_topic (deliberate reversal)", () => {
+    expect(INTERPRET_SYSTEM_PROMPT).toContain("greeting");
+    expect(INTERPRET_SYSTEM_PROMPT).toContain("saludos");
+  });
+
+  it("teaches that a null-amount register_expense opens the registration dialog", () => {
+    expect(INTERPRET_SYSTEM_PROMPT).toContain("register_expense");
+    expect(INTERPRET_SYSTEM_PROMPT).toContain("amount null");
+  });
+
+  it("models the greeting flip in the interpret few-shots ('hola' → greeting)", () => {
+    const hola = FEW_SHOTS.find((message) => message.role === "user" && message.content.includes("hola"));
+    expect(hola).toBeDefined();
+    const answer = FEW_SHOTS[FEW_SHOTS.indexOf(hola as { role: "user"; content: string }) + 1];
+    expect(answer?.role).toBe("assistant");
+    const parsed = JSON.parse(answer?.content ?? "{}") as { intent: string };
+    expect(parsed.intent).toBe("greeting");
+  });
+
+  it("teaches the reply to ask ONLY the asked_field for an asked_registration action", () => {
+    expect(REPLY_SYSTEM_PROMPT).toContain("asked_registration");
+    expect(REPLY_SYSTEM_PROMPT).toContain("asked_field");
+  });
+
+  it("teaches a warm expense-scoped greeting reply that never closes dialogs", () => {
+    expect(REPLY_SYSTEM_PROMPT).toContain("greeting");
+    expect(REPLY_SYSTEM_PROMPT).toContain("saludo");
   });
 
   it("writes replies after the action from the executed result only", () => {

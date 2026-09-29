@@ -30,3 +30,6 @@ pnpm-debug.log*
 Thumbs.db
 # Local AI runtime state
 .atl/
+
+# Local codegraph index
+.codegraph/

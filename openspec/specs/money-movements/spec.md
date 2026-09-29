@@ -8,7 +8,8 @@ Full-stack money-movement tracking (expenses AND income). Extends the existing `
 
 ### Requirement: Movement Type Model
 
-The system MUST store a `type` field on every movement (enum `EXPENSE` | `INCOME`) with default `EXPENSE`, and MUST preserve existing rows as `EXPENSE` when the migration applies. The system MUST NOT rename the table or model.
+The system MUST store a `type` field on every movement (enum `EXPENSE` | `INCOME` | `SAVINGS`) with default `EXPENSE`, and MUST preserve existing rows as `EXPENSE` when the migration applies. The system MUST NOT rename the table or model.
+(Previously: enum was `EXPENSE | INCOME` only.)
 
 #### Scenario: Migration preserves existing rows
 
@@ -22,10 +23,16 @@ The system MUST store a `type` field on every movement (enum `EXPENSE` | `INCOME
 - WHEN it is persisted
 - THEN it is stored as `EXPENSE`
 
+#### Scenario: SAVINGS type stored
+
+- GIVEN a savings split
+- WHEN the SAVINGS movement is persisted
+- THEN its type is `SAVINGS`
+
 ### Requirement: Movement Contracts
 
-`@rita/contracts` MUST export `movementSchema`, `listMovementsSchema`, `movementSummarySchema`, `createMovementSchema`, and `updateMovementSchema`. `updateMovementSchema` MUST make `amount`, `note`, and `category` all optional with at least one present. `category` MUST accept `null` (clears the category) or an owner category; an absent `category` MUST leave it unchanged. `amount`, when present, MUST be a positive number. The `expenseSchema` family MUST remain exported unchanged. Every movement API response MUST validate against these contracts.
-(Previously: only `movementSchema`, `listMovementsSchema`, and `movementSummarySchema` were defined and category was free-form nullable.)
+`@rita/contracts` MUST export `movementSchema`, `listMovementsSchema`, `movementSummarySchema`, `createMovementSchema`, and `updateMovementSchema`. `updateMovementSchema` MUST make `amount`, `note`, and `category` all optional with at least one present. `category` MUST accept `null` (clears the category) or an owner category; an absent `category` MUST leave it unchanged. `amount`, when present, MUST be a positive number. The `expenseSchema` family MUST remain exported unchanged. Every movement API response MUST validate against these contracts. `movementTypeSchema` and `movementFiltersSchema.type` MUST accept `SAVINGS` in addition to `EXPENSE` and `INCOME`, so the list `type` filter supports SAVINGS. `movementSummarySchema` MUST include a current-calendar-month `savings` figure in `kpis` and per-month `savings` in `mom`. `movementStatusSchema` MUST be exported with values `PAID` and `PENDING`. `movementSchema` MUST include an optional `status` field. `createMovementSchema` MUST accept an optional `status`, and a `PENDING` status MUST be rejected for types other than `EXPENSE`. `updateMovementSchema` MUST NOT accept `status` or `occurredAt`; it stays `amount | note | category`. `movementSummarySchema` MUST include a `planned: { month, total }` block reporting the owner's next-month PENDING EXPENSE total.
+(Previously: only `movementSchema`, `listMovementsSchema`, and `movementSummarySchema` were defined, category was free-form nullable, and no status or planned concepts existed.)
 
 #### Scenario: Update schema optional fields
 
@@ -63,6 +70,30 @@ The system MUST store a `type` field on every movement (enum `EXPENSE` | `INCOME
 - WHEN contracts rebuild
 - THEN its shape is unchanged
 
+#### Scenario: SAVINGS accepted by the list filter
+
+- GIVEN `movementFiltersSchema.type`
+- WHEN validated with `"SAVINGS"`
+- THEN it passes
+
+#### Scenario: Status schema exported
+
+- GIVEN `movementStatusSchema`
+- WHEN validated with `"PENDING"` and `"PAID"`
+- THEN both pass
+
+#### Scenario: PENDING rejected for non-expense create
+
+- GIVEN a create payload with `type: "INCOME"` and `status: "PENDING"`
+- WHEN validated against `createMovementSchema`
+- THEN it fails validation
+
+#### Scenario: Status patch rejected
+
+- GIVEN a payload with only `status`
+- WHEN validated against `updateMovementSchema`
+- THEN it fails validation (empty patch)
+
 ### Requirement: Message Income Detection
 
 The system MUST classify an inbound message as `INCOME` when its normalized note matches any keyword (`ingreso|cobro|sueldo|venta|recibí|depósito`, case-insensitive) OR the amount is prefixed with `+`; otherwise it MUST classify as `EXPENSE`.
@@ -94,7 +125,8 @@ The system MUST classify an inbound message as `INCOME` when its normalized note
 
 ### Requirement: Movement List Endpoint
 
-`GET /movements` MUST return `listMovementsSchema` — an array of movements for the `ownerId` owner ordered by `occurredAt` DESC — filtered by optional `type` (`EXPENSE`|`INCOME`), `from`/`to` date range on `occurredAt`, `category`, and `q` (case-insensitive note substring). Unknown owner or no matches MUST return an empty array. All currencies MUST appear (no currency filter).
+`GET /movements` MUST return `listMovementsSchema` — an array of movements for the `ownerId` owner ordered by `occurredAt` DESC — filtered by optional `type` (`EXPENSE`|`INCOME`|`SAVINGS`), `from`/`to` date range on `occurredAt`, `category`, and `q` (case-insensitive note substring). Unknown owner or no matches MUST return an empty array. All currencies MUST appear (no currency filter).
+(Previously: the `type` filter accepted only `EXPENSE`|`INCOME`.)
 
 #### Scenario: Combined filters
 
@@ -107,17 +139,26 @@ The system MUST classify an inbound message as `INCOME` when its normalized note
 - GIVEN filters that match nothing
 - THEN the endpoint returns an empty array (200), not an error
 
+#### Scenario: SAVINGS filter
+
+- GIVEN an owner with SAVINGS and other movements
+- WHEN `GET /movements?type=SAVINGS`
+- THEN only SAVINGS movements return, newest first
+
 ### Requirement: Movement Summary Endpoint
 
-`GET /movements/summary` MUST return `movementSummarySchema` for the `ownerId` owner with optional `from`/`to` filters. Totals MUST include ONLY `ARS` movements; other currencies MUST NOT be mixed into totals. Month/day bucketing MUST use `America/Argentina/Buenos_Aires`. Shape:
+`GET /movements/summary` MUST return `movementSummarySchema` for the `ownerId` owner with optional `from`/`to` filters. Totals MUST include ONLY `ARS` movements; other currencies MUST NOT be mixed into totals. Month/day bucketing MUST use `America/Argentina/Buenos_Aires`. SAVINGS movements MUST be excluded from income, expenses, balance, per-month/per-day buckets, category breakdowns, and top lists; `balance` MUST equal income − expenses with SAVINGS excluded. `kpis.savings` MUST report the current-calendar-month (Buenos Aires) sum of SAVINGS movements and `mom.months[].savings` MUST report per-month SAVINGS sums. PENDING movements MUST be excluded from income, expenses, balance, per-month/per-day buckets, category breakdowns, and top lists; `kpis.savings` MUST remain SAVINGS-only and unchanged by PENDING. The summary MUST include `planned: { month, total }`, the sum of the owner's PENDING EXPENSE movements targeted at the month following the current Buenos Aires month; the `planned` block MUST ignore `from`/`to`. Shape:
 
 ```
-kpis:        { income, expenses, balance, avgPerMonth, avgPerMovement, maxAmount, count }
-mom:         { months: [{ month, income, expenses, balance }] }   // last 6 months
+kpis:        { income, expenses, balance, savings, avgPerMonth, avgPerMovement, maxAmount, count }
+mom:         { months: [{ month, income, expenses, balance, savings }] }   // last 6 months
 daily:       [{ day, income, expenses, balance }]                 // last 30 days, zero-filled
 categories:  [{ name, expenseAmount, incomeAmount, expensePercent, incomePercent }]
 top:         { expenses: [movement], income: [movement] }         // by amount desc
+planned:     { month, total }                                     // next month, PENDING EXPENSE only
 ```
+
+(Previously: SAVINGS did not exist, `kpis`/`mom` had no `savings` fields, and the summary had no `planned` block or PENDING exclusion.)
 
 #### Scenario: ARS-only totals
 
@@ -143,6 +184,42 @@ top:         { expenses: [movement], income: [movement] }         // by amount d
 - WHEN the summary is requested
 - THEN `mom.months` contains both months with per-month income, expenses, and balance
 
+#### Scenario: Savings excluded from sums
+
+- GIVEN INCOME 900, SAVINGS 100, and EXPENSE 300
+- WHEN the summary is requested
+- THEN income = 900, expenses = 300, balance = 600, and SAVINGS appear in no bucket or top list
+
+#### Scenario: Savings reported month-scoped
+
+- GIVEN SAVINGS 100 and 50 in the current month and 200 in a prior month
+- WHEN the summary is requested
+- THEN `kpis.savings` is 150 and `mom` reports each month's own savings
+
+#### Scenario: PENDING excluded from sums
+
+- GIVEN INCOME 900, EXPENSE 300, and a PENDING EXPENSE 2500
+- WHEN the summary is requested
+- THEN income = 900, expenses = 300, balance = 600, and 2500 appears only in `planned`
+
+#### Scenario: SAVINGS column survives PENDING exclusion
+
+- GIVEN SAVINGS 100 this month and a PENDING EXPENSE 2500
+- WHEN the summary is requested
+- THEN `mom.months[].savings` is 100 and `planned.total` is 2500
+
+#### Scenario: planned ignores date filters
+
+- GIVEN `from`/`to` limited to the current month
+- WHEN the summary is requested
+- THEN `planned` still reports the next-month total
+
+#### Scenario: planned empty
+
+- GIVEN no PENDING EXPENSE
+- WHEN the summary is requested
+- THEN `planned.total` is 0
+
 ### Requirement: Expense Retrocompatibility
 
 `/expenses*` endpoints MUST keep current behavior and response shapes, returning ONLY movements with `type=EXPENSE`.
@@ -160,7 +237,8 @@ top:         { expenses: [movement], income: [movement] }         // by amount d
 
 ### Requirement: Movement Update Endpoint
 
-The system MUST provide `PATCH /movements/:id` scoped by owner (`x-owner-id`). It MUST update only the fields present per `updateMovementSchema`, MUST support both `EXPENSE` and `INCOME` movements, and MUST apply `category: null` by clearing the category and an absent field by leaving it unchanged. A category value MUST be validated against the owner's category set; an invalid category MUST return `422 ValidationFailedError`. A missing movement or one owned by another owner MUST return `404`.
+The system MUST provide `PATCH /movements/:id` scoped by owner (`x-owner-id`). It MUST update only the fields present per `updateMovementSchema`, MUST support `EXPENSE`, `INCOME`, and `SAVINGS` movements, and MUST apply `category: null` by clearing the category and an absent field by leaving it unchanged. A category value MUST be validated against the owner's category set; an invalid category MUST return `422 ValidationFailedError`. Assigning the owner's SAVINGS category ("ahorro") to an `EXPENSE` or `INCOME` movement MUST return `422 ValidationFailedError`. A missing movement or one owned by another owner MUST return `404`.
+(Previously: PATCH supported only `EXPENSE` and `INCOME`, and the SAVINGS category did not exist.)
 
 #### Scenario: Update note only
 
@@ -203,6 +281,12 @@ The system MUST provide `PATCH /movements/:id` scoped by owner (`x-owner-id`). I
 - GIVEN a movement owned by a different owner
 - WHEN `PATCH /movements/:id` is called for the current owner
 - THEN `404` is returned
+
+#### Scenario: SAVINGS category rejected on income/expense
+
+- GIVEN an `EXPENSE` or `INCOME` movement and the owner's "ahorro" category
+- WHEN `PATCH /movements/:id` is called with `{ category: "ahorro" }`
+- THEN a `422 ValidationFailedError` is returned and the category is not set
 
 ### Requirement: Movement Delete Endpoint
 
@@ -269,3 +353,35 @@ Existing movements with a `NULL` category or a legacy seed slug (e.g. "food", "o
 - GIVEN an existing legacy movement
 - WHEN the owner sets a category via PATCH
 - THEN the category is set and the movement remains intact
+
+### Requirement: Movement List Includes Planned Rows
+
+`GET /movements` MUST return PENDING rows like any other movement and MUST NOT apply any status filter; the dashboard reads planned rows from the list.
+
+#### Scenario: PENDING returned in the list
+
+- GIVEN an owner with a PENDING movement
+- WHEN `GET /movements` is called
+- THEN the PENDING row is returned, newest first
+
+#### Scenario: no status filter
+
+- GIVEN the list query supports optional filters
+- WHEN `GET /movements` is called
+- THEN no status parameter filters rows
+
+### Requirement: Planned Movement Editing
+
+`PATCH /movements/:id` MUST support PENDING EXPENSE rows exactly as PAID ones: only `amount`, `note`, and `category` MAY change, and the amount MUST be editable while the movement is PENDING. `occurredAt` and `status` MUST NOT be editable through PATCH; only the mark-paid transition rewrites them.
+
+#### Scenario: edit a pending amount
+
+- GIVEN a PENDING EXPENSE of 2500
+- WHEN `PATCH /movements/:id` is called with `{ amount: 2600 }`
+- THEN the amount becomes 2600 and the status stays PENDING
+
+#### Scenario: occurredAt not editable
+
+- GIVEN a payload with `occurredAt`
+- WHEN validated against `updateMovementSchema`
+- THEN it fails validation and no field changes

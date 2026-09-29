@@ -26,7 +26,8 @@ The system MUST expose a deterministic movement-correction executor (`movement-c
 
 ### Requirement: Movement Reference Matching
 
-Given a reference, the executor MUST search the owner's 10 most recent movements (by recency) and score candidates by exact amount equality, normalized note similarity, and recency (most recent wins ties). A single best candidate MUST be reassigned via `updateMovement`. Multiple candidates with an equal top score MUST NOT be reassigned; the system MUST ask which movement (see Ambiguity Resolution).
+Given a reference, the executor MUST search the owner's 10 most recent movements (by recency, excluding PENDING movements — planned expenses are not correctable until marked paid, see planned-fixed-expenses) and score candidates by exact amount equality, normalized note similarity, and recency (most recent wins ties). A single best candidate MUST be reassigned via `updateMovement`. Multiple candidates with an equal top score MUST NOT be reassigned; the system MUST ask which movement (see Ambiguity Resolution).
+(Previously: the search window included every recent movement; PENDING did not exist.)
 
 #### Scenario: Amount match unique
 
@@ -50,6 +51,13 @@ Given a reference, the executor MUST search the owner's 10 most recent movements
 #### Scenario: Empty window
 
 - GIVEN no movements in the owner's recent window
+- WHEN the executor runs
+- THEN nothing is reassigned
+- AND the bot replies that no matching movement was found
+
+#### Scenario: PENDING rows excluded from the window
+
+- GIVEN a reference amount 2500, one PENDING 2500 movement, and no PAID 2500 movement in the window
 - WHEN the executor runs
 - THEN nothing is reassigned
 - AND the bot replies that no matching movement was found

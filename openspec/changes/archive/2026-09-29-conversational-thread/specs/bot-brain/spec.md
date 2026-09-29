@@ -1,33 +1,6 @@
-# Bot Brain Specification
+# Delta for bot-brain
 
-## Purpose
-
-The bot brain is the conversational LLM surface of the Telegram bot. It interprets every conversational message into a strict intent envelope and, after deterministic execution, writes the reply from the ACTUAL executed result (reply-after-action, zero hallucination by construction). It replaces the extraction-only `NoteInterpreter` port, reusing its Groq transport, `normalizeAmountString`, degrade-to-null policy, and env contract verbatim. Every brain failure degrades to the deterministic flow — the brain never blocks the bot.
-
-## Requirements
-
-### Requirement: Bot Brain Port
-
-The system MUST expose a `BotBrain` port with `interpret(message: string, context?: InterpretContext): Promise<ConversationEnvelope | null>` and `reply(executionResult: ExecutionResult): Promise<string | null>`, where `ConversationEnvelope` carries an intent, a normalized ARS amount, a category suggestion, a note, a `dialog_action`, a `then_reassign` flag, and a `planned` flag, `InterpretContext` carries the current bot state, the persisted pending payload, and the reconstructed open-question text, and `ExecutionResult` carries ONLY the executed facts. The port MUST be the only LLM surface the bot consumes, MUST replace `NoteInterpreter` as the bot's dependency, and MUST be implemented by the Groq client (reusing the transport from `GroqNoteInterpreter`).
-(Previously: `interpret(message)` took no context; the envelope carried only intent, amount, category, note, and `dialog_action`.)
-
-#### Scenario: Valid interpretation
-
-- GIVEN a conversational message and a Groq response that passes validation
-- WHEN `interpret(message)` is invoked
-- THEN a `ConversationEnvelope` with intent, amount, category, note, `dialog_action`, and `planned` is returned
-
-#### Scenario: Dialog context supplied
-
-- GIVEN an owner in `awaiting_category` with a pending movement and an open question
-- WHEN `interpret(message, { state, pending, openQuestion })` is invoked
-- THEN the context is passed to the prompt and the response validates normally
-
-#### Scenario: Missing key means no brain
-
-- GIVEN `GROQ_API_KEY` is unset
-- WHEN the bot is constructed
-- THEN no brain is constructed and `interpret`/`reply` are never invoked
+## MODIFIED Requirements
 
 ### Requirement: Interpret Envelope Contract
 
@@ -169,61 +142,6 @@ The brain's `reply` MUST receive ONLY the executed result — `{intent, ok, acti
 - WHEN the bot processes it
 - THEN the deterministic executor answers with the owner's next-month planned total
 
-### Requirement: Degrade-to-Null Contract
-
-`interpret` and `reply` MUST return `null` — and MUST NOT throw to the caller — on every failure class: HTTP error, HTTP 429, timeout, non-JSON response, zod schema mismatch, and invalid or missing amount. A `null` result MUST leave the caller on today's deterministic flow.
-
-#### Scenario: Provider error degrades
-
-- GIVEN the provider responds with HTTP 429 or an HTTP error
-- WHEN `interpret(message)` is invoked
-- THEN `null` is returned
-
-#### Scenario: Timeout degrades
-
-- GIVEN the provider does not respond within `LLM_TIMEOUT_MS`
-- WHEN `interpret(message)` is invoked
-- THEN `null` is returned
-
-### Requirement: Amount Normalization and Validation
-
-The brain MUST normalize amounts via `normalizeAmountString`, reused verbatim from the interpreter. Spanish formats (`"1.234,50"`, `"1234,50"`, `"1234.5"`, `"5 mil"`, `"5k"`) MUST normalize to the same numeric values. A non-finite, zero, or negative amount MUST reject the schema and degrade to `null`.
-
-#### Scenario: Prose amounts normalize
-
-- GIVEN an LLM amount `"5 mil"`
-- WHEN the payload is validated
-- THEN the amount normalizes to 5000
-
-#### Scenario: Invalid amount rejected
-
-- GIVEN an LLM amount that is `NaN`, zero, or negative
-- WHEN the payload is validated
-- THEN the envelope degrades to `null`
-
-### Requirement: Category Suggestion Contract
-
-The brain MAY return a category suggestion and MAY set the `planned` flag. Neither MUST create, imply, or auto-create anything: the bot MUST resolve the category by exact `normalizeForMatch` comparison against the owner's category list and MUST fall back to "otro" when it does not resolve; the `planned` flag is materialized only by the deterministic guarded registration path, never by the brain. A suggestion normalizing to "otro" MUST be treated as no suggestion. A planned registration is always INDIVIDUAL: when the envelope carries both `planned: true` and `shared: true`, the bot MUST persist the PENDING expense as `INDIVIDUAL` (planned wins).
-(Previously: only the category suggestion existed; the envelope had no `planned` flag.)
-
-#### Scenario: Suggestion is a suggestion only
-
-- GIVEN an LLM category suggestion
-- WHEN the bot resolves it against the owner's categories
-- THEN it is used only on exact normalized match, else the movement falls to "otro"
-
-#### Scenario: Planned flag is a suggestion only
-
-- GIVEN an envelope with `planned: true` and no `previsto:` prefix
-- WHEN the registration is materialized
-- THEN PENDING results only through the deterministic guarded path and the brain creates no category or status
-
-#### Scenario: Planned registration is never shared
-
-- GIVEN an envelope carrying both `planned: true` and `shared: true`
-- WHEN the registration is materialized
-- THEN the PENDING expense persists as `INDIVIDUAL` (the shared signal is discarded)
-
 ### Requirement: Prompt Contract (category-blind, dialog-aware)
 
 The `interpret` system prompt MUST be category-blind — it MUST NOT embed owner category names. The prompt MUST accept and embed the dialog context (state, pending payload, open-question text) when provided, and MUST include per-dialog few-shots so dialog answers classify reliably. The prompt MUST instruct: strict JSON only, never invent an amount, ARS normalization rules, category is a suggestion, off-topic never answered as chat, greeting classified as `greeting` (warm reply; dialogs stay open), expense-signal bias, `dialog_action` semantics, planned-query phrasings ("previsto", "gastos fijos previstos", "cuánto voy a gastar el mes que viene") classifying as `query_planned`, conversational planned phrasings ("dejalo para el mes que viene", "lo pago el mes que viene") setting `planned: true` on `register_expense`, the `previsto:` prefix being authoritative, and the brain never creating categories or planned status. The prompt MUST also teach the `awaiting_registration` dialog: `resolve` when the message answers the open field (an amount for the amount question, a category name for the category question), `abandon` on explicit outs, `null` otherwise — and MUST teach that `register_expense` with `amount: null` starts collection rather than dead-ending. Both prompts (interpret and reply) and their dialog variants MUST be pinned by golden snapshot tests so prompt drift fails CI. When the prompts change to teach the `planned` flag, `greeting`, and the `awaiting_registration` dialog (alongside `create_savings_rule`, split-reply facts, and the `planned` query), the pinned golden snapshots in `bot-brain.test.ts` MUST be regenerated in the same change so CI stays green.
@@ -265,32 +183,6 @@ The `interpret` system prompt MUST be category-blind — it MUST NOT embed owner
 - WHEN the golden snapshot test runs
 - THEN the prompt byte-matches the committed golden
 
-### Requirement: Environment Configuration
-
-`GROQ_API_KEY` MUST be optional; without it the bot MUST run deterministic-only. `LLM_MODEL` MUST default to `openai/gpt-oss-20b`, `LLM_BASE_URL` MUST default to the Groq chat-completions URL, and `LLM_TIMEOUT_MS` MUST default to `5000`. All four MUST be zod-validated (key min-length when present, URL format, positive integer timeout).
-
-#### Scenario: Invalid base URL fails startup
-
-- GIVEN `LLM_BASE_URL` is not a valid URL
-- WHEN the API starts
-- THEN startup fails with a clear configuration error
-
-### Requirement: Timeout, No-Retry, and Injectable Fetch
-
-The brain MUST make a single request attempt per call, bounded by `LLM_TIMEOUT_MS` via `AbortSignal.timeout`, and MUST NOT retry. The Groq client MUST accept an injectable `fetchImpl` so unit and integration tests never reach the real endpoint.
-
-#### Scenario: Slow provider aborts
-
-- GIVEN the provider exceeds `LLM_TIMEOUT_MS`
-- WHEN a brain call is made
-- THEN the request aborts and the call degrades to `null`
-
-#### Scenario: Stubbed fetch in tests
-
-- GIVEN a test harness injecting a `fetchImpl` stub
-- WHEN `interpret(message)` is invoked
-- THEN the stub returns canned JSON and no real network call occurs
-
 ### Requirement: Dialog Action Contract
 
 The brain MUST classify a dialog-state message with `dialog_action` in its envelope: `resolve` when the message answers the open question (an exact category name for `awaiting_category`, a presented amount for `awaiting_amount_confirmation`, an amount or a category name for `awaiting_registration` per the open field), `abandon` when the message explicitly abandons the dialog, and `null` otherwise. A `resolve` classification MUST NOT invent amounts or categories beyond the message's own content — the controller acts ONLY on the persisted payload. A bare affirmation ("si") that matches no presented value MUST NOT classify as `resolve`.
@@ -330,4 +222,3 @@ The brain MUST classify a dialog-state message with `dialog_action` in its envel
 - GIVEN an owner in `awaiting_registration` asked for the category
 - WHEN the message is "Transporte"
 - THEN the envelope carries `dialog_action: "resolve"` with the category answer
-

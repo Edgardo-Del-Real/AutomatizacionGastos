@@ -213,8 +213,8 @@ The system MUST expose an injectable reply port that sends a text message back t
 
 ### Requirement: Success and Help Reply Content
 
-The system MUST reply to a successfully registered movement with a confirmation that includes the amount, the note, and the assigned category; the confirmation MUST be the brain's `reply` text when the brain is available and returns one, and MUST fall back to the fixed success template carrying the same facts. The system MUST reply to an unparseable message with help text (brain-written or fixed). The system MUST reply to off-topic messages with an expense-scoped redirect — never as general chat. Query messages MUST be answered from the EXECUTED query result (brain-written from the executed query or the fixed query template); an honest redirect is used only when query execution fails or the type is unresolvable. A reply MUST NOT be sent for non-owner, edited, empty, or deduplicated messages.
-(Previously: off-topic and query messages both received expense-scoped redirects, and queries were never executed.)
+The system MUST reply to a successfully registered movement with a confirmation that includes the amount, the note, and the assigned category; the confirmation MUST be the brain's `reply` text when the brain is available and returns one, and MUST fall back to the fixed success template carrying the same facts. The system MUST reply to an unparseable message with help text (brain-written or fixed). The system MUST reply to off-topic messages with an expense-scoped redirect — never as general chat. Query messages MUST be answered from the EXECUTED query result (brain-written from the executed query or the fixed query template); an honest redirect is used only when query execution fails or the type is unresolvable. A reply MUST NOT be sent for non-owner, edited, empty, or deduplicated messages. The system MUST reply to collection questions (ask amount, ask category, kept collecting) through the `asked_registration` action with fixed fallback templates when the brain reply is null. The system MUST reply to a `greeting`-classified message with a warm, expense-scoped greeting, and MUST NOT close any open dialog when doing so.
+(Previously: off-topic and query messages both received expense-scoped redirects, and queries were never executed; collection questions and greetings had no reply surface.)
 
 #### Scenario: Success confirmation
 
@@ -241,6 +241,18 @@ The system MUST reply to a successfully registered movement with a confirmation 
 - WHEN the message is processed
 - THEN the reply answers with the owner's real recent movements
 - AND a redirect is sent only when the execution fails
+
+#### Scenario: Collection question uses the ask template
+
+- GIVEN the brain returns `null` for `reply` on a collection question
+- WHEN the dialog asks for the amount or the category
+- THEN the fixed `asked_registration` template carrying the question is sent
+
+#### Scenario: Greeting keeps the dialog alive
+
+- GIVEN an owner in `awaiting_registration` sends "hola"
+- WHEN the message is classified `greeting`
+- THEN a warm greeting replies and the open collection dialog and its payload stay intact
 
 ### Requirement: Setup Flow (awaiting_setup)
 
@@ -311,8 +323,8 @@ Dialog messages in `awaiting_category` MUST first route through the brain (see D
 
 ### Requirement: Per-Owner State Machine
 
-The system MUST persist, per owner, a state machine with values `idle`, `awaiting_setup`, and `awaiting_category`, plus a pending amount-conflict question (exact state value is a design decision). Transitions MUST be explicit and testable: registration when owner has no categories → `awaiting_setup`; assignment to "otro" → `awaiting_category`; resolved answer or completed setup → `idle`; an answer that is a new registration during `awaiting_category` MUST remain in the registration path without corrupting the pending correction. The pending movement for a correction MUST be persisted so it survives a restart. The pending amount-conflict question MUST be persisted with the same abandonment and restart semantics as `awaiting_category`. With the brain active, a `resolve` answer MUST act ONLY on the persisted payload — a bare affirmation or a resolve with no matching payload value abandons the question with a clear reply and is NOT reprocessed as a registration (phantom guard); the deterministic fallback (brain null/absent) keeps today's behavior: a reply matching a presented amount resolves it, and any other text abandons it (nothing registers from the conflicting message) and is processed as a new registration.
-(Previously: a conflicting-message answer always abandoned and reprocessed the text as a new registration; no payload-only resolve existed.)
+The system MUST persist, per owner, a state machine with values `idle`, `awaiting_setup`, and `awaiting_category`, plus a pending amount-conflict question (exact state value is a design decision). The system MUST add a fourth state `awaiting_registration` for registration detail collection, kept distinct from `awaiting_category` (correction of an already-registered movement) — the two MUST NOT be conflated. Transitions MUST be explicit and testable: registration when owner has no categories → `awaiting_setup`; assignment to "otro" → `awaiting_category`; resolved answer or completed setup → `idle`; an answer that is a new registration during `awaiting_category` MUST remain in the registration path without corrupting the pending correction; a registration with a null amount or an unresolvable category intent → `awaiting_registration` (see registration-collection); a completed or abandoned collection → `idle`. The pending movement for a correction MUST be persisted so it survives a restart. The pending amount-conflict question MUST be persisted with the same abandonment and restart semantics as `awaiting_category`. The `awaiting_registration` collect payload MUST be persisted with the same restart semantics, and a corrupt payload MUST recover without registering anything. With the brain active, a `resolve` answer MUST act ONLY on the persisted payload — a bare affirmation or a resolve with no matching payload value abandons the question with a clear reply and is NOT reprocessed as a registration (phantom guard); the deterministic fallback (brain null/absent) keeps today's behavior: a reply matching a presented amount resolves it, and any other text abandons it (nothing registers from the conflicting message) and is processed as a new registration.
+(Previously: the state machine had only `idle`, `awaiting_setup`, and `awaiting_category`; there was no `awaiting_registration` state and no collect-payload persistence.)
 
 #### Scenario: Idle to setup
 
@@ -349,6 +361,18 @@ The system MUST persist, per owner, a state machine with values `idle`, `awaitin
 - GIVEN an unanswered amount-conflict question
 - WHEN the process restarts
 - THEN the pending question and its movement context are still present
+
+#### Scenario: Null-amount registration enters collection
+
+- GIVEN a `register_expense` envelope with amount null
+- WHEN the message is processed
+- THEN the owner transitions to `awaiting_registration` and the collect payload is persisted
+
+#### Scenario: Collection completes to idle
+
+- GIVEN an owner in `awaiting_registration` whose amount and category are both resolved
+- WHEN the registration is created
+- THEN the owner returns to `idle` and the collect payload clears
 
 ### Requirement: Bot Commands
 
@@ -402,8 +426,8 @@ The system MUST be drivable offline for reply logic. The offline test harness MU
 
 ### Requirement: Intent-First Message Handling
 
-For every non-command owner message in `idle`, the system MUST invoke the bot brain's `interpret` before deterministic execution and MUST route on the returned intent: `register_expense` runs the existing registration flow (with the brain's amount/category/note); `query`/`query_recent`/`query_balance`/`query_month` execute the deterministic query executor and answer from real data (an honest redirect replies only when the query fails or the type is unresolvable); `associate_keyword` redirects to the `asociar palabra` command; `help` replies with help; `off_topic` replies with an expense-scoped redirect and MUST NOT be answered as general chat; `correct_amount` is reserved and replies with deterministic help in `idle`; `correct_category` runs the movement-correction flow (see movement-correction). The setup gate (owner with no categories) MUST take precedence over `interpret`: such messages go straight to `awaiting_setup` with no brain call. The state machine MUST remain authoritative — the LLM MUST never decide state transitions. `interpret` MUST NOT be invoked for commands or the setup flow; for dialog-state messages (`awaiting_category`, `awaiting_amount_confirmation`) it MUST be invoked with dialog context and the envelope's `dialog_action` routes the message (see Dialog Controller), with today's deterministic rules as the fallback when the brain is null/absent. When `interpret` returns `null` in `idle`, the system MUST behave exactly as today.
-(Previously: queries were answered with an honest not-supported redirect; `correct_amount` and `correct_category` were both reserved with deterministic help; `interpret` was never invoked in dialog states.)
+For every non-command owner message in `idle`, the system MUST invoke the bot brain's `interpret` before deterministic execution and MUST route on the returned intent: `register_expense` runs the existing registration flow (with the brain's amount/category/note; a null amount enters `awaiting_registration` per registration-collection); `query`/`query_recent`/`query_balance`/`query_month` execute the deterministic query executor and answer from real data (an honest redirect replies only when the query fails or the type is unresolvable); `associate_keyword` redirects to the `asociar palabra` command; `help` replies with help; `off_topic` replies with an expense-scoped redirect and MUST NOT be answered as general chat; `greeting` replies with a warm expense-scoped greeting and MUST NOT close any open dialog; `correct_amount` is reserved and replies with deterministic help in `idle`; `correct_category` runs the movement-correction flow (see movement-correction). The setup gate (owner with no categories) MUST take precedence over `interpret`: such messages go straight to `awaiting_setup` with no brain call. The state machine MUST remain authoritative — the LLM MUST never decide state transitions. `interpret` MUST NOT be invoked for commands or the setup flow; for dialog-state messages (`awaiting_category`, `awaiting_amount_confirmation`, `awaiting_registration`) it MUST be invoked with dialog context and the envelope's `dialog_action` routes the message (see Dialog Controller), with today's deterministic rules as the fallback when the brain is null/absent. When `interpret` returns `null` in `idle`, the system MUST behave exactly as today.
+(Previously: queries were answered with an honest not-supported redirect; `correct_amount` and `correct_category` were both reserved with deterministic help; `interpret` was never invoked in dialog states; there was no `greeting` intent and null-amount registrations dead-ended in a free-text question with no state.)
 
 #### Scenario: Register intent runs the existing flow
 
@@ -430,6 +454,12 @@ For every non-command owner message in `idle`, the system MUST invoke the bot br
 - WHEN the message is processed
 - THEN the reply is an expense-scoped redirect and no movement is created
 
+#### Scenario: Greeting replies warm and keeps the thread
+
+- GIVEN owner text "hola" classified `greeting` with an open `awaiting_registration` dialog
+- WHEN the message is processed
+- THEN a warm greeting replies and the open dialog stays alive
+
 #### Scenario: Setup gate precedes the brain
 
 - GIVEN an owner with no categories sends "$2500 cafe"
@@ -444,7 +474,7 @@ For every non-command owner message in `idle`, the system MUST invoke the bot br
 
 #### Scenario: Dialog answers route through the brain
 
-- GIVEN a message in `awaiting_category` or `awaiting_amount_confirmation`
+- GIVEN a message in `awaiting_category`, `awaiting_amount_confirmation`, or `awaiting_registration`
 - WHEN it is processed
 - THEN `interpret` is invoked with dialog context and the envelope's `dialog_action` routes the message
 - AND the deterministic rules apply only as the fallback (brain null/absent/abandon)
@@ -473,7 +503,8 @@ For conversational outcomes — registration success, correction offer/done, otr
 
 ### Requirement: Dialog Controller (Brain-Routed Dialogs)
 
-For every non-command owner message in a dialog state (`awaiting_category`, `awaiting_amount_confirmation`), the system MUST invoke the bot brain's `interpret(body, { state, pending, openQuestion })` BEFORE the deterministic dialog rules and MUST route on the envelope's `dialog_action`: `resolve` → deterministic resolution from the persisted payload ONLY (reassign the pending movement to the answered category, or register the chosen amount); `abandon` or brain null/absent → today's D6 rules verbatim; `null` → intent routing with the pending untouched (queries and CRUD execute; `register_expense` abandons the dialog and registers the new message). Commands MUST still be handled before any state logic, in every state. Queries and CRUD intents during dialogs MUST NOT consume the pending. Phantom guard: a `resolve` answer MUST act ONLY on the persisted payload — no valid payload → abandon with a clear reply, nothing registers, and no amount is ever fabricated.
+For every non-command owner message in a dialog state (`awaiting_category`, `awaiting_amount_confirmation`, `awaiting_registration`), the system MUST invoke the bot brain's `interpret(body, { state, pending, openQuestion })` BEFORE the deterministic dialog rules and MUST route on the envelope's `dialog_action`: `resolve` → deterministic resolution from the persisted payload ONLY (reassign the pending movement to the answered category, register the chosen amount, or resolve the collected amount/category per registration-collection); `abandon` or brain null/absent → today's D6 rules verbatim (for `awaiting_registration`: clear the collect payload, reply, nothing registers); `null` → intent routing with the pending untouched (queries and CRUD execute; `register_expense` abandons the dialog and registers the new message). Commands MUST still be handled before any state logic, in every state. Queries and CRUD intents during dialogs MUST NOT consume the pending. Phantom guard: a `resolve` answer MUST act ONLY on the persisted payload — no valid payload → abandon with a clear reply, nothing registers, and no amount is ever fabricated.
+(Previously: the dialog controller covered only `awaiting_category` and `awaiting_amount_confirmation`; `awaiting_registration` did not exist.)
 
 #### Scenario: Query in dialog answers without consuming the pending
 
@@ -517,6 +548,18 @@ For every non-command owner message in a dialog state (`awaiting_category`, `awa
 - GIVEN `GROQ_API_KEY` is unset and an owner in `awaiting_category` replies with a multi-word non-category text
 - WHEN the message is processed
 - THEN the bot lists the existing categories and the state stays open (today's rules verbatim)
+
+#### Scenario: Collection resolve follows the cascade
+
+- GIVEN an owner in `awaiting_registration` asked for the category replies "Transporte"
+- WHEN the brain returns `dialog_action: "resolve"`
+- THEN the category cascade resolves "Transporte" from the persisted payload and the registration completes
+
+#### Scenario: Collection abandon clears the payload
+
+- GIVEN an owner in `awaiting_registration` with a persisted payload replies "no, dejalo"
+- WHEN the brain returns `dialog_action: "abandon"`
+- THEN the collect payload clears, a clear reply is sent, and nothing registers
 
 ### Requirement: Mixed-Intent Create + Reassign (then_reassign)
 

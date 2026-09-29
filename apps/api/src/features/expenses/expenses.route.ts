@@ -1,5 +1,9 @@
 import type { IncomingHttpHeaders } from "node:http";
 import type { FastifyPluginAsync } from "fastify";
+import {
+  movementVisibilitySchema,
+  type MovementVisibility,
+} from "@rita/contracts";
 import { ValidationFailedError } from "../../infra/errors";
 import type { ExpenseService } from "./expenses.service";
 
@@ -12,7 +16,24 @@ export const expensesRoute: FastifyPluginAsync<ExpensesRouteOptions> = async (ap
 
   app.post("/expenses", async (request, reply) => {
     const ownerId = readOwnerId(request.headers);
-    const expense = await expenseService.createExpense(request.body, ownerId);
+    // AD7 — visibility stays OUT-OF-BAND at the shared schema level (the frozen
+    // createMovementSchema never carries it), but the endpoint now exposes it
+    // explicitly: present + valid → forwarded to the service; present + invalid
+    // → 422; absent → the service defaults to INDIVIDUAL.
+    const body = request.body as Record<string, unknown> | undefined;
+    let visibilityOptions: { visibility?: MovementVisibility } | undefined;
+    if (body?.visibility !== undefined) {
+      const parsed = movementVisibilitySchema.safeParse(body.visibility);
+      if (!parsed.success) {
+        throw new ValidationFailedError("Invalid visibility");
+      }
+      visibilityOptions = { visibility: parsed.data };
+    }
+    const expense = await expenseService.createExpense(
+      request.body,
+      ownerId,
+      visibilityOptions,
+    );
     return reply.status(201).send(expense);
   });
 

@@ -15,7 +15,7 @@ import { SavingsRuleService } from "../savings/savings.service";
 import type { BotBrain, ConversationEnvelope } from "./bot-brain";
 import { HouseholdService } from "../household/household.service";
 import { formatARS } from "./reply-text";
-import { TelegramService } from "./telegram.service";
+import { registrationCollectPayloadSchema, TelegramService } from "./telegram.service";
 
 loadDotEnvFromDisk();
 
@@ -1168,5 +1168,204 @@ describe("TelegramService (integration)", () => {
     expect(rows).toHaveLength(1);
     expect(rows[0]?.status).toBe("PENDING");
     expect(replies.at(-1)).toContain("previsto");
+  });
+
+  it("collect e2e: amount-null entry → amount answer → category answer registers from stored context", async () => {
+    await seedCategories(["Gimnasio"]);
+    const replies: string[] = [];
+    const stubbed = buildService(
+      () => undefined,
+      stubBrain({
+        interpret: async (message) => {
+          if (message === "5000") {
+            return { intent: "register_expense", amount: 5000, category: null, note: null, dialog_action: "resolve" };
+          }
+          if (message === "Gimnasio") {
+            return { intent: "register_expense", amount: null, category: "Gimnasio", note: null, dialog_action: "resolve" };
+          }
+          return { intent: "register_expense", amount: null, category: null, note: "gym", dialog_action: null };
+        },
+      }),
+    );
+
+    await stubbed.handleUpdate(textUpdate({ messageId: 1, text: "quiero cargar un gasto gym" }), async (text) => {
+      replies.push(text);
+    });
+
+    expect(await prisma.expense.count()).toBe(0);
+    let state = await prisma.botState.findUnique({ where: { ownerId } });
+    expect(state?.state).toBe("awaiting_registration");
+    let payload = registrationCollectPayloadSchema.parse(JSON.parse(state?.pendingNote ?? "{}"));
+    expect(payload.amount).toBeNull();
+    expect(payload.note).toBe("gym");
+    expect(replies.at(-1)).toContain("¿Qué monto");
+
+    // Amount answer: keeps collecting, asks the category.
+    await stubbed.handleUpdate(textUpdate({ messageId: 2, text: "5000" }), async (text) => {
+      replies.push(text);
+    });
+    state = await prisma.botState.findUnique({ where: { ownerId } });
+    expect(state?.state).toBe("awaiting_registration");
+    payload = registrationCollectPayloadSchema.parse(JSON.parse(state?.pendingNote ?? "{}"));
+    expect(payload.amount).toBe(5000);
+    expect(payload.category).toBeNull();
+    expect(replies.at(-1)).toContain("¿En qué categoría");
+
+    // Category answer: registers from the stored context and returns to idle.
+    await stubbed.handleUpdate(textUpdate({ messageId: 3, text: "Gimnasio" }), async (text) => {
+      replies.push(text);
+    });
+    const rows = await prisma.expense.findMany({ where: { ownerId } });
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.amount.toNumber()).toBe(5000);
+    expect(rows[0]?.category).toBe("Gimnasio");
+    expect(rows[0]?.note).toBe("gym");
+    state = await prisma.botState.findUnique({ where: { ownerId } });
+    expect(state?.state).toBe("idle");
+  });
+
+  it("collect e2e: a planned collect registers a PENDING EXPENSE honoring the payload bit", async () => {
+    await seedCategories(["otro"]);
+    const replies: string[] = [];
+    const stubbed = buildService(
+      () => undefined,
+      stubBrain({
+        interpret: async (message) => {
+          if (message === "5000") {
+            return { intent: "register_expense", amount: 5000, category: null, note: null, dialog_action: "resolve" };
+          }
+          if (message === "otro") {
+            return { intent: "register_expense", amount: null, category: "otro", note: null, dialog_action: "resolve" };
+          }
+          return { intent: "register_expense", amount: null, category: null, note: "gym", planned: true, dialog_action: null };
+        },
+      }),
+    );
+
+    await stubbed.handleUpdate(textUpdate({ messageId: 1, text: "previsto: gym" }), async (text) => {
+      replies.push(text);
+    });
+
+    let state = await prisma.botState.findUnique({ where: { ownerId } });
+    expect(state?.state).toBe("awaiting_registration");
+    let payload = registrationCollectPayloadSchema.parse(JSON.parse(state?.pendingNote ?? "{}"));
+    expect(payload.planned).toBe(true);
+    expect(payload.shared).toBe(false);
+
+    await stubbed.handleUpdate(textUpdate({ messageId: 2, text: "5000" }), async (text) => {
+      replies.push(text);
+    });
+    state = await prisma.botState.findUnique({ where: { ownerId } });
+    expect(state?.state).toBe("awaiting_registration");
+    payload = registrationCollectPayloadSchema.parse(JSON.parse(state?.pendingNote ?? "{}"));
+    expect(payload.amount).toBe(5000);
+
+    await stubbed.handleUpdate(textUpdate({ messageId: 3, text: "otro" }), async (text) => {
+      replies.push(text);
+    });
+
+    const rows = await prisma.expense.findMany({ where: { ownerId } });
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.status).toBe("PENDING");
+    expect(rows[0]?.type).toBe("EXPENSE");
+    expect(rows[0]?.visibility).toBe("INDIVIDUAL");
+  });
+
+  it("collect e2e: restart survival mid-dialog — a fresh service continues the collect", async () => {
+    await seedCategories(["otro"]);
+    const stubbed = buildService(
+      () => undefined,
+      stubBrain({
+        interpret: async () => ({
+          intent: "register_expense",
+          amount: null,
+          category: null,
+          note: "gym",
+          dialog_action: null,
+        }),
+      }),
+    );
+    await stubbed.handleUpdate(textUpdate({ messageId: 1, text: "quiero cargar un gasto gym" }), async () => undefined);
+
+    let state = await prisma.botState.findUnique({ where: { ownerId } });
+    expect(state?.state).toBe("awaiting_registration");
+    const storedNote = state?.pendingNote;
+
+    // The process restarts: a fresh service without the brain still resolves
+    // the persisted collect from the payload.
+    const restarted = buildService();
+    const replies: string[] = [];
+    await restarted.handleUpdate(textUpdate({ messageId: 2, text: "5000" }), async (text) => {
+      replies.push(text);
+    });
+
+    state = await prisma.botState.findUnique({ where: { ownerId } });
+    expect(state?.state).toBe("awaiting_registration");
+    const payload = registrationCollectPayloadSchema.parse(JSON.parse(state?.pendingNote ?? "{}"));
+    expect(payload.amount).toBe(5000);
+    expect(payload.note).toBe("gym");
+    expect(payload.body).toBe("quiero cargar un gasto gym");
+    expect(state?.pendingNote).not.toBe(storedNote); // the amount was persisted
+    expect(replies.at(-1)).toContain("¿En qué categoría");
+  });
+
+  it("collect e2e: a corrupt collect payload recovers to idle with the dropped reply, registering nothing", async () => {
+    await seedCategories(["otro"]);
+    await prisma.botState.upsert({
+      where: { ownerId },
+      update: { state: "awaiting_registration", pendingMovementId: null, pendingNote: "{not-json" },
+      create: { ownerId, state: "awaiting_registration", pendingMovementId: null, pendingNote: "{not-json" },
+    });
+    const replies: string[] = [];
+    const stubbed = buildService(
+      () => undefined,
+      stubBrain({
+        interpret: async () => ({ intent: "register_expense", amount: null, category: null, note: null, dialog_action: null }),
+      }),
+    );
+
+    await stubbed.handleUpdate(textUpdate({ messageId: 2, text: "$3000 panaderia" }), async (text) => {
+      replies.push(text);
+    });
+
+    expect(await prisma.expense.count()).toBe(0);
+    const state = await prisma.botState.findUnique({ where: { ownerId } });
+    expect(state?.state).toBe("idle");
+    expect(state?.pendingNote).toBeNull();
+    expect(replies.at(-1)).toContain("pregunta");
+  });
+
+  it("collect e2e: a shared collect registers a SHARED movement honoring the payload bit", async () => {
+    await seedCategories(["otro"]);
+    const replies: string[] = [];
+    const stubbed = buildService(
+      () => undefined,
+      stubBrain({
+        interpret: async (message) => {
+          if (message === "5000") {
+            return { intent: "register_expense", amount: 5000, category: null, note: null, dialog_action: "resolve" };
+          }
+          if (message === "otro") {
+            return { intent: "register_expense", amount: null, category: "otro", note: null, dialog_action: "resolve" };
+          }
+          return { intent: "register_expense", amount: null, category: null, note: "expensas", shared: true, dialog_action: null };
+        },
+      }),
+    );
+
+    await stubbed.handleUpdate(textUpdate({ messageId: 1, text: "compartido: expensas" }), async (text) => {
+      replies.push(text);
+    });
+    await stubbed.handleUpdate(textUpdate({ messageId: 2, text: "5000" }), async (text) => {
+      replies.push(text);
+    });
+    await stubbed.handleUpdate(textUpdate({ messageId: 3, text: "otro" }), async (text) => {
+      replies.push(text);
+    });
+
+    const rows = await prisma.expense.findMany({ where: { ownerId } });
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.amount.toNumber()).toBe(5000);
+    expect(rows[0]?.visibility).toBe("SHARED");
   });
 });

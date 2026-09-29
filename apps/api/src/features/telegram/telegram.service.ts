@@ -1028,7 +1028,7 @@ export class TelegramService {
       return;
     }
     if (payload.amount === null) {
-      await this.resolveRegistrationAmount(payload, envelope, body, ownerId, send, reply);
+      await this.resolveRegistrationAmount(payload, envelope, body, ownerId, send);
       return;
     }
     await this.resolveRegistrationCategory(payload, envelope, body, ownerId, send, reply);
@@ -1049,7 +1049,6 @@ export class TelegramService {
     body: string,
     ownerId: string,
     send: Sender,
-    reply?: ReplyPort,
   ): Promise<void> {
     const brainRescue =
       envelope !== null && envelope.amount !== null && envelope.amount > 0 ? envelope.amount : null;

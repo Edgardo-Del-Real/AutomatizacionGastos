@@ -51,19 +51,19 @@ Chain strategy: size-exception
 
 ## Phase 3: Brain Integration
 
-- [ ] 3.1 RED `bot-brain.test.ts`: greeting decodes; null-amount register_expense valid; `asked_registration` action + `asked_field`; awaiting_registration context assembly (extend :859-932)
-- [ ] 3.2 GREEN `bot-brain.ts`: `BOT_INTENTS` + greeting (:4-21), `conversationEnvelopeSchema`, `BotAction` + asked_registration, `ExecutionResult` + `asked_field`, `InterpretContext` union
-- [ ] 3.3 GREEN `DIALOG_INTERPRET_ADDENDUM`/`DIALOG_FEW_SHOTS`.awaiting_registration (:352-417) + `renderDialogContext` case (:420-427)
-- [ ] 3.4 GREEN `INTERPRET_SYSTEM_PROMPT` (:213-236): greeting + null-amount teaching; `FEW_SHOTS` (:304-305) "hola" → greeting flip; `REPLY_SYSTEM_PROMPT` (:336-346): asked_registration asks only `asked_field`; greeting warm one-liner
-- [ ] 3.5 RED greeting routing: :1675/1693 fixtures move off "hola"; new greeting tests (idle + during open dialog, pending untouched)
-- [ ] 3.6 GREEN `routeEnvelopeIntent` (:1089-1153): `case "greeting"` + `greetingReply()` fallback; abandon arm gains `AWAITING_REGISTRATION` → `collectAbandonedReply()` third case
+- [x] 3.1 RED `bot-brain.test.ts`: greeting decodes; null-amount register_expense valid; `asked_registration` action + `asked_field`; awaiting_registration context assembly (extend :859-932)
+- [x] 3.2 GREEN `bot-brain.ts`: `BOT_INTENTS` + greeting (:4-21), `conversationEnvelopeSchema`, `BotAction` + asked_registration, `ExecutionResult` + `asked_field`, `InterpretContext` union
+- [x] 3.3 GREEN `DIALOG_INTERPRET_ADDENDUM`/`DIALOG_FEW_SHOTS`.awaiting_registration (:352-417) + `renderDialogContext` case (:420-427)
+- [x] 3.4 GREEN `INTERPRET_SYSTEM_PROMPT` (:213-236): greeting + null-amount teaching; `FEW_SHOTS` (:304-305) "hola" → greeting flip; `REPLY_SYSTEM_PROMPT` (:336-346): asked_registration asks only `asked_field`; greeting warm one-liner
+- [x] 3.5 RED greeting routing: :1675/1693 fixtures move off "hola"; new greeting tests (idle + during open dialog, pending untouched)
+- [x] 3.6 GREEN `routeEnvelopeIntent` (:1089-1153): `case "greeting"` + `greetingReply()` fallback; abandon arm gains `AWAITING_REGISTRATION` → `collectAbandonedReply()` third case
 
 ## Phase 4: Goldens + Integration
 
-- [ ] 4.1 Regenerate: `pnpm --filter @rita/api test -- -u` → `__goldens__/interpret-system-prompt.txt`, `interpret-few-shots.json`, `reply-system-prompt.txt`; create `dialog-awaiting-registration-addendum.txt` + `dialog-awaiting-registration-few-shots.json`; re-pin :1065-1110
-- [ ] 4.2 Locked proofs: full `pnpm --filter @rita/api test` — :584-783 awaiting_category D6 stays green unchanged (non-conflation); :1126 off_topic never chats
-- [ ] 4.3 RED+integration `telegram.service.integration.test.ts`: entry→amount→category→registered honoring planned/shared/override; restart survival mid-dialog; corrupt-payload recovery (mirror :543-635)
-- [ ] 4.4 Final: `pnpm --filter @rita/api test` + `typecheck` + `lint` all green
+- [x] 4.1 Regenerate: `pnpm --filter @rita/api test -- -u` → `__goldens__/interpret-system-prompt.txt`, `interpret-few-shots.json`, `reply-system-prompt.txt`; create `dialog-awaiting-registration-addendum.txt` + `dialog-awaiting-registration-few-shots.json`; re-pin :1065-1110
+- [x] 4.2 Locked proofs: full `pnpm --filter @rita/api test` — :584-783 awaiting_category D6 stays green unchanged (non-conflation); :1126 off_topic never chats
+- [x] 4.3 RED+integration `telegram.service.integration.test.ts`: entry→amount→category→registered honoring planned/shared/override; restart survival mid-dialog; corrupt-payload recovery (mirror :543-635)
+- [x] 4.4 Final: `pnpm --filter @rita/api test` + `typecheck` + `lint` all green
 
 ## Phase 5: Cleanup
 

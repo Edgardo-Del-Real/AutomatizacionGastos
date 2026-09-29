@@ -10,10 +10,11 @@ export class ExpenseService {
 
   /**
    * AD7 — create-visibility is OUT-OF-BAND: it never travels in the shared
-   * `createMovementSchema` (which `POST /expenses` still validates). The route
-   * now passes visibility explicitly through `options` (present → forwarded,
-   * invalid → 422, absent → INDIVIDUAL default); the frozen shared schema still
-   * never carries it.
+   * `createMovementSchema` (which `POST /expenses` also validates), so the
+   * frozen endpoint cannot persist visibility. Defaults to INDIVIDUAL.
+   * The service still accepts `options?.visibility` for the bot's internal
+   * SHARED path (normal shared expenses via the bot keep working); planned
+   * expenses are INDIVIDUAL by design and never pass SHARED here.
    */
   async createExpense(
     input: unknown,

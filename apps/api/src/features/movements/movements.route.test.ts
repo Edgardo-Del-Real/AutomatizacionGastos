@@ -1206,7 +1206,7 @@ describe("movements route", () => {
       expect(movements[0].amount).toBe(2500);
     });
 
-    it("persists a SHARED visibility passed on the registration payload", async () => {
+    it("ignores a visibility key and persists a planned expense as INDIVIDUAL", async () => {
       const response = await app.inject({
         method: "POST",
         url: "/expenses",
@@ -1219,6 +1219,8 @@ describe("movements route", () => {
           occurredAt: new Date().toISOString(),
           type: "EXPENSE",
           status: "PENDING",
+          // A stale client may still send visibility; the endpoint never
+          // persists it (AD7) — planned expenses are INDIVIDUAL by design.
           visibility: "SHARED",
         },
       });
@@ -1227,28 +1229,7 @@ describe("movements route", () => {
       const list = await app.inject({ method: "GET", url: "/movements?ownerId=owner-1" });
       const movements = list.json();
       expect(movements).toHaveLength(1);
-      expect(movements[0].visibility).toBe("SHARED");
-    });
-
-    it("rejects an invalid visibility with 422 ValidationFailed", async () => {
-      const response = await app.inject({
-        method: "POST",
-        url: "/expenses",
-        headers: { "x-owner-id": "owner-1" },
-        payload: {
-          amount: 2500,
-          currency: "ARS",
-          category: "rent",
-          note: "alquiler",
-          occurredAt: new Date().toISOString(),
-          type: "EXPENSE",
-          status: "PENDING",
-          visibility: "PRIVATE",
-        },
-      });
-
-      expect(response.statusCode).toBe(422);
-      expect(response.json().code).toBe("ValidationFailed");
+      expect(movements[0].visibility).toBe("INDIVIDUAL");
     });
   });
 });

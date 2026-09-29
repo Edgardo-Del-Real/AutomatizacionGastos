@@ -708,6 +708,22 @@ describe("TelegramService ambiguity rules (awaiting_category, D6)", () => {
     expect(h.replies.at(-1)).toBe('Listo, quedó en "otro".');
   });
 
+  it('a bare affirmation ("si") never auto-creates a category and keeps the dialog open (D6)', async () => {
+    await h.service.handleUpdate(textUpdate({ text: "$1000 anterior", messageId: 1 }), h.reply);
+    h.mockCreateCategory.mockClear();
+    h.mockSetState.mockClear();
+
+    await h.service.handleUpdate(textUpdate({ text: "si", messageId: 2 }), h.reply);
+
+    expect(h.mockCreateCategory).not.toHaveBeenCalled();
+    expect(h.mockUpdateMovement).not.toHaveBeenCalled();
+    expect(h.mockSetState).not.toHaveBeenCalled();
+    expect(h.replies.at(-1)).toBe('Dale, ¿a qué categoría lo asigno? Escribí el nombre o "no".');
+    const state = await h.botStateRepository.get(ownerId);
+    expect(state?.state).toBe("awaiting_category");
+    expect(state?.pendingMovementId).toBe("mov-1");
+  });
+
   it("a multi-word non-category answer lists the existing categories and keeps the state open", async () => {
     await h.service.handleUpdate(textUpdate({ text: "$1000 anterior", messageId: 1 }), h.reply);
     h.mockSetState.mockClear();
@@ -2066,6 +2082,39 @@ describe("TelegramService dialog controller (brain-routed)", () => {
       pendingNote: null,
     });
     expect(h.replies.at(-1)).toBe('Listo, quedó en "otro".');
+  });
+
+  it("keeps the awaiting_category dialog open and asks for the target category on a bare affirmation", async () => {
+    await seedAwaitingCategory("mov-9");
+    h.mockBrainInterpret.mockClear();
+    h.mockSetState.mockClear();
+
+    await h.service.handleUpdate(textUpdate({ text: "si", messageId: 2 }), h.reply);
+
+    expect(h.mockBrainInterpret).not.toHaveBeenCalled();
+    expect(h.mockUpdateMovement).not.toHaveBeenCalled();
+    expect(h.mockCreateExpense).not.toHaveBeenCalled();
+    // The dialog stays open: no state transition, the pending movement survives.
+    expect(h.mockSetState).not.toHaveBeenCalled();
+    const state = await h.botStateRepository.get(ownerId);
+    expect(state?.state).toBe("awaiting_category");
+    expect(state?.pendingMovementId).toBe("mov-9");
+    expect(h.replies.at(-1)).toBe('Dale, ¿a qué categoría lo asigno? Escribí el nombre o "no".');
+  });
+
+  it("keeps the dialog open for accented and 'dale' affirmations", async () => {
+    await seedAwaitingCategory("mov-9");
+
+    await h.service.handleUpdate(textUpdate({ text: "sí", messageId: 2 }), h.reply);
+    expect(h.replies.at(-1)).toBe('Dale, ¿a qué categoría lo asigno? Escribí el nombre o "no".');
+
+    await h.service.handleUpdate(textUpdate({ text: "dale", messageId: 3 }), h.reply);
+    expect(h.replies.at(-1)).toBe('Dale, ¿a qué categoría lo asigno? Escribí el nombre o "no".');
+
+    const state = await h.botStateRepository.get(ownerId);
+    expect(state?.state).toBe("awaiting_category");
+    expect(state?.pendingMovementId).toBe("mov-9");
+    expect(h.mockUpdateMovement).not.toHaveBeenCalled();
   });
 
   it("answers a query during a dialog without consuming the pending", async () => {

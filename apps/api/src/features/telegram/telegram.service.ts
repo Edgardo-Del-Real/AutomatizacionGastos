@@ -42,6 +42,7 @@ import {
   categoryCreatedReassignedReply,
   categoryCreatedReply,
   categoryErrorReply,
+  categoryFollowUpReply,
   categoryListReply,
   categoryNotFoundReply,
   categoryRenamedReply,
@@ -159,6 +160,13 @@ export type MovementSelectionPayload = z.infer<typeof movementSelectionPayloadSc
 
 /** Answers that keep the movement in "otro" and end the correction dialog. */
 const KEEP_OTRO_ANSWERS = new Set(["no", "otro", "dejalo", "deja", "nada"]);
+
+/**
+ * Answers that ACCEPT the correction offer without naming a category yet
+ * ("si", "sí", "dale"). They must keep the awaiting_category dialog open and
+ * ask for the target category — never auto-create a category named "si".
+ */
+const CATEGORY_AFFIRM_ANSWERS = new Set(["si", "sí", "dale", "dale dale", "ok", "oka", "de una"]);
 
 /** The pending dialog state the shared intent router must leave untouched. */
 type DialogContext = { state: BotStateRecord };
@@ -743,6 +751,13 @@ export class TelegramService {
       return;
     }
 
+    // An affirmation to the correction offer keeps the dialog open and asks for
+    // the target category — never auto-creates a category named "si" (D6).
+    if (CATEGORY_AFFIRM_ANSWERS.has(normalizedText)) {
+      await this.safeReply(reply, categoryFollowUpReply());
+      return;
+    }
+
     // D6 rule 2: parses as amount → NEW registration; the pending correction is abandoned.
     if (parseAmountAndNote(body) !== null) {
       await send(
@@ -825,7 +840,7 @@ export class TelegramService {
    * message in a dialog state is interpreted WITH dialog context and routed on
    * `dialog_action`. The deterministic rules run only as the D6 fallback.
    */
-  private async handleDialogMessage(
+private async handleDialogMessage(
     state: BotStateRecord,
     body: string,
     ownerId: string,

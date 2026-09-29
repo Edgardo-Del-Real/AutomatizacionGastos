@@ -67,4 +67,4 @@ Chain strategy: size-exception
 
 ## Phase 5: Cleanup
 
-- [ ] 5.1 Mark task checkboxes in `openspec/changes/conversational-thread/tasks.md`; remove temporary fixtures
+- [x] 5.1 Mark task checkboxes in `openspec/changes/conversational-thread/tasks.md`; remove temporary fixtures

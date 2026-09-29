@@ -113,6 +113,17 @@ function Dashboard() {
               {(data) => (
                 <>
                   <KpiCards kpis={data.kpis} />
+                  {/* D9: the planned expenses section sits immediately after
+                      the KPI cards. Its form and total share one refresh token.
+                      The SummarySection emptiness predicate accounts for
+                      planned.total, so a PENDING-only owner (empty mom/daily
+                      but planned.total > 0) never collapses to the empty state
+                      and the planned total + form stay visible. */}
+                  <PlannedSection
+                    planned={data.planned}
+                    refreshToken={refreshKey}
+                    onMutated={bumpRefresh}
+                  />
                   <CategoryCards
                     categories={data.categories}
                     refreshToken={refreshKey}
@@ -121,20 +132,6 @@ function Dashboard() {
                 </>
               )}
             </SummarySection>
-            {/* D9: the planned expenses section sits right after the KPI area;
-                its form and total share one refresh token. It renders OUTSIDE
-                the summary gate so it stays visible on success even when the
-                gate collapses to its empty state (a PENDING-only owner has
-                empty mom/daily but planned.total > 0). While the summary is
-                pending the gate already shows its own status; on error the
-                gate already shows the error card. */}
-            {summaryState.status === "success" ? (
-              <PlannedSection
-                planned={summaryState.data.planned}
-                refreshToken={refreshKey}
-                onMutated={bumpRefresh}
-              />
-            ) : null}
           </div>
         )}
         {activeSection === "charts" && (

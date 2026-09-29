@@ -849,6 +849,17 @@ private async handleDialogMessage(
     override: SavingsOverride,
     reply?: ReplyPort,
   ): Promise<void> {
+    // An affirmation ("si", "dale") to the correction offer keeps the dialog
+    // open and asks for the target category. Intercepted BEFORE the brain: a
+    // bare "si" must never be routed as off_topic nor auto-create a category.
+    if (
+      state.state === AWAITING_CATEGORY &&
+      CATEGORY_AFFIRM_ANSWERS.has(normalizeForMatch(body.trim()))
+    ) {
+      await this.safeReply(reply, categoryFollowUpReply());
+      return;
+    }
+
     const context = this.buildInterpretContext(state);
     if (context === null) {
       // A corrupt amount-confirmation payload cannot be contextualized: today's

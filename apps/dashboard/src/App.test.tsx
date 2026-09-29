@@ -167,9 +167,6 @@ describe("App", () => {
     await waitFor(() =>
       expect(screen.getByRole("heading", { name: "Ingresos" })).toBeInTheDocument(),
     );
-    expect(
-      screen.getByRole("heading", { name: "Principales movimientos" }),
-    ).toBeInTheDocument();
     expect(screen.queryByRole("table")).toBeNull();
   });
 

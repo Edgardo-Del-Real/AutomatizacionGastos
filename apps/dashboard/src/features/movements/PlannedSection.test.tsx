@@ -87,6 +87,7 @@ describe("PlannedSection", () => {
         amount: 2500,
         note: "alquiler",
         category: "alquiler",
+        visibility: "INDIVIDUAL",
       }),
     );
     expect(onMutated).toHaveBeenCalledTimes(1);
@@ -154,5 +155,50 @@ describe("PlannedSection", () => {
       await screen.findByRole("alert"),
     ).toHaveTextContent("No se pudo crear el gasto previsto.");
     expect(createPlannedMovementMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("submits visibility SHARED when the Compartido checkbox is checked", async () => {
+    const user = userEvent.setup();
+    fetchCategoriesMock.mockResolvedValue([]);
+
+    render(<PlannedSection planned={{ month: "2026-09", total: 0 }} />);
+
+    const form = screen.getByRole("form", { name: "Agregar previsto" });
+    await user.type(within(form).getByLabelText("Monto"), "2500");
+    await user.click(within(form).getByRole("checkbox", { name: "Compartido" }));
+    await user.click(
+      within(form).getByRole("button", { name: "Agregar previsto" }),
+    );
+
+    await waitFor(() =>
+      expect(createPlannedMovementMock).toHaveBeenCalledWith("default", {
+        amount: 2500,
+        note: null,
+        category: null,
+        visibility: "SHARED",
+      }),
+    );
+  });
+
+  it("submits visibility INDIVIDUAL when Compartido is left unchecked", async () => {
+    const user = userEvent.setup();
+    fetchCategoriesMock.mockResolvedValue([]);
+
+    render(<PlannedSection planned={{ month: "2026-09", total: 0 }} />);
+
+    const form = screen.getByRole("form", { name: "Agregar previsto" });
+    await user.type(within(form).getByLabelText("Monto"), "2500");
+    await user.click(
+      within(form).getByRole("button", { name: "Agregar previsto" }),
+    );
+
+    await waitFor(() =>
+      expect(createPlannedMovementMock).toHaveBeenCalledWith("default", {
+        amount: 2500,
+        note: null,
+        category: null,
+        visibility: "INDIVIDUAL",
+      }),
+    );
   });
 });

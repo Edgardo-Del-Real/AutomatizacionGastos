@@ -11,7 +11,6 @@ import { KpiCards } from "./features/movements/KpiCards";
 import { MovementList } from "./features/movements/MovementList";
 import { PlannedSection } from "./features/movements/PlannedSection";
 import { SummarySection } from "./features/movements/SummarySection";
-import { TopMovements } from "./features/movements/TopMovements";
 import { useMovementSummary } from "./features/movements/useMovementSummary";
 
 type DashboardSection = "kpis" | "charts" | "movements";
@@ -128,7 +127,6 @@ function Dashboard() {
                     categories={data.categories}
                     refreshToken={refreshKey}
                   />
-                  <TopMovements top={data.top} />
                 </>
               )}
             </SummarySection>

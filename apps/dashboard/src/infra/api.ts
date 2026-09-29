@@ -70,11 +70,13 @@ export type MovementPatch = {
  * (the load date) because the API derives the planned target month from it
  * (load month + 1, Buenos Aires); `type`/`status` are pinned to the planned
  * contract (EXPENSE + PENDING) and never travel through this input.
+ * `visibility` is optional: absent means INDIVIDUAL (the API defaults it).
  */
 export type PlannedMovementInput = {
   amount: number;
   note?: string | null;
   category?: string | null;
+  visibility?: "INDIVIDUAL" | "SHARED";
 };
 
 /**
@@ -247,6 +249,9 @@ export function createPlannedMovement(
       occurredAt: new Date().toISOString(),
       type: "EXPENSE",
       status: "PENDING",
+      // AD7 — visibility is sent only when defined; the endpoint defaults an
+      // absent value to INDIVIDUAL.
+      ...(input.visibility !== undefined && { visibility: input.visibility }),
     },
     { "x-owner-id": ownerId },
     expenseSchema,

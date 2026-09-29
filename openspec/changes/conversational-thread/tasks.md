@@ -36,18 +36,18 @@ Chain strategy: size-exception
 
 ## Phase 2: Entries + Dialog Controller
 
-- [ ] 2.1 RED T1: amount-null entry persists payload + `asked_registration(asked_field:"amount")`; no movement, no free-text question
-- [ ] 2.2 GREEN `executeRegistration` E1 (:444-450): persist + `asked_registration`; no-signal otro branch (:474-480) untouched
-- [ ] 2.3 RED T2: category-signal-unresolved persists (amount set, category null) + asks category; no-brain prefix entry (`previsto:`/`compartido:` without amount, :404-407)
-- [ ] 2.4 GREEN `executeRegistration` E2 + `deterministicRegistration` prefix entry; no-brain bare noun keeps `helpReply`
-- [ ] 2.5 RED `handleUpdate` (:254-257): dialog branch gains `AWAITING_REGISTRATION`; `buildInterpretContext` (:911-928) decodes payload, corrupt → null → D6 fallback
-- [ ] 2.6 GREEN routing: `handleUpdate` + `d6DialogFallback`/`resolveDialog` dispatch (:890-904, :931-943); openQuestion from derived field
-- [ ] 2.7 RED T4: amount resolver — completes (category set → idle, register from stored context), keeps collecting (persist + ask category), phantom guard (wrong-field/empty → T9 re-ask)
-- [ ] 2.8 GREEN `resolveAwaitingRegistration` amount path: `normalizeAmountString(body) ?? parseAmount(body)`, `envelope.amount` positive-only rescue
-- [ ] 2.9 RED T5 cascade: exact → folded plural → single-token guarded `createCategory` (reserved → stay open) → multi-word list + stay open; abandon words; D6 rule 2 (`parseAmountAndNote` → reprocess)
-- [ ] 2.10 GREEN `d6AwaitingRegistration` cascade (:707-798 mirror)
-- [ ] 2.11 RED T6/T7/T8/T10/T11 + intercept: abandon clears; query/CRUD/greeting keep pending; new register_expense abandons + registers; corrupt → idle + `questionDroppedReply`; restart survival; bare "dale" → kept-collecting re-ask (:855-861)
-- [ ] 2.12 GREEN abandon/non-consuming/corrupt handlers + affirmation intercept; extend :2023-2455 dialog controller with `seedAwaitingRegistration` cases (resolve/abandon/phantom guard/non-consuming/single interpret call)
+- [x] 2.1 RED T1: amount-null entry persists payload + `asked_registration(asked_field:"amount")`; no movement, no free-text question
+- [x] 2.2 GREEN `executeRegistration` E1 (:444-450): persist + `asked_registration`; no-signal otro branch (:474-480) untouched
+- [x] 2.3 RED T2: category-signal-unresolved persists (amount set, category null) + asks category; no-brain prefix entry (`previsto:`/`compartido:` without amount, :404-407)
+- [x] 2.4 GREEN `executeRegistration` E2 + `deterministicRegistration` prefix entry; no-brain bare noun keeps `helpReply`
+- [x] 2.5 RED `handleUpdate` (:254-257): dialog branch gains `AWAITING_REGISTRATION`; `buildInterpretContext` (:911-928) decodes payload, corrupt → null → D6 fallback
+- [x] 2.6 GREEN routing: `handleUpdate` + `d6DialogFallback`/`resolveDialog` dispatch (:890-904, :931-943); openQuestion from derived field
+- [x] 2.7 RED T4: amount resolver — completes (category set → idle, register from stored context), keeps collecting (persist + ask category), phantom guard (wrong-field/empty → T9 re-ask)
+- [x] 2.8 GREEN `resolveAwaitingRegistration` amount path: `normalizeAmountString(body) ?? parseAmount(body)`, `envelope.amount` positive-only rescue
+- [x] 2.9 RED T5 cascade: exact → folded plural → single-token guarded `createCategory` (reserved → stay open) → multi-word list + stay open; abandon words; D6 rule 2 (`parseAmountAndNote` → reprocess)
+- [x] 2.10 GREEN `d6AwaitingRegistration` cascade (:707-798 mirror)
+- [x] 2.11 RED T6/T7/T8/T10/T11 + intercept: abandon clears; query/CRUD/greeting keep pending; new register_expense abandons + registers; corrupt → idle + `questionDroppedReply`; restart survival; bare "dale" → kept-collecting re-ask (:855-861)
+- [x] 2.12 GREEN abandon/non-consuming/corrupt handlers + affirmation intercept; extend :2023-2455 dialog controller with `seedAwaitingRegistration` cases (resolve/abandon/phantom guard/non-consuming/single interpret call)
 
 ## Phase 3: Brain Integration
 

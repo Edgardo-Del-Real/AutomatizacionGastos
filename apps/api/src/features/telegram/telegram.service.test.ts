@@ -11,12 +11,17 @@ import type { ConversationEnvelope, ExecutionResult } from "./bot-brain";
 import { NotFoundError, ValidationFailedError } from "../../infra/errors";
 import { ReservedCategoryError } from "../categories/reserved";
 import {
+  askAmountReply,
+  askCategoryReply,
   associateKeywordRedirectReply,
+  collectAbandonedReply,
   formatARS,
   helpReply,
+  keptCollectingReply,
   offTopicRedirectReply,
   plannedSharedRejectedReply,
   queryRedirectReply,
+  questionDroppedReply,
   reservedCategoryReply,
 } from "./reply-text";
 import { amountConfirmationPayloadSchema, registrationCollectPayloadSchema, TelegramService } from "./telegram.service";
@@ -853,6 +858,569 @@ describe("TelegramService ambiguity rules (awaiting_category, D6)", () => {
   });
 });
 
+describe("TelegramService registration collection (awaiting_registration)", () => {
+  let h: Harness;
+
+  beforeEach(() => {
+    h = makeHarness();
+    seedHarnessCategories(h, ["otro"]);
+  });
+
+  async function seedAwaitingRegistration(payloadOverrides?: Record<string, unknown>): Promise<void> {
+    const payload = registrationCollectPayloadSchema.parse({
+      body: "quiero cargar un gasto",
+      note: "gym",
+      amount: null,
+      category: null,
+      ...payloadOverrides,
+    });
+    await h.botStateRepository.set({
+      ownerId,
+      state: "awaiting_registration",
+      pendingMovementId: null,
+      pendingNote: JSON.stringify(payload),
+    });
+  }
+
+  it("T1: an amount-null register_expense persists the collect payload and asks the amount (no free-text question)", async () => {
+    h.mockBrainInterpret.mockResolvedValue({
+      intent: "register_expense",
+      amount: null,
+      category: null,
+      note: "gym",
+    });
+    h.mockBrainReply.mockResolvedValue(null);
+
+    await h.service.handleUpdate(textUpdate({ text: "quiero cargar un gasto", messageId: 1 }), h.reply);
+
+    expect(h.mockCreateExpense).not.toHaveBeenCalled();
+    const lastCall = h.mockSetState.mock.calls.at(-1)?.[0] as BotStateRecord;
+    expect(lastCall.state).toBe("awaiting_registration");
+    expect(lastCall.pendingMovementId).toBeNull();
+    const payload = registrationCollectPayloadSchema.parse(JSON.parse(lastCall.pendingNote ?? "{}"));
+    expect(payload.body).toBe("quiero cargar un gasto");
+    expect(payload.note).toBe("gym");
+    expect(payload.amount).toBeNull();
+    expect(payload.category).toBeNull();
+    expect(payload.shared).toBe(false);
+    expect(payload.planned).toBe(false);
+    expect(h.mockBrainReply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        intent: "register_expense",
+        ok: false,
+        action: "asked_registration",
+        asked_field: "amount",
+      }),
+    );
+    expect(h.replies.at(-1)).toBe(askAmountReply("gym"));
+    expect(h.replies.at(-1)).not.toContain("No entendí");
+  });
+
+  it("T1: a planned amount-null registration persists the planned bit and asks the amount", async () => {
+    h.mockBrainInterpret.mockResolvedValue({
+      intent: "register_expense",
+      amount: null,
+      category: null,
+      note: "gym",
+      planned: true,
+    });
+
+    await h.service.handleUpdate(textUpdate({ text: "quiero cargar un gasto previsto", messageId: 1 }), h.reply);
+
+    const lastCall = h.mockSetState.mock.calls.at(-1)?.[0] as BotStateRecord;
+    const payload = registrationCollectPayloadSchema.parse(JSON.parse(lastCall.pendingNote ?? "{}"));
+    expect(payload.planned).toBe(true);
+    expect(lastCall.state).toBe("awaiting_registration");
+  });
+
+  it("T2: a category-signal that resolves to nothing persists the amount and asks the category", async () => {
+    h.mockBrainInterpret.mockResolvedValue({
+      intent: "register_expense",
+      amount: 2000,
+      category: "Kiosco", // signaled but no such category exists
+      note: null,
+    });
+    h.mockBrainReply.mockResolvedValue(null);
+
+    await h.service.handleUpdate(textUpdate({ text: "$2000 feria", messageId: 1 }), h.reply);
+
+    expect(h.mockCreateExpense).not.toHaveBeenCalled();
+    expect(h.mockCreateCategory).not.toHaveBeenCalled();
+    const lastCall = h.mockSetState.mock.calls.at(-1)?.[0] as BotStateRecord;
+    expect(lastCall.state).toBe("awaiting_registration");
+    const payload = registrationCollectPayloadSchema.parse(JSON.parse(lastCall.pendingNote ?? "{}"));
+    expect(payload.amount).toBe(2000);
+    expect(payload.category).toBeNull();
+    expect(h.mockBrainReply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        intent: "register_expense",
+        ok: false,
+        action: "asked_registration",
+        asked_field: "category",
+      }),
+    );
+    expect(h.replies.at(-1)).toContain("¿En qué categoría lo guardo");
+  });
+
+  it("T2/D8: a no-brain previsto: prefix without an amount enters the collect dialog", async () => {
+    const hNoBrain = makeHarness({ noBrain: true });
+    seedHarnessCategories(hNoBrain, ["otro"]);
+
+    await hNoBrain.service.handleUpdate(
+      textUpdate({ text: "previsto: alquiler", messageId: 1 }),
+      hNoBrain.reply,
+    );
+
+    expect(hNoBrain.mockCreateExpense).not.toHaveBeenCalled();
+    const lastCall = hNoBrain.mockSetState.mock.calls.at(-1)?.[0] as BotStateRecord;
+    expect(lastCall.state).toBe("awaiting_registration");
+    const payload = registrationCollectPayloadSchema.parse(JSON.parse(lastCall.pendingNote ?? "{}"));
+    expect(payload.amount).toBeNull();
+    expect(payload.planned).toBe(true);
+    expect(hNoBrain.replies.at(-1)).toBe(askAmountReply("alquiler"));
+  });
+
+  it("T2/D8: a no-brain compartido: prefix without an amount enters the collect dialog", async () => {
+    const hNoBrain = makeHarness({ noBrain: true });
+    seedHarnessCategories(hNoBrain, ["otro"]);
+
+    await hNoBrain.service.handleUpdate(
+      textUpdate({ text: "compartido: expensas", messageId: 1 }),
+      hNoBrain.reply,
+    );
+
+    const lastCall = hNoBrain.mockSetState.mock.calls.at(-1)?.[0] as BotStateRecord;
+    expect(lastCall.state).toBe("awaiting_registration");
+    const payload = registrationCollectPayloadSchema.parse(JSON.parse(lastCall.pendingNote ?? "{}"));
+    expect(payload.shared).toBe(true);
+    expect(payload.planned).toBe(false);
+  });
+
+  it("T2/D8: a no-brain bare noun keeps the help reply and starts no collect dialog", async () => {
+    const hNoBrain = makeHarness({ noBrain: true });
+    seedHarnessCategories(hNoBrain, ["otro"]);
+
+    await hNoBrain.service.handleUpdate(textUpdate({ text: "gym", messageId: 1 }), hNoBrain.reply);
+
+    expect(hNoBrain.mockCreateExpense).not.toHaveBeenCalled();
+    expect(hNoBrain.mockSetState).not.toHaveBeenCalled();
+    expect(hNoBrain.replies.at(-1)).toBe(helpReply());
+  });
+
+  it("2.5: routes a message in awaiting_registration into the dialog branch with a decoded context", async () => {
+    await seedAwaitingRegistration({ amount: 5000 });
+    h.mockBrainInterpret.mockClear();
+    h.mockBrainInterpret.mockResolvedValue({
+      intent: "query",
+      amount: null,
+      category: null,
+      note: null,
+      query_type: "recent",
+      dialog_action: null,
+    });
+    h.mockListMovements.mockResolvedValue([]);
+
+    await h.service.handleUpdate(textUpdate({ text: "decime los últimos movimientos", messageId: 2 }), h.reply);
+
+    expect(h.mockBrainInterpret).toHaveBeenCalledWith(
+      "decime los últimos movimientos",
+      expect.objectContaining({
+        state: "awaiting_registration",
+        pending: expect.objectContaining({ amount: 5000, note: "gym" }),
+        openQuestion: expect.stringContaining("categoría"),
+      }),
+    );
+// Non-consuming: the pending collect survives the query.
+    const state = await h.botStateRepository.get(ownerId);
+    expect(state?.state).toBe("awaiting_registration");
+  });
+
+  it("T4: an amount answer completes the registration from the stored context when the category is resolved", async () => {
+    await seedAwaitingRegistration({ amount: null, category: "Gimnasio" });
+    h.mockBrainInterpret.mockResolvedValue({
+      intent: "register_expense",
+      amount: 5000,
+      category: null,
+      note: null,
+      dialog_action: "resolve",
+    });
+    h.mockBrainReply.mockResolvedValue("Listo, registré 5000 en Gimnasio.");
+
+    await h.service.handleUpdate(textUpdate({ text: "5000", messageId: 2 }), h.reply);
+
+    expect(h.mockCreateExpense).toHaveBeenCalledWith(
+      expect.objectContaining({ amount: 5000, category: "Gimnasio", note: "gym" }),
+      ownerId,
+      { visibility: "INDIVIDUAL" },
+    );
+    expect(h.mockSetState).toHaveBeenLastCalledWith({
+      ownerId,
+      state: "idle",
+      pendingMovementId: null,
+      pendingNote: null,
+    });
+    expect(h.replies.at(-1)).toBe("Listo, registré 5000 en Gimnasio.");
+  });
+
+  it("T4: an amount answer keeps collecting by persisting the amount and asking the category", async () => {
+    await seedAwaitingRegistration({ amount: null, category: null });
+    h.mockBrainInterpret.mockResolvedValue({
+      intent: "register_expense",
+      amount: 5000,
+      category: null,
+      note: null,
+      dialog_action: "resolve",
+    });
+    h.mockBrainReply.mockResolvedValue(null);
+
+    await h.service.handleUpdate(textUpdate({ text: "5000", messageId: 2 }), h.reply);
+
+    expect(h.mockCreateExpense).not.toHaveBeenCalled();
+    const lastCall = h.mockSetState.mock.calls.at(-1)?.[0] as BotStateRecord;
+    expect(lastCall.state).toBe("awaiting_registration");
+    const payload = registrationCollectPayloadSchema.parse(JSON.parse(lastCall.pendingNote ?? "{}"));
+    expect(payload.amount).toBe(5000);
+    expect(payload.category).toBeNull();
+    expect(h.mockBrainReply).toHaveBeenCalledWith(
+      expect.objectContaining({ action: "asked_registration", asked_field: "category" }),
+    );
+    expect(h.replies.at(-1)).toBe(askCategoryReply("gym"));
+  });
+
+  it("T4/phantom: a resolve with no amount and no message amount re-asks the amount (T9), never fabricating", async () => {
+    await seedAwaitingRegistration({ amount: null, category: null });
+    h.mockBrainInterpret.mockResolvedValue({
+      intent: "register_expense",
+      amount: null,
+      category: null,
+      note: null,
+      dialog_action: "resolve",
+    });
+    h.mockBrainReply.mockResolvedValue(null);
+    h.mockSetState.mockClear();
+
+    await h.service.handleUpdate(textUpdate({ text: "no sé", messageId: 2 }), h.reply);
+
+expect(h.mockCreateExpense).not.toHaveBeenCalled();
+    expect(h.mockSetState).not.toHaveBeenCalled();
+    expect(h.replies.at(-1)).toBe(keptCollectingReply("amount"));
+    const state = await h.botStateRepository.get(ownerId);
+    expect(state?.state).toBe("awaiting_registration");
+  });
+
+  it("T5: an exact category answer completes the registration from the stored context", async () => {
+    seedHarnessCategories(h, ["otro", "Transporte"]);
+    await seedAwaitingRegistration({ amount: 5000, category: null });
+    h.mockBrainInterpret.mockResolvedValue({
+      intent: "register_expense",
+      amount: null,
+      category: "Transporte",
+      note: null,
+      dialog_action: "resolve",
+    });
+    h.mockBrainReply.mockResolvedValue("Listo, quedó en Transporte.");
+
+    await h.service.handleUpdate(textUpdate({ text: "Transporte", messageId: 2 }), h.reply);
+
+    expect(h.mockCreateExpense).toHaveBeenCalledWith(
+      expect.objectContaining({ amount: 5000, category: "Transporte", note: "gym" }),
+      ownerId,
+      { visibility: "INDIVIDUAL" },
+    );
+    expect(h.mockSetState).toHaveBeenLastCalledWith({
+      ownerId,
+      state: "idle",
+      pendingMovementId: null,
+      pendingNote: null,
+    });
+    expect(h.replies.at(-1)).toBe("Listo, quedó en Transporte.");
+  });
+
+  it("T5: a folded plural category answer resolves to the existing category without creating", async () => {
+    seedHarnessCategories(h, ["otro", "Cafe"]);
+    await seedAwaitingRegistration({ amount: 5000, category: null });
+    h.mockBrainInterpret.mockResolvedValue({
+      intent: "register_expense",
+      amount: null,
+      category: "cafes",
+      note: null,
+      dialog_action: "resolve",
+    });
+
+    await h.service.handleUpdate(textUpdate({ text: "cafes", messageId: 2 }), h.reply);
+
+    expect(h.mockCreateCategory).not.toHaveBeenCalled();
+    expect(h.mockCreateExpense).toHaveBeenCalledWith(
+      expect.objectContaining({ amount: 5000, category: "Cafe" }),
+      ownerId,
+      { visibility: "INDIVIDUAL" },
+    );
+  });
+
+  it("T5: a single-token non-match auto-creates the category through the guarded path and completes", async () => {
+    seedHarnessCategories(h, ["otro"]);
+    await seedAwaitingRegistration({ amount: 5000, category: null });
+    h.mockBrainInterpret.mockResolvedValue({
+      intent: "register_expense",
+      amount: null,
+      category: "Mascotas",
+      note: null,
+      dialog_action: "resolve",
+    });
+
+    await h.service.handleUpdate(textUpdate({ text: "Mascotas", messageId: 2 }), h.reply);
+
+    expect(h.mockCreateCategory).toHaveBeenCalledWith(ownerId, "Mascotas");
+    expect(h.mockCreateExpense).toHaveBeenCalledWith(
+      expect.objectContaining({ amount: 5000, category: "Mascotas" }),
+      ownerId,
+      { visibility: "INDIVIDUAL" },
+    );
+  });
+
+  it("T5: a reserved single-token answer redirects and keeps the dialog open", async () => {
+    seedHarnessCategories(h, ["otro"]);
+    await seedAwaitingRegistration({ amount: 5000, category: null });
+    h.mockCreateCategory.mockRejectedValue(
+      new ReservedCategoryError('Category "previsto" is the reserved concept "previsto"', "previsto"),
+    );
+    h.mockBrainInterpret.mockResolvedValue({
+      intent: "register_expense",
+      amount: null,
+      category: "previsto",
+      note: null,
+      dialog_action: "resolve",
+    });
+    h.mockSetState.mockClear();
+
+    await h.service.handleUpdate(textUpdate({ text: "previsto", messageId: 2 }), h.reply);
+
+    expect(h.mockCreateExpense).not.toHaveBeenCalled();
+    expect(h.mockSetState).not.toHaveBeenCalled();
+    expect(h.replies.at(-1)).toBe(reservedCategoryReply("previsto", "previsto"));
+  });
+
+  it("T5: a multi-word non-match lists the categories and stays open (never dead-ends)", async () => {
+    seedHarnessCategories(h, ["otro", "Cafe"]);
+    await seedAwaitingRegistration({ amount: 5000, category: null });
+    h.mockBrainInterpret.mockResolvedValue({
+      intent: "register_expense",
+      amount: null,
+      category: "no se que categoria",
+      note: null,
+      dialog_action: "resolve",
+    });
+    h.mockSetState.mockClear();
+
+    await h.service.handleUpdate(textUpdate({ text: "no se que categoria", messageId: 2 }), h.reply);
+
+expect(h.mockCreateExpense).not.toHaveBeenCalled();
+    expect(h.mockCreateCategory).not.toHaveBeenCalled();
+    expect(h.mockSetState).not.toHaveBeenCalled();
+    expect(h.replies.at(-1)).toContain("No encontré la categoría");
+    expect(h.replies.at(-1)).toContain('"otro"');
+  });
+
+  it("T6: an explicit abandon clears the collect payload and registers nothing", async () => {
+    await seedAwaitingRegistration({ amount: 5000, category: null });
+    h.mockBrainInterpret.mockResolvedValue({
+      intent: "register_expense",
+      amount: null,
+      category: null,
+      note: null,
+      dialog_action: "abandon",
+    });
+    h.mockBrainReply.mockResolvedValue(null);
+
+    await h.service.handleUpdate(textUpdate({ text: "no, dejalo", messageId: 2 }), h.reply);
+
+    expect(h.mockCreateExpense).not.toHaveBeenCalled();
+    expect(h.mockSetState).toHaveBeenLastCalledWith({
+      ownerId,
+      state: "idle",
+      pendingMovementId: null,
+      pendingNote: null,
+    });
+    expect(h.replies.at(-1)).toBe(collectAbandonedReply());
+  });
+
+  it("T6/D6: 'no, dejalo' abandons the collect through the deterministic path too", async () => {
+    await seedAwaitingRegistration({ amount: 5000, category: null });
+    h.mockBrainInterpret.mockResolvedValue(null);
+
+    await h.service.handleUpdate(textUpdate({ text: "no, dejalo", messageId: 2 }), h.reply);
+
+    expect(h.mockCreateExpense).not.toHaveBeenCalled();
+    expect(h.mockSetState).toHaveBeenLastCalledWith({
+      ownerId,
+      state: "idle",
+      pendingMovementId: null,
+      pendingNote: null,
+    });
+  });
+
+  it("T7: a query during the collect answers and keeps the pending payload intact", async () => {
+    await seedAwaitingRegistration({ amount: 5000, category: null });
+    h.mockSetState.mockClear();
+    h.mockBrainInterpret.mockResolvedValue({
+      intent: "query",
+      amount: null,
+      category: null,
+      note: null,
+      query_type: "recent",
+      dialog_action: null,
+    });
+    h.mockListMovements.mockResolvedValue([
+      {
+        id: "m1",
+        ownerId,
+        amount: 2500,
+        currency: "ARS",
+        category: "Cafe",
+        note: "cafe con leche",
+        occurredAt: new Date("2026-09-17T12:00:00.000Z"),
+        createdAt: new Date(),
+        type: "EXPENSE",
+      },
+    ]);
+
+    await h.service.handleUpdate(textUpdate({ text: "decime los últimos movimientos", messageId: 2 }), h.reply);
+
+    expect(h.mockListMovements).toHaveBeenCalledWith({ viewerId: ownerId, partnerId: null, visibility: "all" }, {});
+    expect(h.mockSetState).not.toHaveBeenCalled();
+    expect(h.mockCreateExpense).not.toHaveBeenCalled();
+    expect(h.replies.at(-1)).toContain("cafe con leche");
+    const state = await h.botStateRepository.get(ownerId);
+    expect(state?.state).toBe("awaiting_registration");
+  });
+
+  it("T7: a CRUD during the collect executes and keeps the pending payload intact", async () => {
+    await seedAwaitingRegistration({ amount: 5000, category: null });
+    h.mockSetState.mockClear();
+    h.mockBrainInterpret.mockResolvedValue({
+      intent: "create_category",
+      amount: null,
+      category: "Mascotas",
+      note: null,
+      dialog_action: null,
+    });
+
+    await h.service.handleUpdate(textUpdate({ text: "creá una categoría mascotas", messageId: 2 }), h.reply);
+
+    expect(h.mockCreateCategory).toHaveBeenCalledWith(ownerId, "Mascotas");
+    expect(h.mockSetState).not.toHaveBeenCalled();
+    const state = await h.botStateRepository.get(ownerId);
+    expect(state?.state).toBe("awaiting_registration");
+  });
+
+  it("T8: a new registration during the collect abandons it and registers the new message", async () => {
+    await seedAwaitingRegistration({ amount: 5000, category: null });
+    h.mockBrainInterpret.mockResolvedValue({
+      intent: "register_expense",
+      amount: 8000,
+      category: null,
+      note: null,
+      dialog_action: null,
+    });
+    h.mockBrainReply.mockResolvedValue(null);
+
+    await h.service.handleUpdate(textUpdate({ text: "$8000 supermercado", messageId: 2 }), h.reply);
+
+    expect(h.mockBrainInterpret).toHaveBeenCalledTimes(1);
+    expect(h.mockCreateExpense).toHaveBeenCalledWith(
+      expect.objectContaining({ amount: 8000, category: "otro" }),
+      ownerId,
+      { visibility: "INDIVIDUAL" },
+    );
+    expect(h.replies.at(-2)).toBe(collectAbandonedReply());
+  });
+
+  it("T10: a corrupt collect payload abandons to idle with the dropped reply, registering nothing", async () => {
+    await h.botStateRepository.set({
+      ownerId,
+      state: "awaiting_registration",
+      pendingMovementId: null,
+      pendingNote: "{not-json",
+    });
+    h.mockBrainInterpret.mockResolvedValue(null);
+
+    await h.service.handleUpdate(textUpdate({ text: "$3000 panaderia", messageId: 2 }), h.reply);
+
+    expect(h.mockCreateExpense).not.toHaveBeenCalled();
+    expect(h.mockSetState).toHaveBeenLastCalledWith({
+      ownerId,
+      state: "idle",
+      pendingMovementId: null,
+      pendingNote: null,
+    });
+    expect(h.replies.at(-1)).toBe(questionDroppedReply());
+  });
+
+  it("T11: the collect payload survives a restart and the dialog continues", async () => {
+    // The process "restarts": a fresh service reads the persisted state.
+    const restarted = makeHarness();
+    seedHarnessCategories(restarted, ["otro"]);
+    // The payload survives in the store (Postgres in production; here we seed
+    // the fresh harness's repository with the same row).
+    const payload = registrationCollectPayloadSchema.parse({
+      body: "quiero cargar un gasto",
+      note: "gym",
+      amount: 5000,
+      category: null,
+    });
+    await restarted.botStateRepository.set({
+      ownerId,
+      state: "awaiting_registration",
+      pendingMovementId: null,
+      pendingNote: JSON.stringify(payload),
+    });
+    restarted.mockBrainInterpret.mockResolvedValue({
+      intent: "register_expense",
+      amount: null,
+      category: "Gimnasio",
+      note: null,
+      dialog_action: "resolve",
+    });
+
+    await restarted.service.handleUpdate(textUpdate({ text: "Gimnasio", messageId: 42 }), restarted.reply);
+
+    expect(restarted.mockCreateExpense).toHaveBeenCalledWith(
+      expect.objectContaining({ amount: 5000, category: "Gimnasio" }),
+      ownerId,
+      { visibility: "INDIVIDUAL" },
+    );
+  });
+
+  it("intercept: a bare 'dale' during the collect re-asks the open field without calling the brain", async () => {
+    await seedAwaitingRegistration({ amount: 5000, category: null });
+    h.mockBrainInterpret.mockClear();
+    h.mockSetState.mockClear();
+
+    await h.service.handleUpdate(textUpdate({ text: "dale", messageId: 2 }), h.reply);
+
+expect(h.mockBrainInterpret).not.toHaveBeenCalled();
+    expect(h.mockCreateExpense).not.toHaveBeenCalled();
+    expect(h.mockSetState).not.toHaveBeenCalled();
+    expect(h.replies.at(-1)).toBe(keptCollectingReply("category"));
+  });
+
+  it("2.5: a corrupt collect payload yields a null context so the D6 fallback owns the message", async () => {
+    await h.botStateRepository.set({
+      ownerId,
+      state: "awaiting_registration",
+      pendingMovementId: null,
+      pendingNote: "{not-json",
+    });
+    h.mockBrainInterpret.mockClear();
+
+    await h.service.handleUpdate(textUpdate({ text: "$3000 panaderia", messageId: 2 }), h.reply);
+
+    // No context can be built from a corrupt payload: the brain is never
+    // called for the dialog and the deterministic rules own the message.
+    expect(h.mockBrainInterpret).not.toHaveBeenCalled();
+  });
+});
+
 describe("TelegramService commands", () => {
   let h: Harness;
 
@@ -1019,7 +1587,7 @@ describe("TelegramService brain orchestration (llm-conversational-bot)", () => {
     expect(h.replies.at(-1)).toContain("Supermercado");
   });
 
-  it("falls to otro and offers correction when the brain category is unknown, never auto-creating it", async () => {
+  it("enters the collect dialog when a signaled category resolves to nothing, never auto-creating it (E2)", async () => {
     h.mockListCategories.mockResolvedValue([
       { id: "c1", ownerId, name: "otro", createdAt: new Date(), keywords: [] },
     ]);
@@ -1032,18 +1600,14 @@ describe("TelegramService brain orchestration (llm-conversational-bot)", () => {
 
     await h.service.handleUpdate(textUpdate({ text: "$2000 chucherias", messageId: 1 }), h.reply);
 
-    expect(h.mockCreateExpense).toHaveBeenCalledWith(
-      expect.objectContaining({ amount: 2000, category: "otro" }),
-      ownerId,
-      { visibility: "INDIVIDUAL" },
-    );
+    expect(h.mockCreateExpense).not.toHaveBeenCalled();
     expect(h.mockCreateCategory).not.toHaveBeenCalled();
-    expect(h.mockSetState).toHaveBeenLastCalledWith({
-      ownerId,
-      state: "awaiting_category",
-      pendingMovementId: "mov-1",
-      pendingNote: "$ chucherias",
-    });
+    const lastCall = h.mockSetState.mock.calls.at(-1)?.[0] as BotStateRecord;
+    expect(lastCall.state).toBe("awaiting_registration");
+    const payload = registrationCollectPayloadSchema.parse(JSON.parse(lastCall.pendingNote ?? "{}"));
+    expect(payload.amount).toBe(2000);
+    expect(payload.category).toBeNull();
+    expect(h.replies.at(-1)).toContain("¿En qué categoría lo guardo");
   });
 
   it("treats a brain suggestion of 'otro' as no suggestion and offers the correction", async () => {
@@ -1084,19 +1648,15 @@ describe("TelegramService brain orchestration (llm-conversational-bot)", () => {
     await h.service.handleUpdate(textUpdate({ text: "$2000 feria", messageId: 1 }), h.reply);
 
     // "cafes" does NOT resolve to the existing "Cafe": the LLM ceiling keeps
-    // suggestions exact-normalized only; the movement falls to "otro".
-    expect(h.mockCreateExpense).toHaveBeenCalledWith(
-      expect.objectContaining({ amount: 2000, category: "otro" }),
-      ownerId,
-      { visibility: "INDIVIDUAL" },
-    );
+    // suggestions exact-normalized only. The signaled-but-unresolved category
+    // now enters the collect dialog (E2) instead of falling to "otro".
+    expect(h.mockCreateExpense).not.toHaveBeenCalled();
     expect(h.mockCreateCategory).not.toHaveBeenCalled();
-    expect(h.mockSetState).toHaveBeenLastCalledWith({
-      ownerId,
-      state: "awaiting_category",
-      pendingMovementId: "mov-1",
-      pendingNote: "$ feria",
-    });
+    const lastCall = h.mockSetState.mock.calls.at(-1)?.[0] as BotStateRecord;
+    expect(lastCall.state).toBe("awaiting_registration");
+    const payload = registrationCollectPayloadSchema.parse(JSON.parse(lastCall.pendingNote ?? "{}"));
+    expect(payload.amount).toBe(2000);
+    expect(payload.category).toBeNull();
   });
 
   it("materializes a brain planned:true flag as a PENDING EXPENSE without any prefix", async () => {
@@ -2111,6 +2671,125 @@ describe("TelegramService dialog controller (brain-routed)", () => {
       pendingNote: note,
     });
   }
+
+  async function seedAwaitingRegistration(payloadOverrides?: Record<string, unknown>): Promise<void> {
+    const payload = registrationCollectPayloadSchema.parse({
+      body: "quiero cargar un gasto",
+      note: "gym",
+      amount: null,
+      category: null,
+      ...payloadOverrides,
+    });
+    await h.botStateRepository.set({
+      ownerId,
+      state: "awaiting_registration",
+      pendingMovementId: null,
+      pendingNote: JSON.stringify(payload),
+    });
+  }
+
+  it("collection: a resolve answer with the category completes from the stored context (single interpret call)", async () => {
+    await seedAwaitingRegistration({ amount: 5000, category: null });
+    h.mockBrainInterpret.mockResolvedValue({
+      intent: "register_expense",
+      amount: null,
+      category: "Transporte",
+      note: null,
+      dialog_action: "resolve",
+    });
+
+    await h.service.handleUpdate(textUpdate({ text: "Transporte", messageId: 2 }), h.reply);
+
+    expect(h.mockBrainInterpret).toHaveBeenCalledTimes(1);
+    expect(h.mockCreateExpense).toHaveBeenCalledWith(
+      expect.objectContaining({ amount: 5000, category: "Transporte", note: "gym" }),
+      ownerId,
+      { visibility: "INDIVIDUAL" },
+    );
+    expect(h.mockSetState).toHaveBeenLastCalledWith({
+      ownerId,
+      state: "idle",
+      pendingMovementId: null,
+      pendingNote: null,
+    });
+  });
+
+  it("collection: an explicit abandon clears the collect and registers nothing", async () => {
+    await seedAwaitingRegistration({ amount: 5000, category: null });
+    h.mockBrainInterpret.mockResolvedValue({
+      intent: "register_expense",
+      amount: null,
+      category: null,
+      note: null,
+      dialog_action: "abandon",
+    });
+
+    await h.service.handleUpdate(textUpdate({ text: "no, dejalo", messageId: 2 }), h.reply);
+
+    expect(h.mockCreateExpense).not.toHaveBeenCalled();
+    expect(h.mockSetState).toHaveBeenLastCalledWith({
+      ownerId,
+      state: "idle",
+      pendingMovementId: null,
+      pendingNote: null,
+    });
+  });
+
+  it("collection: phantom guard keeps the dialog open and re-asks on a wrong-field resolve", async () => {
+    await seedAwaitingRegistration({ amount: 5000, category: null });
+    h.mockBrainInterpret.mockResolvedValue({
+      intent: "register_expense",
+      amount: null,
+      category: "no se",
+      note: null,
+      dialog_action: "resolve",
+    });
+    h.mockSetState.mockClear();
+
+    await h.service.handleUpdate(textUpdate({ text: "no se", messageId: 2 }), h.reply);
+
+    expect(h.mockCreateExpense).not.toHaveBeenCalled();
+    expect(h.mockSetState).not.toHaveBeenCalled();
+    expect(h.replies.at(-1)).toContain("No encontré la categoría");
+    const state = await h.botStateRepository.get(ownerId);
+    expect(state?.state).toBe("awaiting_registration");
+  });
+
+  it("collection: a query during the collect answers without consuming the pending", async () => {
+    await seedAwaitingRegistration({ amount: 5000, category: null });
+    h.mockSetState.mockClear();
+    h.mockBrainInterpret.mockResolvedValue({
+      intent: "query",
+      amount: null,
+      category: null,
+      note: null,
+      query_type: "recent",
+      dialog_action: null,
+    });
+    h.mockListMovements.mockResolvedValue([]);
+
+    await h.service.handleUpdate(textUpdate({ text: "decime los últimos movimientos", messageId: 2 }), h.reply);
+
+    expect(h.mockSetState).not.toHaveBeenCalled();
+    const state = await h.botStateRepository.get(ownerId);
+    expect(state?.state).toBe("awaiting_registration");
+  });
+
+  it("collection: a new registration during the collect abandons it with a single interpret call", async () => {
+    await seedAwaitingRegistration({ amount: 5000, category: null });
+    h.mockBrainInterpret.mockResolvedValue({
+      intent: "register_expense",
+      amount: 8000,
+      category: null,
+      note: null,
+      dialog_action: null,
+    });
+
+    await h.service.handleUpdate(textUpdate({ text: "$8000 supermercado", messageId: 2 }), h.reply);
+
+    expect(h.mockBrainInterpret).toHaveBeenCalledTimes(1);
+    expect(h.replies.at(-2)).toBe(collectAbandonedReply());
+  });
 
   it("reassigns the pending movement on a resolve answer with an exact category", async () => {
     await seedAwaitingCategory("mov-9");

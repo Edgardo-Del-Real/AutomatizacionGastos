@@ -64,6 +64,7 @@ export type BotAction =
   | "registered"
   | "asked_amount"
   | "asked_category"
+  | "asked_registration"
   | "redirected"
   | "answered"
   | "none"
@@ -105,6 +106,12 @@ export type ExecutionResult = {
   planned_total?: number | null;
   /** Planned-registration fact (D11): true when the expense was registered previsto. */
   planned?: boolean;
+  /**
+   * Registration-collection fact: which field the `asked_registration` action
+   * is asking ("amount" or "category"). The reply MUST ask exactly that field
+   * and never invent the other one.
+   */
+  asked_field?: "amount" | "category" | null;
 };
 
 /**
@@ -121,6 +128,11 @@ export type InterpretContext =
   | {
       state: "awaiting_amount_confirmation";
       pending: { amounts: [number, number]; note: string | null; category: string | null };
+      openQuestion: string;
+    }
+  | {
+      state: "awaiting_registration";
+      pending: { amount: number | null; category: string | null; note: string | null };
       openQuestion: string;
     };
 
@@ -364,6 +376,14 @@ export const DIALOG_INTERPRET_ADDENDUM: Record<InterpretContext["state"], string
     'Un monto distinto a los presentados es un registro NUEVO: "dialog_action" null con intent register_expense y ese monto.',
     '"dialog_action" es "abandon" para un abandono explícito ("no, dejalo").',
   ].join(" "),
+  awaiting_registration: [
+    "Estás en un diálogo de recolección de registro: el dueño completa un registro pendiente (primero el monto, luego la categoría).",
+    '"dialog_action" es "resolve" SOLO cuando el mensaje responde el campo abierto: un monto si la pregunta abierta es el monto, o un nombre de categoría si es la categoría.',
+    'Una afirmación sin valor ("si", "dale") NUNCA es "resolve": usá "dialog_action" null.',
+    '"dialog_action" es "abandon" SOLO para un abandono explícito ("no, dejalo", "cancelalo").',
+    'Cualquier otra cosa (consulta, registro nuevo, crear categoría) es "dialog_action" null con su intent real.',
+    'NUNCA inventes un monto ni una categoría que no estén en el mensaje.',
+  ].join(" "),
 };
 
 /** Per-state dialog few-shots appended after the base few-shots. */
@@ -414,6 +434,26 @@ export const DIALOG_FEW_SHOTS: Record<InterpretContext["state"], readonly ChatMe
         '{"intent":"register_expense","amount":6000,"category":null,"note":null,"query_type":null,"new_name":null,"dialog_action":null,"then_reassign":false}',
     },
   ],
+  awaiting_registration: [
+    { role: "user", content: "5000" },
+    {
+      role: "assistant",
+      content:
+        '{"intent":"register_expense","amount":5000,"category":null,"note":null,"query_type":null,"new_name":null,"dialog_action":"resolve","then_reassign":false}',
+    },
+    { role: "user", content: "no, dejalo" },
+    {
+      role: "assistant",
+      content:
+        '{"intent":"register_expense","amount":null,"category":null,"note":null,"query_type":null,"new_name":null,"dialog_action":"abandon","then_reassign":false}',
+    },
+    { role: "user", content: "decime los últimos movimientos" },
+    {
+      role: "assistant",
+      content:
+        '{"intent":"query","amount":null,"category":null,"note":null,"query_type":"recent","new_name":null,"dialog_action":null,"then_reassign":false}',
+    },
+  ],
 };
 
 /** Renders the dialog context into a deterministic prompt fragment. */
@@ -423,6 +463,8 @@ export function renderDialogContext(context: InterpretContext): string {
       return `Contexto del diálogo: estado ${context.state}; movimiento pendiente ${context.pending.movementId ?? "ninguno"} (nota: ${context.pending.note ?? "sin nota"}); pregunta abierta: "${context.openQuestion}".`;
     case "awaiting_amount_confirmation":
       return `Contexto del diálogo: estado ${context.state}; montos presentados: ${context.pending.amounts.join(" / ")}; nota: ${context.pending.note ?? "sin nota"}; categoría: ${context.pending.category ?? "sin categoría"}; pregunta abierta: "${context.openQuestion}".`;
+    case "awaiting_registration":
+      return `Contexto del diálogo: estado ${context.state}; monto: ${context.pending.amount ?? "pendiente"}; categoría: ${context.pending.category ?? "pendiente"}; nota: ${context.pending.note ?? "sin nota"}; pregunta abierta: "${context.openQuestion}".`;
   }
 }
 

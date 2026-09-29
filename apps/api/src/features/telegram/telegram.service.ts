@@ -36,6 +36,8 @@ import { normalizeTelegramMessage, parseArrivalPrefixes, parseSavingsOverride } 
 import {
   amountConfirmationAbandonedReply,
   amountConflictReply,
+  askAmountReply,
+  askCategoryReply,
   associateKeywordRedirectReply,
   capabilitiesSummaryReply,
   categoryCommandReplyTemplate,
@@ -46,11 +48,13 @@ import {
   categoryListReply,
   categoryNotFoundReply,
   categoryRenamedReply,
+  collectAbandonedReply,
   correctionAbandonedReply,
   correctionDoneReply,
   correctionOfferReply,
   duplicateCategoryReply,
   helpReply,
+  keptCollectingReply,
   keywordAssociatedReply,
   missingCategoryReply,
   movementAmbiguousReply,
@@ -191,6 +195,13 @@ const KEEP_OTRO_ANSWERS = new Set(["no", "otro", "dejalo", "deja", "nada"]);
  */
 const CATEGORY_AFFIRM_ANSWERS = new Set(["si", "sí", "dale", "dale dale", "ok", "oka", "de una"]);
 
+/**
+ * Explicit abandonment answers for the registration-collection dialog (T6).
+ * "no, dejalo" and its variants clear the collect payload, reply clearly, and
+ * register nothing from the abandoned message.
+ */
+const COLLECT_ABANDON_ANSWERS = new Set(["no", "no dejalo", "dejalo", "deja", "nada", "no, dejalo"]);
+
 /** The pending dialog state the shared intent router must leave untouched. */
 type DialogContext = { state: BotStateRecord };
 
@@ -274,7 +285,7 @@ export class TelegramService {
       return;
     }
 
-    if (state?.state === AWAITING_CATEGORY || state?.state === AWAITING_AMOUNT_CONFIRMATION) {
+    if (state?.state === AWAITING_CATEGORY || state?.state === AWAITING_AMOUNT_CONFIRMATION || state?.state === AWAITING_REGISTRATION) {
       await this.handleDialogMessage(state, stripped, ownerId, sharedByPrefix, planned, override, reply);
       return;
     }
@@ -425,6 +436,30 @@ export class TelegramService {
     reply?: ReplyPort,
   ): Promise<void> {
     if (parsed === null) {
+      // D8: without the brain, collection fires ONLY on a deterministic
+      // `previsto:`/`compartido:` prefix without an amount; a bare noun keeps
+      // the help reply unchanged.
+      if (shared || planned) {
+        const note = extractNote(body);
+        const matchedCategory = await this.deps.categoryService.matchNote(ownerId, note ?? body);
+        const payload: RegistrationCollectPayload = {
+          body,
+          note,
+          amount: null,
+          category: matchedCategory,
+          shared,
+          planned,
+          override,
+        };
+        await this.deps.botStateRepository.set({
+          ownerId,
+          state: AWAITING_REGISTRATION,
+          pendingMovementId: null,
+          pendingNote: JSON.stringify(payload),
+        });
+        await this.safeReply(reply, askAmountReply(note));
+        return;
+      }
       await this.safeReply(reply, helpReply());
       return;
     }
@@ -465,9 +500,40 @@ export class TelegramService {
     const effectivePlanned = planned || envelope.planned === true;
 
     if (detAmount === null && brainAmount === null) {
+      // E1 (T1): a register_expense with no amount (deterministic nor brain)
+      // enters the registration-collection dialog: the collected facts are
+      // persisted and the amount is asked. The category is pre-resolved when
+      // a keyword rule or a resolvable brain suggestion exists; otherwise the
+      // collect asks the amount first, then the category (D2).
+      const note = envelope.note ?? extractNote(body);
+      const matchedCategory = await this.deps.categoryService.matchNote(ownerId, note ?? body);
+      const category = matchedCategory ?? this.resolveSuggestion(envelope.category, categories);
+      const payload: RegistrationCollectPayload = {
+        body,
+        note,
+        amount: null,
+        category,
+        shared,
+        planned: effectivePlanned,
+        override,
+      };
+      await this.deps.botStateRepository.set({
+        ownerId,
+        state: AWAITING_REGISTRATION,
+        pendingMovementId: null,
+        pendingNote: JSON.stringify(payload),
+      });
       await send(
-        { intent: "register_expense", ok: false, action: "none", amount: null, category: null, note: body },
-        helpReply(),
+        {
+          intent: "register_expense",
+          ok: false,
+          action: "asked_registration",
+          amount: null,
+          category,
+          note: body,
+          asked_field: "amount",
+        },
+        askAmountReply(note),
       );
       return;
     }
@@ -498,6 +564,40 @@ export class TelegramService {
     const category = matched ?? this.resolveSuggestion(envelope.category, categories);
     if (category !== null) {
       await this.registerWithCategory(body, amount, note, category, ownerId, shared, effectivePlanned, override, send);
+      return;
+    }
+    // E2 (T2): the envelope SIGNALED a category ("category" non-null) but the
+    // signal resolves to nothing — enter the collect dialog with the amount
+    // persisted and ask the category. A "otro" signal is NO signal (the
+    // fallback flow owns it); an absent signal keeps today's otro+correction.
+    if (envelope.category !== null && normalizeForMatch(envelope.category) !== "otro") {
+      const payload: RegistrationCollectPayload = {
+        body,
+        note,
+        amount,
+        category: null,
+        shared,
+        planned: effectivePlanned,
+        override,
+      };
+      await this.deps.botStateRepository.set({
+        ownerId,
+        state: AWAITING_REGISTRATION,
+        pendingMovementId: null,
+        pendingNote: JSON.stringify(payload),
+      });
+      await send(
+        {
+          intent: "register_expense",
+          ok: false,
+          action: "asked_registration",
+          amount,
+          category: null,
+          note: body,
+          asked_field: "category",
+        },
+        askCategoryReply(note),
+      );
       return;
     }
     await this.registerOtroWithCorrection(body, amount, note, ownerId, shared, effectivePlanned, override, send);
@@ -837,6 +937,299 @@ export class TelegramService {
     );
   }
 
+  /**
+   * D6 fallback for `awaiting_registration`: the deterministic collect rules
+   * when the brain is null/absent or explicitly abandons. A corrupt payload
+   * recovers WITHOUT reprocessing (T10); the full abandon/amount/category
+   * cascade follows the design (mirroring :707-798).
+   */
+  private async d6AwaitingRegistration(
+    state: BotStateRecord,
+    body: string,
+    ownerId: string,
+    shared: boolean,
+    planned: boolean,
+    override: SavingsOverride,
+    reply?: ReplyPort,
+  ): Promise<void> {
+    const send = this.makeSender(this.brainAvailable, reply);
+    const payload = this.decodeCollectPayload(state.pendingNote);
+
+    // T10: a corrupt or missing payload abandons the collect without
+    // reprocessing — nothing registers, nothing crashes.
+    if (payload === null) {
+      await this.deps.botStateRepository.set({ ownerId, state: IDLE, pendingMovementId: null, pendingNote: null });
+      await send(
+        { intent: "register_expense", ok: false, action: "none", amount: null, category: null, note: body },
+        questionDroppedReply(),
+      );
+      return;
+    }
+
+    // The amount/category resolver bodies land with their RED tests (2.8/2.10).
+    await this.awaitingRegistrationAnswer(state, payload, null, body, ownerId, send, reply);
+  }
+
+  /**
+   * Resolve for `awaiting_registration`: the collect answer acts ONLY on the
+   * persisted payload. A corrupt payload drops the dialog (T10); the amount
+   * and category resolver bodies land with their RED tests (2.8/2.10).
+   */
+  private async resolveAwaitingRegistration(
+    state: BotStateRecord,
+    envelope: ConversationEnvelope,
+    body: string,
+    ownerId: string,
+    reply?: ReplyPort,
+  ): Promise<void> {
+    const send = this.makeSender(true, reply);
+    const payload = this.decodeCollectPayload(state.pendingNote);
+
+    // Phantom guard rule 1: the collect payload must parse.
+    if (payload === null) {
+      await this.deps.botStateRepository.set({ ownerId, state: IDLE, pendingMovementId: null, pendingNote: null });
+      await send(
+        { intent: "register_expense", ok: false, action: "none", amount: null, category: null, note: body },
+        questionDroppedReply(),
+      );
+      return;
+    }
+
+    await this.awaitingRegistrationAnswer(state, payload, envelope, body, ownerId, send, reply);
+  }
+
+  /**
+   * Shared collect-answer tail: dispatches on the DERIVED open field and
+   * resolves from the message/payload ONLY (phantom guard — the resolve value
+   * originates in the current message; `envelope.amount` is a brain rescue,
+   * positive-only, available in resolve mode only). T4: amount open → resolve
+   * the amount; T5: category open → the category cascade. A wrong-field or
+   * empty resolve re-asks (T9).
+   */
+  private async awaitingRegistrationAnswer(
+    state: BotStateRecord,
+    payload: RegistrationCollectPayload,
+    envelope: ConversationEnvelope | null,
+    body: string,
+    ownerId: string,
+    send: Sender,
+    reply?: ReplyPort,
+  ): Promise<void> {
+    void state;
+    // T6: an explicit abandonment answer clears the collect before any field
+    // resolution — nothing registers from the abandoned message.
+    if (COLLECT_ABANDON_ANSWERS.has(normalizeForMatch(body.trim()))) {
+      await this.deps.botStateRepository.set({ ownerId, state: IDLE, pendingMovementId: null, pendingNote: null });
+      await send(
+        { intent: "register_expense", ok: false, action: "none", amount: null, category: null, note: body },
+        collectAbandonedReply(),
+      );
+      return;
+    }
+    if (payload.amount === null) {
+      await this.resolveRegistrationAmount(payload, envelope, body, ownerId, send, reply);
+      return;
+    }
+    await this.resolveRegistrationCategory(payload, envelope, body, ownerId, send, reply);
+  }
+
+  /**
+   * T4: the amount is open. The amount comes from the message
+   * (`normalizeAmountString(body) ?? parseAmount(body)`), then the brain
+   * amount as positive-only rescue (never fabricated). With amount and
+   * category resolved the registration completes from the STORED context;
+   * with only the amount resolved the payload persists it and the category is
+   * asked. A resolve with no amount re-asks (T9) — never fabricates, never
+   * reprocesses.
+   */
+  private async resolveRegistrationAmount(
+    payload: RegistrationCollectPayload,
+    envelope: ConversationEnvelope | null,
+    body: string,
+    ownerId: string,
+    send: Sender,
+    reply?: ReplyPort,
+  ): Promise<void> {
+    const brainRescue =
+      envelope !== null && envelope.amount !== null && envelope.amount > 0 ? envelope.amount : null;
+    const amount = normalizeAmountString(body) ?? parseAmount(body) ?? brainRescue;
+
+    if (amount === null) {
+      await send(
+        {
+          intent: "register_expense",
+          ok: false,
+          action: "asked_registration",
+          amount: null,
+          category: null,
+          note: body,
+          asked_field: "amount",
+        },
+        keptCollectingReply("amount"),
+      );
+      return;
+    }
+
+    if (payload.category !== null) {
+      // Complete: register from the stored context (shared/planned/override
+      // come from the payload, never the resolve envelope).
+      await this.registerWithCategory(payload.body, amount, payload.note, payload.category, ownerId, payload.shared, payload.planned, payload.override, send);
+      return;
+    }
+
+    // Keep collecting: persist the amount and ask the category.
+    const updated: RegistrationCollectPayload = { ...payload, amount };
+    await this.deps.botStateRepository.set({
+      ownerId,
+      state: AWAITING_REGISTRATION,
+      pendingMovementId: null,
+      pendingNote: JSON.stringify(updated),
+    });
+    await send(
+      {
+        intent: "register_expense",
+        ok: false,
+        action: "asked_registration",
+        amount,
+        category: null,
+        note: payload.note,
+        asked_field: "category",
+      },
+      askCategoryReply(payload.note),
+    );
+  }
+
+  /**
+   * T5: the category is open. The category cascade resolves the answer
+   * (envelope category in resolve mode, raw body in D6 mode) against the
+   * persisted payload; the registration completes from the STORED context.
+   *
+   * Cascade order (design "Deterministic Resolver Authority"): abandon words →
+   * exact normalized match → folded plural match → `CATEGORY_AFFIRM_ANSWERS`
+   * (stay open, re-ask) → `parseAmountAndNote(body) !== null` (D6 rule 2:
+   * abandon the collect and reprocess as a new registration) → single-token
+   * guarded `createCategory` (reserved reject → stay open with redirect) →
+   * multi-word → `categoryNotFoundReply` list, stay open. Never dead-ends,
+   * never auto-creates nonsense.
+   */
+  private async resolveRegistrationCategory(
+    payload: RegistrationCollectPayload,
+    envelope: ConversationEnvelope | null,
+    body: string,
+    ownerId: string,
+    send: Sender,
+    reply?: ReplyPort,
+  ): Promise<void> {
+    const categories = await this.deps.categoryService.listCategories(ownerId);
+    // The candidate answer: the envelope category in resolve mode, the raw
+    // body in D6 mode (the brain is null/absent in that path).
+    const answer = envelope?.category?.trim() ?? body.trim();
+    const normalizedAnswer = normalizeForMatch(answer);
+    const trimmed = answer;
+
+    // Abandon words: an explicit out clears the collect, nothing registers.
+    if (COLLECT_ABANDON_ANSWERS.has(normalizedAnswer)) {
+      await this.deps.botStateRepository.set({ ownerId, state: IDLE, pendingMovementId: null, pendingNote: null });
+      await send(
+        { intent: "register_expense", ok: false, action: "none", amount: null, category: null, note: body },
+        collectAbandonedReply(),
+      );
+      return;
+    }
+
+    // T5 rule 1: exact normalized match on an existing category → ANSWER.
+    const exactCategory = categories.find((category) => normalizeForMatch(category.name) === normalizedAnswer);
+    if (exactCategory !== undefined) {
+      await this.registerWithCategory(payload.body, payload.amount as number, payload.note, exactCategory.name, ownerId, payload.shared, payload.planned, payload.override, send);
+      return;
+    }
+
+    // T5 rule 1 (folded): a plural variant of an existing category is the
+    // ANSWER, never a new category ("cafes" resolves to "Cafe").
+    const foldedCategory = categories.find(
+      (category) => normalizeForMatchTolerant(category.name) === normalizeForMatchTolerant(answer),
+    );
+    if (foldedCategory !== undefined) {
+      await this.registerWithCategory(payload.body, payload.amount as number, payload.note, foldedCategory.name, ownerId, payload.shared, payload.planned, payload.override, send);
+      return;
+    }
+
+    // An affirmation to the collect question keeps the dialog open and
+    // re-asks — never auto-creates a category named "si" (T9).
+    if (CATEGORY_AFFIRM_ANSWERS.has(normalizedAnswer)) {
+      await send(
+        {
+          intent: "register_expense",
+          ok: false,
+          action: "asked_registration",
+          amount: payload.amount,
+          category: null,
+          note: payload.note,
+          asked_field: "category",
+        },
+        keptCollectingReply("category"),
+      );
+      return;
+    }
+
+    // T5 rule 2 (D6 verbatim): parses as amount → NEW registration; the
+    // pending collect is abandoned and the message reprocessed normally.
+    if (parseAmountAndNote(body) !== null) {
+      await this.deps.botStateRepository.set({ ownerId, state: IDLE, pendingMovementId: null, pendingNote: null });
+      await send(
+        { intent: "register_expense", ok: false, action: "none", amount: null, category: null, note: body },
+        collectAbandonedReply(),
+      );
+      await this.handleRegistration(body, ownerId, payload.shared, payload.planned, payload.override, reply);
+      return;
+    }
+
+    // T5 rule 3: a single token → ANSWER + auto-create, routed through the
+    // guarded choke point. A reserved reject keeps the collect open with a
+    // redirect.
+    if (trimmed.split(/\s+/).length === 1) {
+      try {
+        const created = await this.deps.categoryService.createCategory(ownerId, trimmed);
+        await this.registerWithCategory(payload.body, payload.amount as number, payload.note, created.name, ownerId, payload.shared, payload.planned, payload.override, send);
+        return;
+      } catch (error) {
+        if (error instanceof ReservedCategoryError) {
+          await send(
+            {
+              intent: "register_expense",
+              ok: false,
+              action: "asked_registration",
+              amount: payload.amount,
+              category: null,
+              note: trimmed,
+              asked_field: "category",
+              error: "reserved",
+              message: reservedCategoryReply(trimmed, error.concept),
+            },
+            reservedCategoryReply(trimmed, error.concept),
+          );
+          return;
+        }
+        throw error;
+      }
+    }
+
+    // A multi-word non-category answer → DO NOT dead-end: list the existing
+    // categories so the user can pick, keeping the collect open.
+    await send(
+      {
+        intent: "register_expense",
+        ok: false,
+        action: "asked_registration",
+        amount: payload.amount,
+        category: null,
+        note: trimmed,
+        asked_field: "category",
+      },
+      categoryNotFoundReply(trimmed, categories.map((category) => category.name)),
+    );
+  }
+
   private async answerCorrection(
     state: BotStateRecord,
     category: string,
@@ -892,12 +1285,23 @@ private async handleDialogMessage(
     // An affirmation ("si", "dale") to the correction offer keeps the dialog
     // open and asks for the target category. Intercepted BEFORE the brain: a
     // bare "si" must never be routed as off_topic nor auto-create a category.
-    if (
-      state.state === AWAITING_CATEGORY &&
-      CATEGORY_AFFIRM_ANSWERS.has(normalizeForMatch(body.trim()))
-    ) {
+    // The registration-collect dialog gets the same interception: a bare
+    // "dale" must never be classified register_expense(amount:null) and
+    // destroy the collect via abandon+re-enter (design "Pre-brain
+    // interception" :855-861).
+    if (state.state === AWAITING_CATEGORY && CATEGORY_AFFIRM_ANSWERS.has(normalizeForMatch(body.trim()))) {
       await this.safeReply(reply, categoryFollowUpReply());
       return;
+    }
+    if (state.state === AWAITING_REGISTRATION && CATEGORY_AFFIRM_ANSWERS.has(normalizeForMatch(body.trim()))) {
+      const payload = this.decodeCollectPayload(state.pendingNote);
+      if (payload !== null) {
+        const openField = payload.amount === null ? "amount" : "category";
+        await this.safeReply(reply, keptCollectingReply(openField));
+        return;
+      }
+      // A corrupt payload cannot be intercepted: fall through so the D6
+      // fallback owns it (T10).
     }
 
     const context = this.buildInterpretContext(state);
@@ -940,13 +1344,17 @@ private async handleDialogMessage(
       await this.d6AwaitingCategory(state, body, ownerId, shared, planned, override, reply);
       return;
     }
+    if (state.state === AWAITING_REGISTRATION) {
+      await this.d6AwaitingRegistration(state, body, ownerId, shared, planned, override, reply);
+      return;
+    }
     await this.d6AwaitingAmountConfirmation(state, body, ownerId, shared, planned, override, reply);
   }
 
   /**
    * Reconstructs the `InterpretContext` from the persisted state (design
    * "buildInterpretContext"). A corrupt amount-confirmation payload yields null
-   * so the D6 fallback (today's abandon-and-reprocess) owns the message.
+   * so the D6 fallback (today's abandon-and-reprocess rules) owns the message.
    */
   private buildInterpretContext(state: BotStateRecord): InterpretContext | null {
     if (state.state === AWAITING_CATEGORY) {
@@ -954,6 +1362,18 @@ private async handleDialogMessage(
         state: "awaiting_category",
         pending: { movementId: state.pendingMovementId, note: state.pendingNote },
         openQuestion: `¿Querés asignarle otra categoría al movimiento "${state.pendingNote ?? ""}"? Escribí el nombre o "no".`,
+      };
+    }
+    if (state.state === AWAITING_REGISTRATION) {
+      const payload = this.decodeCollectPayload(state.pendingNote);
+      if (payload === null) {
+        return null;
+      }
+      const openField = payload.amount === null ? "amount" : "category";
+      return {
+        state: "awaiting_registration",
+        pending: { amount: payload.amount, category: payload.category, note: payload.note },
+        openQuestion: openField === "amount" ? askAmountReply(payload.note) : askCategoryReply(payload.note),
       };
     }
     const payload = this.decodeConfirmationPayload(state.pendingNote);
@@ -977,6 +1397,10 @@ private async handleDialogMessage(
   ): Promise<void> {
     if (state.state === AWAITING_CATEGORY) {
       await this.resolveAwaitingCategory(state, envelope, ownerId, reply);
+      return;
+    }
+    if (state.state === AWAITING_REGISTRATION) {
+      await this.resolveAwaitingRegistration(state, envelope, body, ownerId, reply);
       return;
     }
     await this.resolveAwaitingAmountConfirmation(state, envelope, body, ownerId, reply);
@@ -1184,7 +1608,9 @@ private async handleDialogMessage(
           const abandoned =
             dialog.state.state === AWAITING_AMOUNT_CONFIRMATION
               ? amountConfirmationAbandonedReply()
-              : correctionAbandonedReply();
+              : dialog.state.state === AWAITING_REGISTRATION
+                ? collectAbandonedReply()
+                : correctionAbandonedReply();
           await this.safeReply(reply, abandoned);
         }
         await this.executeRegistration(body, parseAmountAndNote(body), envelope, await this.deps.categoryService.listCategories(ownerId), ownerId, shared, planned, override, reply);

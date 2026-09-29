@@ -19,7 +19,8 @@ import {
   queryRedirectReply,
   reservedCategoryReply,
 } from "./reply-text";
-import { amountConfirmationPayloadSchema, TelegramService } from "./telegram.service";
+import { amountConfirmationPayloadSchema, registrationCollectPayloadSchema, TelegramService } from "./telegram.service";
+import { BOT_STATES } from "./bot-state.repository";
 
 const OWNER_CHAT_ID = 123456789;
 const ownerId = "default";
@@ -239,6 +240,77 @@ function emptySummary() {
       planned: { month: "2026-09", total: 0 },
   };
 }
+
+describe("registrationCollectPayloadSchema", () => {
+  it("parses a full collect payload with amount, category, note and flags", () => {
+    const result = registrationCollectPayloadSchema.safeParse({
+      body: "quiero cargar un gasto previsto",
+      note: "gym",
+      amount: 5000,
+      category: "Gimnasio",
+      shared: true,
+      planned: true,
+      override: { kind: "percent", percent: 10 },
+    });
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.note).toBe("gym");
+      expect(result.data.amount).toBe(5000);
+      expect(result.data.category).toBe("Gimnasio");
+      expect(result.data.shared).toBe(true);
+      expect(result.data.planned).toBe(true);
+      expect(result.data.override).toEqual({ kind: "percent", percent: 10 });
+    }
+  });
+
+  it("accepts a nullable amount and category (open fields)", () => {
+    const result = registrationCollectPayloadSchema.safeParse({
+      body: "gym",
+      note: "gym",
+      amount: null,
+      category: null,
+    });
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.amount).toBeNull();
+      expect(result.data.category).toBeNull();
+    }
+  });
+
+  it("defaults shared, planned and override when omitted", () => {
+    const result = registrationCollectPayloadSchema.safeParse({
+      body: "gym",
+      note: null,
+      amount: null,
+      category: null,
+    });
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.shared).toBe(false);
+      expect(result.data.planned).toBe(false);
+      expect(result.data.override).toEqual({ kind: "none" });
+    }
+  });
+
+  it.each([0, -5])("rejects a non-positive amount (%s)", (amount) => {
+    expect(
+      registrationCollectPayloadSchema.safeParse({ body: "x", note: null, amount, category: null }).success,
+    ).toBe(false);
+  });
+
+  it("rejects an empty body", () => {
+    expect(
+      registrationCollectPayloadSchema.safeParse({ body: "", note: null, amount: null, category: null }).success,
+    ).toBe(false);
+  });
+
+  it("declares awaiting_registration as a persisted bot state", () => {
+    expect(BOT_STATES).toContain("awaiting_registration");
+  });
+});
 
 describe("TelegramService state machine", () => {
   let h: Harness;

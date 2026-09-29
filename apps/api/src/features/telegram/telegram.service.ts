@@ -108,6 +108,7 @@ const AWAITING_SETUP = "awaiting_setup";
 const AWAITING_CATEGORY = "awaiting_category";
 const AWAITING_AMOUNT_CONFIRMATION = "awaiting_amount_confirmation";
 const AWAITING_MOVEMENT_SELECTION = "awaiting_movement_selection";
+const AWAITING_REGISTRATION = "awaiting_registration";
 
 /**
  * Stored payload of an open amount-conflict question. Lives in
@@ -135,6 +136,28 @@ export const amountConfirmationPayloadSchema = z.object({
 });
 
 export type AmountConfirmationPayload = z.infer<typeof amountConfirmationPayloadSchema>;
+
+/**
+ * Stored payload of an open registration-collection dialog
+ * (`awaiting_registration`). Lives in `BotState.pendingNote` (a String
+ * column) so it survives restarts — no Prisma migration, `pendingNote` + zod
+ * is the version contract (D5). The open field is DERIVED deterministically:
+ * `amount === null` → ask amount; else `category === null` → ask category. The
+ * `shared`/`planned` bits and the savings `override` are persisted so a
+ * dialog-created registration keeps the signals of the message that opened
+ * the collect (AD6/D10/D6).
+ */
+export const registrationCollectPayloadSchema = z.object({
+  body: z.string().min(1),
+  note: z.string().nullable(),
+  amount: z.number().positive().nullable(),
+  category: z.string().min(1).nullable(),
+  shared: z.boolean().default(false),
+  planned: z.boolean().default(false),
+  override: savingsOverrideSchema.default({ kind: "none" }),
+});
+
+export type RegistrationCollectPayload = z.infer<typeof registrationCollectPayloadSchema>;
 
 /**
  * Stored payload of an open "which movement do I correct?" question (D4).
@@ -581,6 +604,23 @@ export class TelegramService {
     }
     try {
       const parsed = amountConfirmationPayloadSchema.safeParse(JSON.parse(pendingNote));
+      return parsed.success ? parsed.data : null;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Decodes a persisted registration-collect payload. Corrupt or missing
+   * JSON yields null → the T10 recovery owns the message (idle + dropped
+   * reply, nothing registers, no reprocessing).
+   */
+  private decodeCollectPayload(pendingNote: string | null): RegistrationCollectPayload | null {
+    if (pendingNote === null) {
+      return null;
+    }
+    try {
+      const parsed = registrationCollectPayloadSchema.safeParse(JSON.parse(pendingNote));
       return parsed.success ? parsed.data : null;
     } catch {
       return null;

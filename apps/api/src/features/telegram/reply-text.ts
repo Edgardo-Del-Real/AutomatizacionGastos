@@ -255,6 +255,40 @@ export function offTopicRedirectReply(): string {
   return "Solo registro gastos e ingresos: mandá el monto con una nota (ej: $2500 supermercado) y lo cargo al toque.";
 }
 
+/**
+ * Registration-collection questions (spec "asked_registration Reply Action").
+ * The collect dialog asks one field at a time: the amount first, then the
+ * category. The note is echoed when the collect already carries one.
+ */
+
+/** Asks the amount of a registration being collected (open field: amount). */
+export function askAmountReply(note: string | null): string {
+  const notePart = note === null ? "" : ` (${truncateNote(note)})`;
+  return `¿Qué monto tiene el gasto${notePart}? Mandame el número.`;
+}
+
+/** Asks the category of a registration being collected (open field: category). */
+export function askCategoryReply(note: string | null): string {
+  const notePart = note === null ? "" : ` (${truncateNote(note)})`;
+  return `¿En qué categoría lo guardo${notePart}? Mandame el nombre.`;
+}
+
+/** Re-asks the open collect field after a non-answer (never dead-ends). */
+export function keptCollectingReply(field: "amount" | "category"): string {
+  const missing = field === "amount" ? "el monto" : "el nombre de la categoría";
+  return `Sigo con el registro: falta ${missing}. Si querés cancelarlo, mandá "no, dejalo".`;
+}
+
+/** Explicit abandon of the collect: nothing registered, nothing pending. */
+export function collectAbandonedReply(): string {
+  return "Dale, cancelé el registro. No guardé nada.";
+}
+
+/** Warm, expense-scoped greeting for the `greeting` intent (dialogs stay open). */
+export function greetingReply(): string {
+  return "¡Hola! Estoy para tus gastos: mandame un monto con una nota (ej: $2500 supermercado) y lo cargo al toque.";
+}
+
 export function categoryCreatedReply(name: string): string {
   return `Categoría "${name}" creada.`;
 }

@@ -4,6 +4,8 @@ import type { MovementCandidate } from "./movement-corrector";
 import {
   amountConfirmationAbandonedReply,
   amountConflictReply,
+  askAmountReply,
+  askCategoryReply,
   balanceQueryReply,
   capabilitiesSummaryReply,
   categoriesQueryReply,
@@ -16,12 +18,15 @@ import {
   categoryListReply,
   categoryNotFoundReply,
   categoryRenamedReply,
+  collectAbandonedReply,
   correctionAbandonedReply,
   correctionDoneReply,
   correctionOfferReply,
   duplicateCategoryReply,
   formatARS,
+  greetingReply,
   helpReply,
+  keptCollectingReply,
   keywordAssociatedReply,
   missingCategoryReply,
   monthQueryReply,
@@ -494,5 +499,58 @@ describe("movement correction reply templates", () => {
     );
 
     expect(text).toBe(categoryCreatedReassignedReply("gastos hormiga"));
+  });
+});
+
+describe("registration collection reply templates", () => {
+  it("asks for the amount, echoing the collected note when present", () => {
+    const text = askAmountReply("gym");
+
+    expect(text).toContain("¿Qué monto tiene el gasto (gym)?");
+    expect(text).toContain("Mandame el número.");
+  });
+
+  it("asks for the amount without a note when the collect has none", () => {
+    expect(askAmountReply(null)).toBe("¿Qué monto tiene el gasto? Mandame el número.");
+  });
+
+  it("asks for the category, echoing the collected note when present", () => {
+    const text = askCategoryReply("alquiler");
+
+    expect(text).toContain("¿En qué categoría lo guardo (alquiler)?");
+    expect(text).toContain("Mandame el nombre.");
+  });
+
+  it("asks for the category without a note when the collect has none", () => {
+    expect(askCategoryReply(null)).toBe("¿En qué categoría lo guardo? Mandame el nombre.");
+  });
+
+  it("re-asks the open amount field when a non-answer arrives", () => {
+    const text = keptCollectingReply("amount");
+
+    expect(text).toContain("Sigo con el registro: falta el monto.");
+    expect(text).toContain('Si querés cancelarlo, mandá "no, dejalo".');
+  });
+
+  it("re-asks the open category field when a non-answer arrives", () => {
+    const text = keptCollectingReply("category");
+
+    expect(text).toContain("Sigo con el registro: falta el nombre de la categoría.");
+    expect(text).toContain('Si querés cancelarlo, mandá "no, dejalo".');
+  });
+
+  it("confirms the abandoned collect without claiming a registration", () => {
+    const text = collectAbandonedReply();
+
+    expect(text).toContain("cancelé el registro");
+    expect(text).toContain("No guardé nada");
+  });
+
+  it("greets warmly and expense-scoped, with a registration example", () => {
+    const text = greetingReply();
+
+    expect(text).toContain("¡Hola!");
+    expect(text).toContain("gastos");
+    expect(text).toContain("2500 supermercado");
   });
 });

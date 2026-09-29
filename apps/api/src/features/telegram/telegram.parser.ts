@@ -18,9 +18,11 @@ export function parseSharedPrefix(text: string): { text: string; shared: boolean
 /**
  * D10 — the arrival prefixes (`compartido:` and `previsto:`) are parsed ONCE
  * at arrival by a loop that strips them in ANY order. Both are authoritative
- * (they work without the bot brain and win over brain signals) and composable:
- * "compartido: previsto: 2500 alquiler" and "previsto: compartido: 2500
- * alquiler" produce the same { text, shared, planned } result.
+ * (they work without the bot brain and win over brain signals): "compartido:
+ * previsto: 2500 alquiler" and "previsto: compartido: 2500 alquiler" produce
+ * the same { text, shared, planned } result. A message carrying BOTH flags is
+ * rejected by the service with an educational redirect — planned expenses are
+ * INDIVIDUAL by design and never combine with `compartido:`.
  */
 export type ArrivalPrefixes = { text: string; shared: boolean; planned: boolean };
 

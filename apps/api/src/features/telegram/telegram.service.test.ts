@@ -15,6 +15,7 @@ import {
   formatARS,
   helpReply,
   offTopicRedirectReply,
+  plannedSharedRejectedReply,
   queryRedirectReply,
   reservedCategoryReply,
 } from "./reply-text";
@@ -2802,16 +2803,54 @@ describe("TelegramService planned registration (previsto:)", () => {
   it.each([
     ["compartido: previsto: 2500 alquiler", "compartido first"],
     ["previsto: compartido: 2500 alquiler", "previsto first"],
-  ])("composes previsto: with compartido: in any order (%s)", async (text) => {
+  ])("rejects previsto: combined with compartido: with an individual-only redirect (%s)", async (text) => {
     seedHarnessCategories(h, ["Vivienda", "otro"]);
     h.mockMatchNote.mockResolvedValue("Vivienda");
 
     await h.service.handleUpdate(textUpdate({ text, messageId: 1 }), h.reply);
 
+    // Planned expenses are INDIVIDUAL by design: nothing is created, no dialog
+    // starts, the state stays untouched and the educational redirect replies.
+    expect(h.mockCreateExpense).not.toHaveBeenCalled();
+    expect(h.mockSetState).not.toHaveBeenCalled();
+    expect(h.replies.at(-1)).toBe(plannedSharedRejectedReply());
+  });
+
+  it("registers a compartido: prefix as SHARED (normal shared expenses keep working)", async () => {
+    seedHarnessCategories(h, ["Vivienda", "otro"]);
+    h.mockMatchNote.mockResolvedValue("Vivienda");
+
+    await h.service.handleUpdate(textUpdate({ text: "compartido: 2500 expensas", messageId: 1 }), h.reply);
+
+    expect(h.mockCreateExpense).toHaveBeenCalledWith(
+      expect.objectContaining({ amount: 2500, category: "Vivienda", type: "EXPENSE" }),
+      ownerId,
+      { visibility: "SHARED" },
+    );
+    expect(h.replies.at(-1)).not.toBe(plannedSharedRejectedReply());
+  });
+
+  it("forces INDIVIDUAL when the brain sets both shared and planned flags (safety net)", async () => {
+    seedHarnessCategories(h, ["Vivienda", "otro"]);
+    h.mockBrainInterpret.mockResolvedValue({
+      intent: "register_expense",
+      amount: 2500,
+      category: "Vivienda",
+      note: "alquiler",
+      shared: true,
+      planned: true,
+    });
+
+    await h.service.handleUpdate(
+      textUpdate({ text: "dejalo compartido para el mes que viene: 2500 alquiler", messageId: 1 }),
+      h.reply,
+    );
+
+    // A leaked SHARED flag must never persist on a PENDING row: planned wins.
     expect(h.mockCreateExpense).toHaveBeenCalledWith(
       expect.objectContaining({ amount: 2500, category: "Vivienda", type: "EXPENSE", status: "PENDING" }),
       ownerId,
-      { visibility: "SHARED" },
+      { visibility: "INDIVIDUAL" },
     );
   });
 

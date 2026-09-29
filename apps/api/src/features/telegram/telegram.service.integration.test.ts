@@ -1015,7 +1015,9 @@ describe("TelegramService (integration)", () => {
       replies.push(text);
     };
 
-    // Deterministic bot (no brain): both prefix orders register PENDING rows.
+    // Deterministic bot (no brain): the plain previsto: registers a PENDING
+    // row; the combined compartido:+previsto: orders (either way) are REJECTED
+    // with the individual-only redirect and create nothing.
     await service.handleUpdate(
       textUpdate({ messageId: 1, text: "previsto: 2500 alquiler" }),
       reply,
@@ -1030,10 +1032,12 @@ describe("TelegramService (integration)", () => {
     );
 
     const rows = await prisma.expense.findMany({ where: { ownerId }, orderBy: { occurredAt: "asc" } });
-    expect(rows).toHaveLength(3);
-    expect(rows.every((row) => row.status === "PENDING")).toBe(true);
-    expect(rows.every((row) => row.type === "EXPENSE")).toBe(true);
-    expect(rows.map((row) => row.visibility).sort()).toEqual(["INDIVIDUAL", "SHARED", "SHARED"]);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.status).toBe("PENDING");
+    expect(rows[0]?.type).toBe("EXPENSE");
+    expect(rows[0]?.visibility).toBe("INDIVIDUAL");
+    // Both combinations answered the educational redirect; nothing registered.
+    expect(replies.filter((r) => r.includes("previstos son individuales"))).toHaveLength(2);
     expect(replies.join("\n")).toContain("previsto");
     // The KPIs exclude PENDING: only the planned block reports the total.
     const summary = await new MovementService(new PrismaMovementRepository(prisma), categoryService).getSummary({
@@ -1042,9 +1046,9 @@ describe("TelegramService (integration)", () => {
       visibility: "all",
     });
     expect(summary.kpis.expenses).toBe(0);
-    expect(summary.planned.total).toBe(5200);
+    expect(summary.planned.total).toBe(2500);
 
-    // "¿cuánto tengo previsto?" answers 5200 from real data through the brain path.
+    // "¿cuánto tengo previsto?" answers 2500 from real data through the brain path.
     const queryReplies: string[] = [];
     const stubbed = buildService(
       () => undefined,
@@ -1059,7 +1063,7 @@ describe("TelegramService (integration)", () => {
         queryReplies.push(text);
       },
     );
-    expect(queryReplies.at(-1)).toContain(formatARS(5200));
+    expect(queryReplies.at(-1)).toContain(formatARS(2500));
 
     // Recent excludes PENDING rows at the telegram layer (repository keeps them).
     const recentReplies: string[] = [];

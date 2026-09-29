@@ -34,6 +34,7 @@ import {
   otroKeptReply,
   plannedQueryReply,
   plannedReply,
+  plannedSharedRejectedReply,
   queryReplyTemplate,
   questionDroppedReply,
   recentQueryReply,
@@ -311,6 +312,14 @@ describe("query reply templates", () => {
 
   it("confirms a planned registration without a note", () => {
     expect(plannedReply(2500, null, "Vivienda")).toContain(formatARS(2500));
+  });
+
+  it("redirects compartido+previsto with the individual-planned teaching", () => {
+    const text = plannedSharedRejectedReply();
+
+    expect(text).toContain("individuales");
+    expect(text).toContain("previsto: monto nota");
+    expect(text).toContain("compartido: monto nota");
   });
 });
 

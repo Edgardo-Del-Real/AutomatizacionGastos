@@ -61,6 +61,7 @@ import {
   offTopicRedirectReply,
   otroKeptReply,
   plannedReply,
+  plannedSharedRejectedReply,
   queryRedirectReply,
   queryReplyTemplate,
   questionDroppedReply,
@@ -214,6 +215,14 @@ export class TelegramService {
     // arrival (loop-stripped in any order); the stripped text flows to the
     // brain/parser and the shared/planned bits are threaded down.
     const { text: sharedStripped, shared: sharedByPrefix, planned } = parseArrivalPrefixes(body);
+
+    // Planned expenses are INDIVIDUAL by design: combining `compartido:` with
+    // `previsto:` (either order) is rejected with an educational redirect and
+    // creates nothing — no registration, no dialog, state untouched.
+    if (sharedByPrefix && planned) {
+      await this.safeReply(reply, plannedSharedRejectedReply());
+      return;
+    }
 
     // D6 — the savings override ("sin ahorro" / "con X%") is parsed ONCE at
     // arrival right after the shared prefix, stripped before the parser/brain,
@@ -1468,7 +1477,9 @@ export class TelegramService {
         return this.registerIncomeSplit(body, amount, note, ownerId, shared, split.percent, send);
       }
     }
-    const movement = await this.createMovement(body, amount, note, category, ownerId, shared ? "SHARED" : "INDIVIDUAL", type, planned ? "PENDING" : undefined);
+    // Safety net: a PENDING row must NEVER persist SHARED — even if a future
+    // path leaks a shared flag onto a planned registration, INDIVIDUAL wins.
+    const movement = await this.createMovement(body, amount, note, category, ownerId, shared && !planned ? "SHARED" : "INDIVIDUAL", type, planned ? "PENDING" : undefined);
     if (movement === null) {
       return false;
     }
@@ -1515,7 +1526,9 @@ export class TelegramService {
       }
     }
     await this.deps.categoryService.ensureOtro(ownerId);
-    const movement = await this.createMovement(body, amount, note, "otro", ownerId, shared ? "SHARED" : "INDIVIDUAL", type, planned ? "PENDING" : undefined);
+    // Safety net: a PENDING row must NEVER persist SHARED — even if a future
+    // path leaks a shared flag onto a planned registration, INDIVIDUAL wins.
+    const movement = await this.createMovement(body, amount, note, "otro", ownerId, shared && !planned ? "SHARED" : "INDIVIDUAL", type, planned ? "PENDING" : undefined);
     if (movement === null) {
       return false;
     }

@@ -42,6 +42,15 @@ export function plannedReply(amount: number, note: string | null, category: stri
   return `Registrado como previsto: ${formatARS(amount)}${notePart} — Categoría: ${category}. Se suma cuando lo marques pagado.`;
 }
 
+/**
+ * Educational redirect for combining `compartido:` with `previsto:` (either
+ * order): planned expenses are INDIVIDUAL by design, so the combination is
+ * rejected and nothing is created.
+ */
+export function plannedSharedRejectedReply(): string {
+  return "Los gastos previstos son individuales: no se pueden marcar como compartidos. Usá 'previsto: monto nota' para un gasto previsto, o 'compartido: monto nota' para un gasto normal compartido.";
+}
+
 export function savingsRuleRedirectReply(): string {
   return "Para definir un ahorro automático usá el comando: registrar ahorro: <palabra> al <X>% (por ejemplo: registrar ahorro: entrenuts al 10%).";
 }

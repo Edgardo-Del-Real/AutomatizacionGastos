@@ -533,3 +533,193 @@ When a `create_category` envelope carries `then_reassign: true`, the system MUST
 - GIVEN an owner in `idle` with no pending movement sends "creá gastos hormiga y guardalo ahí"
 - WHEN the brain returns `create_category` with `then_reassign: true`
 - THEN only the category is created and no reassignment attempt occurs
+
+### Requirement: Savings Rule Command
+
+The system MUST recognize `registrar ahorro: <palabra> al <X>%` as an owner command that creates or upserts the savings rule (semantics per the savings capability) and MUST reply with a confirmation. A malformed percent MUST be rejected with a validation error and MUST NOT store a rule. Unrecognized commands MUST still fall through to normal registration parsing.
+
+#### Scenario: Define a savings rule
+
+- GIVEN owner sends "registrar ahorro: entrenuts al 10%"
+- WHEN it is processed
+- THEN the rule is created or upserted and a confirmation is sent
+
+#### Scenario: Invalid percent rejected
+
+- GIVEN owner sends "registrar ahorro: entrenuts al 0%"
+- WHEN it is processed
+- THEN a validation error replies and no rule is stored
+
+#### Scenario: Unrecognized command falls through
+
+- GIVEN owner text that is not a recognized command
+- WHEN it is processed
+- THEN it is treated as a normal registration
+
+### Requirement: Savings Split on Income Registration
+
+When an INCOME registration's note matches a savings-rule keyword and no override applies, the system MUST register the INCOME with the NET amount and a SAVINGS movement in the "ahorro" category in a single transaction (semantics per the savings capability), and the confirmation reply MUST report the gross, net, and savings amounts. A SHARED income MUST produce a SHARED savings movement. An income matching no rule MUST register whole as today.
+
+#### Scenario: Split applied on registration
+
+- GIVEN rule "entrenuts" at 10% and message "cobro sueldo de entrenuts 1000"
+- WHEN the message is processed
+- THEN INCOME 900 and SAVINGS 100 in "ahorro" are created in one transaction
+- AND the confirmation reports 1000 gross, 900 net, and 100 saved
+
+#### Scenario: Shared income shares the savings
+
+- GIVEN "compartido: cobro sueldo de entrenuts 1000" with a matching rule
+- WHEN the message is processed
+- THEN both the INCOME and the SAVINGS movement carry SHARED visibility
+
+#### Scenario: No rule registers whole
+
+- GIVEN an income matching no savings rule
+- WHEN the message is processed
+- THEN a single whole INCOME movement is created and the reply is today's confirmation
+
+### Requirement: Registration Overrides
+
+The system MUST parse the deterministic overrides "sin ahorro" and "con X%" at arrival alongside the `compartido:` prefix, and MUST apply them on the brain-absent path too. "sin ahorro" MUST register the full gross with no SAVINGS movement; "con X%" MUST replace the rule percent for that message only, with X validated as `0 < X <= 100`.
+
+#### Scenario: sin ahorro disables the split
+
+- GIVEN a matching rule and message "sin ahorro cobro sueldo de entrenuts 1000"
+- WHEN the message is processed
+- THEN INCOME 1000 registers whole and no SAVINGS movement is created
+
+#### Scenario: con X% overrides the rule percent
+
+- GIVEN a rule at 10% and message "con 5% cobro sueldo de entrenuts 1000"
+- WHEN the message is processed
+- THEN INCOME 950 and SAVINGS 50 are created
+
+#### Scenario: Override works without the brain
+
+- GIVEN `GROQ_API_KEY` unset and a matching rule
+- WHEN an income with "sin ahorro" or "con 5%" arrives
+- THEN the override applies deterministically with today's flow
+
+#### Scenario: Invalid override percent rejected
+
+- GIVEN a message "con 150% cobro sueldo de entrenuts 1000"
+- WHEN the message is processed
+- THEN the registration is rejected with a validation error and no movement is created
+
+### Requirement: Savings Query Routing
+
+The system MUST answer "cuánto ahorré este mes" from real data with the sum of SAVINGS movements in the current calendar month (semantics per the savings capability); an honest redirect MUST be used only when query execution fails.
+
+#### Scenario: Savings query answers real data
+
+- GIVEN SAVINGS 100 and 50 this month
+- WHEN the owner asks "cuánto ahorré este mes"
+- THEN the reply answers 150 from real data
+
+#### Scenario: Savings query failure redirects
+
+- GIVEN a savings query whose execution fails
+- WHEN the owner asks "cuánto ahorré este mes"
+- THEN an honest redirect replies and no amount is fabricated
+
+### Requirement: Planned Expense Registration (`previsto:` prefix)
+
+The system MUST parse a `previsto:` prefix at arrival, alongside the `compartido:` prefix, and MUST register the movement as a `PENDING` EXPENSE through the existing create path. Planned expenses are INDIVIDUAL by design: `previsto:` MUST NOT compose with `compartido:` — a message combining both prefixes (in either order) MUST be rejected with an educational redirect and MUST NOT create anything, start a dialog, or change the bot state. The prefix MUST work on the brain-absent path. A `previsto:` registration MUST NOT trigger any savings split. The deterministic prefix MUST be authoritative: when both a `previsto:` prefix and a brain `planned` flag are present, the prefix wins; a brain `planned: true` flag without the prefix MAY register a PENDING EXPENSE; on the brain-absent path only the prefix can produce PENDING. A `PENDING` registration MUST always persist as INDIVIDUAL, even when a shared signal leaks in.
+(Previously: only the literal `previsto:` prefix could produce PENDING; the brain envelope carried no `planned` field; `previsto:` composed with `compartido:`.)
+
+#### Scenario: previsto registers a planned expense
+
+- GIVEN owner text "previsto: 2500 alquiler"
+- WHEN it is processed
+- THEN a PENDING EXPENSE of 2500 is created and a confirmation replies
+
+#### Scenario: previsto combined with compartido rejected
+
+- GIVEN owner text "compartido: previsto: 2500 alquiler" (or "previsto: compartido: 2500 alquiler")
+- WHEN it is processed
+- THEN the educational redirect replies ("los gastos previstos son individuales") and no movement is created, no dialog starts, and the state stays untouched
+
+#### Scenario: brain-absent path
+
+- GIVEN `GROQ_API_KEY` unset
+- WHEN "previsto: 2500 alquiler" is processed
+- THEN the PENDING EXPENSE still registers deterministically
+
+#### Scenario: Prefix wins over the flag
+
+- GIVEN the brain returns `planned: false` and the text carries "previsto: 2500 alquiler"
+- WHEN it is processed
+- THEN the PENDING EXPENSE registers anyway (deterministic prefix authoritative)
+
+#### Scenario: Flag alone registers PENDING with the brain
+
+- GIVEN the brain returns `planned: true` for "dejalo para el mes que viene: 2500 alquiler" with no prefix
+- WHEN it is processed
+- THEN a PENDING EXPENSE registers
+
+### Requirement: Recent Movements Exclude Planned
+
+The bot's `recent` query MUST exclude PENDING movements; PENDING rows MUST be visible only through the `planned` query.
+
+#### Scenario: recent omits pending
+
+- GIVEN a PENDING EXPENSE and recent PAID movements
+- WHEN the owner asks for recent movements
+- THEN the reply lists only the PAID movements
+
+#### Scenario: planned still answers
+
+- GIVEN the same PENDING EXPENSE
+- WHEN the owner asks "¿cuánto tengo previsto?"
+- THEN the reply reports the planned total from real data
+
+### Requirement: Planned Query Routing
+
+The system MUST answer "¿cuánto tengo previsto?" and equivalent phrasings ("gastos fijos previstos", "cuánto voy a gastar el mes que viene") from real data: the sum of PENDING EXPENSE movements targeted at next month (`summary.planned`). An honest redirect MUST be used only when query execution fails.
+
+#### Scenario: planned query answers real data
+
+- GIVEN PENDING EXPENSE 2500 and 1500 targeted next month
+- WHEN the owner asks "¿cuánto tengo previsto?"
+- THEN the reply answers 4000 for next month from real data
+
+#### Scenario: no pending answers zero
+
+- GIVEN no PENDING EXPENSE
+- WHEN the owner asks "¿cuánto tengo previsto?"
+- THEN the reply answers 0 for next month
+
+#### Scenario: planned query failure redirects
+
+- GIVEN a planned query whose execution fails
+- WHEN the owner asks "¿cuánto tengo previsto?"
+- THEN an honest redirect replies and no amount is fabricated
+
+### Requirement: Guarded Category Creation Funnel
+
+Every bot-side category creation path — dialog single-token auto-create, `correct_category` target auto-create, `create_category` intent (including `then_reassign`), setup-list entries, and the `registrar categoria:` command — MUST funnel through the guarded `CategoryService.createCategory`. A name rejected by the reserved or duplicate-variant guards MUST produce a redirect reply, MUST NOT create any category, and MUST leave the pending correction (when one exists) open with the movement in "otro".
+
+#### Scenario: registrar command redirected
+
+- GIVEN owner sends "registrar categoria: previsto"
+- WHEN it is processed
+- THEN no category is created and a redirect reply teaches "previsto: monto nota"
+
+#### Scenario: Dialog auto-create gated
+
+- GIVEN an owner in `awaiting_category` replies "previsto"
+- WHEN it is processed
+- THEN no category is created, a redirect replies, and the pending correction stays open
+
+#### Scenario: then_reassign gated
+
+- GIVEN an owner in `awaiting_category` sends "creá gastos fijos y guardalo ahí"
+- WHEN the brain returns `create_category` with `then_reassign: true`
+- THEN no category is created and no reassignment occurs (a redirect replies instead)
+
+#### Scenario: Setup entry gated
+
+- GIVEN an owner in `awaiting_setup` replies "Cafe, gastos fijos"
+- WHEN it is processed
+- THEN "Cafe" is created and "gastos fijos" is rejected with a redirect (no category for it)

@@ -139,7 +139,7 @@ describe("parseArrivalPrefixes (D10)", () => {
     });
   });
 
-  it("strips compartido: and previsto: in either order (composable)", () => {
+  it("strips compartido: and previsto: in either order, setting both flags", () => {
     expect(parseArrivalPrefixes("compartido: previsto: 2500 alquiler")).toEqual({
       text: "2500 alquiler",
       shared: true,
@@ -150,6 +150,8 @@ describe("parseArrivalPrefixes (D10)", () => {
       shared: true,
       planned: true,
     });
+    // Both flags together are REJECTED downstream by the service (planned
+    // expenses are INDIVIDUAL by design); the parser only reports the flags.
   });
 
   it("returns the text untouched with both flags false when no prefix is present", () => {

@@ -1202,11 +1202,23 @@ describe("prompt contracts", () => {
     expect(INTERPRET_SYSTEM_PROMPT).toContain("no lo dupliques");
   });
 
+  it("teaches explicit previsto signals for planned: true and keeps the future-signal brake", () => {
+    expect(INTERPRET_SYSTEM_PROMPT).toContain("agendalo");
+    expect(INTERPRET_SYSTEM_PROMPT).toContain("gasto fijo previsto");
+    expect(INTERPRET_SYSTEM_PROMPT).toContain("sin señal de futuro");
+    expect(INTERPRET_SYSTEM_PROMPT).toContain("gasto normal ya pagado");
+  });
+
   it("models a planned phrasing in the interpret few-shots", () => {
     const shot = FEW_SHOTS.find(
       (message) => message.role === "assistant" && message.content.includes('"planned":true'),
     );
     expect(shot).toBeDefined();
+  });
+
+  it("models the explicit previsto keyword in the interpret few-shots", () => {
+    const previstoShot = FEW_SHOTS.find((message) => message.role === "user" && message.content.includes("previsto"));
+    expect(previstoShot).toBeDefined();
   });
 
   it("documents correct_category reference extraction in the interpret prompt", () => {

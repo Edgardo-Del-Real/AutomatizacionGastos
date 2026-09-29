@@ -232,7 +232,7 @@ export const INTERPRET_SYSTEM_PROMPT = [
   'Para "correct_category": "category" es la categoría DESTINO; "amount" y/o "note" identifican el movimiento a corregir.',
   '"then_reassign" es true SOLO cuando "create_category" pide guardar el movimiento pendiente en la categoría nueva (ej: "creá X y guardalo ahí"); en cualquier otro caso false.',
   '"shared" es true SOLO en "register_expense" cuando el dueño pide que el gasto sea compartido con su pareja ("ponelo compartido", "es compartido"); en cualquier otro caso false. Si el mensaje ya trae el prefijo "compartido:" el bot lo maneja solo: no lo dupliques.',
-  '"planned" es true SOLO en "register_expense" cuando el dueño quiere dejar el gasto para el mes que viene ("dejalo para el mes que viene", "lo pago el mes que viene", "quiero dejar un gasto previsto para el mes que viene"); en cualquier otro caso false. Es una SUGERENCIA: el bot nunca crea el estado previsto por sí mismo. Si el mensaje ya trae el prefijo "previsto:" el bot lo maneja solo: no lo dupliques.',
+  '"planned" es true SOLO en "register_expense" cuando el dueño expresa intención explícita de agendar el gasto: escribe "previsto", "gasto previsto" o "gasto fijo previsto", o frases como "dejalo para el mes que viene", "lo pago el mes que viene", "agendalo", "quiero dejar un gasto previsto para el mes que viene". En cualquier otro caso false: un "gasto fijo" sin señal de futuro es un gasto normal ya pagado, NUNCA previsto. Si el mensaje ya trae el prefijo "previsto:" el bot lo maneja solo: no lo dupliques.',
 ].join(" ");
 
 export const FEW_SHOTS: readonly ChatMessage[] = [
@@ -252,6 +252,11 @@ export const FEW_SHOTS: readonly ChatMessage[] = [
     content: '{"intent":"register_expense","amount":null,"category":null,"note":"alquiler","shared":true}',
   },
   { role: "user", content: "dejalo para el mes que viene: 2500 alquiler" },
+  {
+    role: "assistant",
+    content: '{"intent":"register_expense","amount":2500,"category":null,"note":"alquiler","planned":true}',
+  },
+  { role: "user", content: "dejá previsto el alquiler de 2500" },
   {
     role: "assistant",
     content: '{"intent":"register_expense","amount":2500,"category":null,"note":"alquiler","planned":true}',

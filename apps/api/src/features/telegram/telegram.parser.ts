@@ -28,7 +28,16 @@ export type ArrivalPrefixes = { text: string; shared: boolean; planned: boolean 
 
 const ARRIVAL_PREFIXES: readonly { re: RegExp; apply: (prefixes: ArrivalPrefixes) => void }[] = [
   { re: /^compartido\s*:\s*/i, apply: (prefixes) => void (prefixes.shared = true) },
-  { re: /^previsto\s*:\s*/i, apply: (prefixes) => void (prefixes.planned = true) },
+  {
+    // D12 — the previsto marker is tolerant: "previsto" with or without the
+    // colon, plus the product phrasings "gasto previsto" / "gasto fijo
+    // previsto". It requires CONTENT after the marker (a marker alone is not a
+    // registration, and a lone "previsto" answer in a dialog stays a category
+    // answer). The brake: a plain "gasto fijo" WITHOUT the previsto word is a
+    // normal paid expense and never marks planned.
+    re: /^(?:gasto\s+fijo\s+|gasto\s+)?previsto\s*:?\s+/i,
+    apply: (prefixes) => void (prefixes.planned = true),
+  },
 ];
 
 export function parseArrivalPrefixes(text: string): ArrivalPrefixes {

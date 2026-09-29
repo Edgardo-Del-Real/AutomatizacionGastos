@@ -157,6 +157,71 @@ describe("parseArrivalPrefixes (D10)", () => {
   it("returns the text untouched with both flags false when no prefix is present", () => {
     expect(parseArrivalPrefixes("2500 alquiler")).toEqual({ text: "2500 alquiler", shared: false, planned: false });
   });
+
+  it("accepts the previsto marker without the colon (D12)", () => {
+    expect(parseArrivalPrefixes("previsto alquiler 2500")).toEqual({
+      text: "alquiler 2500",
+      shared: false,
+      planned: true,
+    });
+    expect(parseArrivalPrefixes("PREVISTO 2500 alquiler")).toEqual({
+      text: "2500 alquiler",
+      shared: false,
+      planned: true,
+    });
+  });
+
+  it("accepts 'gasto previsto' and 'gasto fijo previsto' markers with or without the colon", () => {
+    expect(parseArrivalPrefixes("gasto previsto alquiler 2500")).toEqual({
+      text: "alquiler 2500",
+      shared: false,
+      planned: true,
+    });
+    expect(parseArrivalPrefixes("gasto fijo previsto: alquiler 2500")).toEqual({
+      text: "alquiler 2500",
+      shared: false,
+      planned: true,
+    });
+    expect(parseArrivalPrefixes("Gasto Fijo Previsto alquiler 2500")).toEqual({
+      text: "alquiler 2500",
+      shared: false,
+      planned: true,
+    });
+  });
+
+  it("does not treat a plain 'gasto fijo' without the previsto signal as planned (the brake)", () => {
+    expect(parseArrivalPrefixes("gasto fijo alquiler 2500")).toEqual({
+      text: "gasto fijo alquiler 2500",
+      shared: false,
+      planned: false,
+    });
+  });
+
+  it("does not treat a trailing previsto word as a planned marker", () => {
+    expect(parseArrivalPrefixes("alquiler 2500 previsto")).toEqual({
+      text: "alquiler 2500 previsto",
+      shared: false,
+      planned: false,
+    });
+  });
+
+  it("does not treat a lone previsto marker as planned (dialog category answers stay intact)", () => {
+    expect(parseArrivalPrefixes("previsto")).toEqual({ text: "previsto", shared: false, planned: false });
+    expect(parseArrivalPrefixes("previsto:")).toEqual({ text: "previsto:", shared: false, planned: false });
+  });
+
+  it("strips the colon-less previsto marker together with compartido: in either order", () => {
+    expect(parseArrivalPrefixes("compartido: previsto alquiler 2500")).toEqual({
+      text: "alquiler 2500",
+      shared: true,
+      planned: true,
+    });
+    expect(parseArrivalPrefixes("previsto compartido: alquiler 2500")).toEqual({
+      text: "alquiler 2500",
+      shared: true,
+      planned: true,
+    });
+  });
 });
 
 describe("parseSavingsOverride", () => {

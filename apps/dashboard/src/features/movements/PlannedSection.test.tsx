@@ -87,7 +87,6 @@ describe("PlannedSection", () => {
         amount: 2500,
         note: "alquiler",
         category: "alquiler",
-        visibility: "INDIVIDUAL",
       }),
     );
     expect(onMutated).toHaveBeenCalledTimes(1);
@@ -157,7 +156,7 @@ describe("PlannedSection", () => {
     expect(createPlannedMovementMock).toHaveBeenCalledTimes(1);
   });
 
-  it("submits visibility SHARED when the Compartido checkbox is checked", async () => {
+  it("submits only amount, note and category — never a visibility field", async () => {
     const user = userEvent.setup();
     fetchCategoriesMock.mockResolvedValue([]);
 
@@ -165,7 +164,7 @@ describe("PlannedSection", () => {
 
     const form = screen.getByRole("form", { name: "Agregar previsto" });
     await user.type(within(form).getByLabelText("Monto"), "2500");
-    await user.click(within(form).getByRole("checkbox", { name: "Compartido" }));
+    await user.type(within(form).getByLabelText("Nota"), "alquiler");
     await user.click(
       within(form).getByRole("button", { name: "Agregar previsto" }),
     );
@@ -173,32 +172,12 @@ describe("PlannedSection", () => {
     await waitFor(() =>
       expect(createPlannedMovementMock).toHaveBeenCalledWith("default", {
         amount: 2500,
-        note: null,
+        note: "alquiler",
         category: null,
-        visibility: "SHARED",
       }),
     );
-  });
-
-  it("submits visibility INDIVIDUAL when Compartido is left unchecked", async () => {
-    const user = userEvent.setup();
-    fetchCategoriesMock.mockResolvedValue([]);
-
-    render(<PlannedSection planned={{ month: "2026-09", total: 0 }} />);
-
-    const form = screen.getByRole("form", { name: "Agregar previsto" });
-    await user.type(within(form).getByLabelText("Monto"), "2500");
-    await user.click(
-      within(form).getByRole("button", { name: "Agregar previsto" }),
-    );
-
-    await waitFor(() =>
-      expect(createPlannedMovementMock).toHaveBeenCalledWith("default", {
-        amount: 2500,
-        note: null,
-        category: null,
-        visibility: "INDIVIDUAL",
-      }),
-    );
+    // Planned expenses are INDIVIDUAL by design: the form never offers a
+    // Compartido toggle and the payload never carries a visibility field.
+    expect(screen.queryByRole("checkbox", { name: "Compartido" })).toBeNull();
   });
 });

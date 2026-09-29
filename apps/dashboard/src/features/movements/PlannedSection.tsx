@@ -40,9 +40,9 @@ function monthLabel(month: string): string {
 /**
  * D9 — planned expenses section, rendered right after the KPI cards in the
  * kpis tab. Shows `summary.planned` (next-month total, es-AR) and hosts the
- * inline "Agregar previsto" form: amount, note, category, and a "Compartido"
- * toggle (checked → SHARED, unchecked → INDIVIDUAL), with a positive-amount
- * guard that never reaches the API on invalid input.
+ * inline "Agregar previsto" form: amount, note, and category, with a
+ * positive-amount guard that never reaches the API on invalid input.
+ * Planned expenses are INDIVIDUAL by design: there is no shared toggle.
  */
 export function PlannedSection({
   planned,
@@ -56,7 +56,6 @@ export function PlannedSection({
   const [amount, setAmount] = useState("");
   const [note, setNote] = useState("");
   const [category, setCategory] = useState("");
-  const [shared, setShared] = useState(false);
   const [invalidAmount, setInvalidAmount] = useState(false);
 
   const categoryNames =
@@ -81,7 +80,6 @@ export function PlannedSection({
       amount: parsedAmount,
       note: note.trim() === "" ? null : note,
       category: category === "" ? null : category,
-      visibility: shared ? "SHARED" : "INDIVIDUAL",
     });
   }
 
@@ -154,22 +152,6 @@ export function PlannedSection({
               </option>
             ))}
           </select>
-        </div>
-
-        <div className="flex items-end">
-          <label
-            htmlFor="planned-shared"
-            className="flex items-center gap-2 text-sm text-ink"
-          >
-            <input
-              id="planned-shared"
-              type="checkbox"
-              checked={shared}
-              onChange={(event) => setShared(event.target.checked)}
-              className="h-4 w-4 rounded-control border border-border bg-surface accent-accent"
-            />
-            Compartido
-          </label>
         </div>
 
         <div className="flex items-end">

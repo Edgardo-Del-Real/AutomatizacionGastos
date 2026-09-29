@@ -456,51 +456,6 @@ describe("createPlannedMovement", () => {
       createPlannedMovement("default", { amount: 100 }),
     ).rejects.toMatchObject({ kind: "validation" });
   });
-
-  it("sends visibility SHARED in the body when provided", async () => {
-    fetchMock.mockResolvedValue(
-      jsonResponse({
-        id: "p3",
-        ownerId: "default",
-        amount: 2500,
-        currency: "ARS",
-        category: null,
-        note: null,
-        occurredAt: "2026-08-10T12:00:00.000Z",
-        createdAt: "2026-08-10T12:00:00.000Z",
-      }),
-    );
-
-    await createPlannedMovement("default", {
-      amount: 2500,
-      visibility: "SHARED",
-    });
-
-    const [, init] = fetchMock.mock.calls[0]! as [string, RequestInit];
-    const body = JSON.parse(String(init.body)) as Record<string, unknown>;
-    expect(body.visibility).toBe("SHARED");
-  });
-
-  it("omits visibility from the body when not provided", async () => {
-    fetchMock.mockResolvedValue(
-      jsonResponse({
-        id: "p4",
-        ownerId: "default",
-        amount: 1000,
-        currency: "ARS",
-        category: null,
-        note: null,
-        occurredAt: "2026-08-10T12:00:00.000Z",
-        createdAt: "2026-08-10T12:00:00.000Z",
-      }),
-    );
-
-    await createPlannedMovement("default", { amount: 1000 });
-
-    const [, init] = fetchMock.mock.calls[0]! as [string, RequestInit];
-    const body = JSON.parse(String(init.body)) as Record<string, unknown>;
-    expect(body).not.toHaveProperty("visibility");
-  });
 });
 
 describe("markMovementPaid", () => {

@@ -108,25 +108,34 @@ function Dashboard() {
       </header>
       <div className="mx-auto w-full max-w-6xl px-4 py-8 sm:px-6 lg:px-8">
         {activeSection === "kpis" && (
-          <SummarySection state={summaryState}>
-            {(data) => (
-              <div className="space-y-6">
-                <KpiCards kpis={data.kpis} />
-                {/* D9: the planned expenses section sits immediately after the
-                    KPI cards; its form and total share one refresh token. */}
-                <PlannedSection
-                  planned={data.planned}
-                  refreshToken={refreshKey}
-                  onMutated={bumpRefresh}
-                />
-                <CategoryCards
-                  categories={data.categories}
-                  refreshToken={refreshKey}
-                />
-                <TopMovements top={data.top} />
-              </div>
-            )}
-          </SummarySection>
+          <div className="space-y-6">
+            <SummarySection state={summaryState}>
+              {(data) => (
+                <>
+                  <KpiCards kpis={data.kpis} />
+                  <CategoryCards
+                    categories={data.categories}
+                    refreshToken={refreshKey}
+                  />
+                  <TopMovements top={data.top} />
+                </>
+              )}
+            </SummarySection>
+            {/* D9: the planned expenses section sits right after the KPI area;
+                its form and total share one refresh token. It renders OUTSIDE
+                the summary gate so it stays visible on success even when the
+                gate collapses to its empty state (a PENDING-only owner has
+                empty mom/daily but planned.total > 0). While the summary is
+                pending the gate already shows its own status; on error the
+                gate already shows the error card. */}
+            {summaryState.status === "success" ? (
+              <PlannedSection
+                planned={summaryState.data.planned}
+                refreshToken={refreshKey}
+                onMutated={bumpRefresh}
+              />
+            ) : null}
+          </div>
         )}
         {activeSection === "charts" && (
           <SummarySection state={summaryState}>

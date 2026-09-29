@@ -469,4 +469,29 @@ describe("App", () => {
     expect(screen.getByText("septiembre de 2026")).toBeInTheDocument();
     expect(screen.getByText("$ 4.000,00")).toBeInTheDocument();
   });
+
+  it("always shows the planned section for a PENDING-only summary", async () => {
+    // First-day usage path: the owner's only movements are planned expenses,
+    // so mom/daily are empty (PENDING is excluded from those aggregates) but
+    // planned.total > 0. The planned total must stay visible; the KPI area may
+    // render its empty state or the zeroed cards — either way the planned
+    // section is present below it.
+    fetchMovementSummaryMock.mockResolvedValue({
+      ...emptySummary,
+      planned: { month: "2026-09", total: 4000 },
+    });
+    fetchMovementsMock.mockResolvedValue(movements);
+    fetchCategoriesMock.mockResolvedValue([]);
+
+    render(<App />);
+
+    expect(
+      await screen.findByRole("heading", { name: "Gastos fijos previstos" }),
+    ).toBeInTheDocument();
+    expect(screen.getByText("septiembre de 2026")).toBeInTheDocument();
+    expect(screen.getByText("$ 4.000,00")).toBeInTheDocument();
+    expect(
+      screen.getByRole("form", { name: "Agregar previsto" }),
+    ).toBeInTheDocument();
+  });
 });

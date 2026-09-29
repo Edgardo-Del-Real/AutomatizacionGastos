@@ -78,6 +78,28 @@ const emptySummary: MovementSummary = {
   planned: { month: "2026-08", total: 0 },
 };
 
+// PENDING-only owner: PENDING is excluded from the mom/daily aggregates by
+// design, so an owner whose ONLY movements are planned expenses has empty
+// mom/daily but a non-zero planned total.
+const plannedOnlySummary: MovementSummary = {
+  kpis: {
+    income: 0,
+    expenses: 0,
+    balance: 0,
+    savings: 0,
+    avgPerMonth: 0,
+    avgPerMovement: 0,
+    maxAmount: 0,
+    count: 0,
+    countThisMonth: 0,
+  },
+  mom: { months: [] },
+  daily: [],
+  categories: [],
+  top: { expenses: [], income: [] },
+  planned: { month: "2026-08", total: 2500 },
+};
+
 function renderSection(state: AsyncState<MovementSummary>) {
   return render(
     <SummarySection state={{ ...state, retry: vi.fn() }}>
@@ -105,6 +127,15 @@ describe("SummarySection", () => {
 
     expect(screen.getByText(/no hay movimientos/i)).toBeInTheDocument();
     expect(screen.queryByRole("heading", { name: "Ingresos" })).toBeNull();
+  });
+
+  it("does not show the empty state when only planned expenses exist", () => {
+    // mom/daily are empty (PENDING excluded from those aggregates) but
+    // planned.total > 0: the gate must NOT lie about the owner being empty.
+    renderSection({ status: "success", data: plannedOnlySummary });
+
+    expect(screen.queryByText(/no hay movimientos/i)).toBeNull();
+    expect(screen.getByRole("heading", { name: "Ingresos" })).toBeInTheDocument();
   });
 
   it("shows an error with a retry action that invokes retry", async () => {

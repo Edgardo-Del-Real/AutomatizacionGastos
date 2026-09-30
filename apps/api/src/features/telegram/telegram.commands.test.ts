@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseCommand } from "./telegram.commands";
+import { parseCommand, parseSetupBatchCommand } from "./telegram.commands";
 
 describe("parseCommand", () => {
   it("parses 'registrar categoria: X' preserving the original spelling", () => {
@@ -84,5 +84,41 @@ describe("parseCommand", () => {
 
   it("falls through to null for arbitrary text", () => {
     expect(parseCommand("hola que tal")).toBeNull();
+  });
+});
+
+describe("parseSetupBatchCommand", () => {
+  it("classifies a plain name as a create entry", () => {
+    expect(parseSetupBatchCommand("Cafe")).toEqual([{ kind: "create", name: "Cafe" }]);
+  });
+
+  it("classifies 'borrar categoria: X' as a delete entry preserving the original spelling", () => {
+    expect(parseSetupBatchCommand("borrar categoria: No")).toEqual([{ kind: "delete", name: "No" }]);
+  });
+
+  it("recognizes accented and case-insensitive delete commands", () => {
+    expect(parseSetupBatchCommand("BORRAR CATEGORÍA: no")).toEqual([{ kind: "delete", name: "no" }]);
+  });
+
+  it("classifies 'renombrar categoria: X a: Y' as a rename entry", () => {
+    expect(parseSetupBatchCommand("renombrar categoria: Cafe a: Cafeteria")).toEqual([
+      { kind: "rename", from: "Cafe", to: "Cafeteria" },
+    ]);
+  });
+
+  it("folds 'registrar categoria: X' into a plain create entry", () => {
+    expect(parseSetupBatchCommand("registrar categoria: Salud")).toEqual([{ kind: "create", name: "Salud" }]);
+  });
+
+  it("classifies a mixed comma/newline setup reply into ordered entries", () => {
+    expect(parseSetupBatchCommand("Cafe\nborrar categoria: no, Salud")).toEqual([
+      { kind: "create", name: "Cafe" },
+      { kind: "delete", name: "no" },
+      { kind: "create", name: "Salud" },
+    ]);
+  });
+
+  it("drops empty tokens", () => {
+    expect(parseSetupBatchCommand("  ,  \n ")).toEqual([]);
   });
 });

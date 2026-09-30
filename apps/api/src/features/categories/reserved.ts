@@ -27,18 +27,25 @@ const RESERVED_CONCEPTS: readonly ReservedConcept[] = [
 const RESERVED_FOLDED_SET: ReadonlySet<string> = new Set(RESERVED_CONCEPTS);
 
 /**
- * Guard-only typo alias (research §8.2, C17): "provisto" (Damerau-Levenshtein
- * distance 1 from "previsto") is treated as the previsto concept INSIDE the
- * reserved guard only. It never applies to general matching.
+ * Guard-only typo aliases (research §8.2, C17): "provisto" (Damerau-Levenshtein
+ * distance 1 from "previsto") and "provisorio" (same family; the plural fold
+ * already reduces "provisorios") are treated as the previsto concept INSIDE the
+ * reserved guard only. They never apply to general matching.
  */
 const RESERVED_ALIASES: Readonly<Record<string, ReservedConcept>> = {
   provisto: "previsto",
+  provisorio: "previsto",
 };
 
 /**
  * Resolves a category name to its reserved concept by folding it through
  * `normalizeForMatchTolerant` and testing membership (after the guard-only
- * alias). Returns null for any non-reserved name.
+ * alias). A name CONTAINING a guard-only alias token ("gasto provisorio") is
+ * the same concept attempt and is rejected too — the token check applies ONLY
+ * to the misspelling aliases (provisto/provisorio), never to the general
+ * reserved concepts ("otro", "previsto", ...), so legitimate owner category
+ * names containing a real concept word ("un otro gasto") stay creatable.
+ * Returns null for any non-reserved name.
  */
 export function resolveReservedConcept(name: string): ReservedConcept | null {
   const folded = normalizeForMatchTolerant(name);
@@ -46,7 +53,16 @@ export function resolveReservedConcept(name: string): ReservedConcept | null {
   if (aliased !== undefined) {
     return aliased;
   }
-  return RESERVED_FOLDED_SET.has(folded) ? (folded as ReservedConcept) : null;
+  if (RESERVED_FOLDED_SET.has(folded)) {
+    return folded as ReservedConcept;
+  }
+  for (const token of folded.split(" ")) {
+    const tokenAliased = RESERVED_ALIASES[token];
+    if (tokenAliased !== undefined) {
+      return tokenAliased;
+    }
+  }
+  return null;
 }
 
 /**

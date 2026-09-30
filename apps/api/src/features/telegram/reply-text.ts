@@ -80,8 +80,12 @@ export function helpReply(): string {
   );
 }
 
-export function setupQuestionReply(): string {
-  return "No tenés categorías todavía. Enviá una lista separada por comas o líneas, por ejemplo: Cafe, Transporte, Salud.";
+export function setupQuestionReply(existing: string[]): string {
+  if (existing.length === 0) {
+    return "No tenés categorías todavía. Enviá una lista separada por comas o líneas, por ejemplo: Cafe, Transporte, Salud. También podés usar comandos: borrar categoria: X, renombrar categoria: X a: Y.";
+  }
+  const lines = existing.map((name) => `- ${name}`);
+  return `Tus categorías actuales:\n${lines.join("\n")}\nMandá categorías nuevas, o comandos como "borrar categoria: X" / "renombrar categoria: X a: Y".`;
 }
 
 export function setupRetryReply(): string {
@@ -90,6 +94,34 @@ export function setupRetryReply(): string {
 
 export function setupDoneReply(created: string[]): string {
   return `Categorías creadas: ${created.join(", ")}.`;
+}
+
+/**
+ * Single summary reply for a setup batch (design D11): created names,
+ * executed deletes/renames, and any reserved redirects in one message.
+ */
+export function setupBatchDoneReply(summary: {
+  created: string[];
+  redirects: { name: string; concept: ReservedConcept }[];
+  deleted: string[];
+  renamed: { from: string; to: string }[];
+}): string {
+  const parts: string[] = [];
+  if (summary.created.length > 0) {
+    parts.push(setupDoneReply(summary.created));
+  }
+  if (summary.deleted.length > 0) {
+    parts.push(`Borradas: ${summary.deleted.join(", ")}.`);
+  }
+  if (summary.renamed.length > 0) {
+    parts.push(`Renombradas: ${summary.renamed.map((rename) => `"${rename.from}" a "${rename.to}"`).join(", ")}.`);
+  }
+  if (summary.redirects.length > 0) {
+    parts.push(
+      `No pude crear: ${summary.redirects.map((redirect) => `"${redirect.name}": ${reservedCategoryReply(redirect.name, redirect.concept)}`).join(" / ")}`,
+    );
+  }
+  return parts.join(" ");
 }
 
 /**
@@ -313,6 +345,8 @@ export function capabilitiesSummaryReply(): string {
     "- consultar tus categorías, últimos movimientos, saldo o resumen del mes\n" +
     "- crear, borrar y renombrar categorías\n" +
     "- asociar una palabra a una categoría\n" +
+    "- marcar como pagado un gasto previsto\n" +
+    "- borrar un gasto\n" +
     "- ayudarte (mandá un monto con una nota y lo cargo)"
   );
 }
@@ -350,7 +384,7 @@ export function movementMissingReply(): string {
 }
 
 /** Numbered candidates list: `n) DD/MM · $ monto · nota` (design D8: fixed-only). */
-export function movementCandidatesList(candidates: MovementCandidate[]): string {
+export function movementCandidatesList(candidates: { amount: number; note: string | null; date: string }[]): string {
   return candidates
     .map((candidate, index) => {
       const note = candidate.note !== null ? ` · ${truncateNote(candidate.note)}` : "";
@@ -372,6 +406,48 @@ export function movementNoReferenceReply(candidates: MovementCandidate[]): strin
 
 export function movementNoMatchReply(): string {
   return "No encontré ningún movimiento que coincida con eso.";
+}
+
+/** Lifecycle candidate shape for the ambiguity ask (the executor's `LifecycleCandidate` satisfies it). */
+export type LifecycleAskCandidate = { amount: number; note: string | null; date: string };
+
+/** Confirms a marked-paid transition (PENDING → PAID) with the executed facts. */
+export function markPaidReply(amount: number, note: string | null, category: string | null): string {
+  const notePart = note === null ? "" : ` (${truncateNote(note)})`;
+  const categoryPart = category !== null && category.length > 0 ? ` — Categoría: ${category}` : "";
+  return `Listo, marqué como pagado: ${formatARS(amount)}${notePart}${categoryPart}.`;
+}
+
+/** Conflict notice for an already-PAID referenced movement (409): nothing changed. */
+export function markPaidAlreadyReply(): string {
+  return "Ese movimiento ya estaba pagado: no cambié nada.";
+}
+
+/** Mark-paid no-match: nothing was pending, nothing changed (dedicated wording mirrors the delete path). */
+export function nothingPendingReply(): string {
+  return "No encontré ningún gasto previsto pendiente que coincida con eso.";
+}
+
+/** Delete no-match: states BOTH that nothing matched AND that nothing was deleted. */
+export function nothingToDeleteReply(): string {
+  return "No encontré ningún movimiento que coincida con eso para borrar. No borré nada.";
+}
+
+/** Confirms a deleted expense with the executed facts. */
+export function deletedMovementReply(amount: number, note: string | null, category: string | null): string {
+  const notePart = note === null ? "" : ` (${truncateNote(note)})`;
+  const categoryPart = category !== null && category.length > 0 ? ` — Categoría: ${category}` : "";
+  return `Borré el gasto: ${formatARS(amount)}${notePart}${categoryPart}.`;
+}
+
+/** Ambiguity ask for mark-paid: which planned expense was paid (fixed-only). */
+export function markPaidAskReply(candidates: LifecycleAskCandidate[]): string {
+  return `¿Cuál de estos gastos previstos marcaste como pagado?\n${movementCandidatesList(candidates)}`;
+}
+
+/** Ambiguity ask for delete: which expense to delete (fixed-only). */
+export function deleteAskReply(candidates: LifecycleAskCandidate[]): string {
+  return `¿Cuál de estos gastos querés borrar?\n${movementCandidatesList(candidates)}`;
 }
 
 export function movementSelectionAbandonedReply(): string {

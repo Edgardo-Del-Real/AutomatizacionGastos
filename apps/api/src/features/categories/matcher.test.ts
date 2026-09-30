@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { foldSpanishPluralToken, matchCategory, normalizeForMatch, normalizeForMatchTolerant } from "./matcher";
+import {
+  foldSpanishPluralToken,
+  matchCategory,
+  normalizeForMatch,
+  normalizeForMatchGuard,
+  normalizeForMatchTolerant,
+} from "./matcher";
 
 const createdAt = (iso: string): Date => new Date(iso);
 
@@ -143,5 +149,35 @@ describe("matchCategory tolerant folding", () => {
     const rule = { keyword: "lun", category: "Lun", createdAt: createdAt("2026-09-01T10:00:00Z") };
 
     expect(matchCategory("fue el lunes", [rule])).toBeNull();
+  });
+});
+
+describe("normalizeForMatchGuard", () => {
+  it("strips punctuation from guard words ('no.', 'si.', 'no,' -> 'no'/'si'/'no')", () => {
+    expect(normalizeForMatchGuard("no.")).toBe("no");
+    expect(normalizeForMatchGuard("si.")).toBe("si");
+    expect(normalizeForMatchGuard("no,")).toBe("no");
+  });
+
+  it("collapses whitespace runs to single spaces", () => {
+    expect(normalizeForMatchGuard("dale   dale")).toBe("dale dale");
+  });
+
+  it("strips punctuation from multi-word guard phrases ('no, dejalo' -> 'no dejalo')", () => {
+    expect(normalizeForMatchGuard("no, dejalo")).toBe("no dejalo");
+  });
+
+  it("accents fold before punctuation stripping ('sí.' -> 'si')", () => {
+    expect(normalizeForMatchGuard("sí.")).toBe("si");
+  });
+
+  it("normalizes a punctuation-only answer to empty", () => {
+    expect(normalizeForMatchGuard("...")).toBe("");
+  });
+
+  it("keeps normalizeForMatch byte-identical: length-preserving contract unchanged", () => {
+    const input = "No, lo dejo!";
+    expect(normalizeForMatch(input)).toBe("no, lo dejo!");
+    expect(normalizeForMatch(input).length).toBe(input.length);
   });
 });

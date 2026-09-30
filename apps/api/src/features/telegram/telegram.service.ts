@@ -1,6 +1,6 @@
 import { z } from "zod";
 import type { CategoryService } from "../categories/categories.service";
-import { normalizeForMatch, normalizeForMatchTolerant } from "../categories/matcher";
+import { normalizeForMatch, normalizeForMatchGuard, normalizeForMatchTolerant } from "../categories/matcher";
 import type { CategoryWithKeywords } from "../categories/categories.types";
 import { ReservedCategoryError } from "../categories/reserved";
 import type { ExpenseService } from "../expenses/expenses.service";
@@ -31,7 +31,7 @@ import { isMilStance } from "./mil-stance";
 import { MovementCorrector } from "./movement-corrector";
 import { QueryExecutor } from "./query-executor";
 import { deriveQueryType, type PlannedQueryResult, type QueryExecutionResult } from "./query.types";
-import { parseCommand, type TelegramCommand } from "./telegram.commands";
+import { parseCommand, parseSetupBatchCommand, type TelegramCommand } from "./telegram.commands";
 import { normalizeTelegramMessage, parseArrivalPrefixes, parseSavingsOverride } from "./telegram.parser";
 import {
   amountConfirmationAbandonedReply,
@@ -76,8 +76,7 @@ import {
   savingsRuleDefinedReply,
   savingsRuleInvalidReply,
   savingsRuleRedirectReply,
-  setupDoneReply,
-  setupDoneWithRedirectsReply,
+  setupBatchDoneReply,
   setupQuestionReply,
   setupRetryReply,
   successReply,
@@ -310,7 +309,7 @@ export class TelegramService {
     const categories = await this.deps.categoryService.listCategories(ownerId);
 
     // The setup gate wins BEFORE any brain call: the brain never fires for
-    // owners without categories.
+    // owners without categories. The question lists the (empty) existing set.
     if (categories.length === 0) {
       await this.deps.botStateRepository.set({
         ownerId,
@@ -318,7 +317,7 @@ export class TelegramService {
         pendingMovementId: null,
         pendingNote: null,
       });
-      await this.safeReply(reply, setupQuestionReply());
+      await this.safeReply(reply, setupQuestionReply(categories.map((category) => category.name)));
       return;
     }
 
@@ -791,8 +790,10 @@ export class TelegramService {
   }
 
   private async handleSetupReply(body: string, ownerId: string, reply?: ReplyPort): Promise<void> {
-    const names = this.extractCategoryNames(body);
-    if (names.length === 0) {
+    const entries = parseSetupBatchCommand(body);
+    const createNames = entries.filter((entry) => entry.kind === "create").map((entry) => entry.name);
+    const hasCommands = entries.some((entry) => entry.kind !== "create");
+    if (createNames.length === 0 && !hasCommands) {
       await this.safeReply(reply, setupRetryReply());
       return;
     }
@@ -800,9 +801,43 @@ export class TelegramService {
     const existing = await this.deps.categoryService.listCategories(ownerId);
     const existingNormalized = new Set(existing.map((category) => normalizeForMatchTolerant(category.name)));
 
+    // Batch commands execute through the guarded CategoryService with per-command
+    // honest outcomes; only remaining plain tokens become categories (D11).
+    const deleted: string[] = [];
+    const renamed: { from: string; to: string }[] = [];
+    for (const entry of entries) {
+      if (entry.kind === "delete") {
+        try {
+          await this.deps.categoryService.deleteCategory(ownerId, entry.name);
+          deleted.push(entry.name);
+        } catch (error) {
+          if (error instanceof NotFoundError || error instanceof ValidationFailedError) {
+            continue; // missing or forbidden delete: nothing to report
+          }
+          throw error;
+        }
+      } else if (entry.kind === "rename") {
+        try {
+          const result = await this.deps.categoryService.renameCategory(ownerId, entry.from, entry.to);
+          if (result !== null) {
+            renamed.push({ from: entry.from, to: result.name });
+          }
+        } catch (error) {
+          if (
+            error instanceof NotFoundError ||
+            error instanceof ValidationFailedError ||
+            error instanceof ReservedCategoryError
+          ) {
+            continue; // the rename did not apply: honest per-command outcome
+          }
+          throw error;
+        }
+      }
+    }
+
     const created: string[] = [];
     const redirects: { name: string; concept: ReservedCategoryError["concept"] }[] = [];
-    for (const name of names) {
+    for (const name of this.dedupeNames(createNames)) {
       if (normalizeForMatch(name) === "otro") {
         continue; // the fallback is created by ensureOtro below
       }
@@ -841,7 +876,7 @@ export class TelegramService {
     });
     await this.safeReply(
       reply,
-      redirects.length > 0 ? setupDoneWithRedirectsReply(finalCreated, redirects) : setupDoneReply(finalCreated),
+      setupBatchDoneReply({ created: finalCreated, redirects, deleted, renamed }),
     );
   }
 
@@ -860,7 +895,9 @@ export class TelegramService {
     const trimmed = body.trim();
 
     // Keep the movement in "otro": explicit abandonment answers never dead-end.
-    if (KEEP_OTRO_ANSWERS.has(normalizedText)) {
+    // Guard normalization strips punctuation so "no."/"no," fold to "no" and
+    // never reach category creation (spec "Punctuated guard never auto-creates").
+    if (KEEP_OTRO_ANSWERS.has(normalizeForMatchGuard(body))) {
       await this.deps.botStateRepository.set({
         ownerId,
         state: IDLE,
@@ -894,7 +931,7 @@ export class TelegramService {
 
     // An affirmation to the correction offer keeps the dialog open and asks for
     // the target category — never auto-creates a category named "si" (D6).
-    if (CATEGORY_AFFIRM_ANSWERS.has(normalizedText)) {
+    if (CATEGORY_AFFIRM_ANSWERS.has(normalizeForMatchGuard(body))) {
       await this.safeReply(reply, categoryFollowUpReply());
       return;
     }
@@ -913,6 +950,35 @@ export class TelegramService {
     // guarded choke point. A reserved reject keeps the correction open with a
     // redirect (the movement stays in "otro").
     if (trimmed.split(/\s+/).length === 1) {
+      // Single-token guard reject: a token that guard-normalizes to a guard
+      // word ("no.", "si.", with or without punctuation) routes to the matching
+      // abandon/affirmation handling; a punctuation-only token is a non-answer
+      // that lists the categories. Neither ever reaches category creation.
+      const guarded = normalizeForMatchGuard(trimmed);
+      if (KEEP_OTRO_ANSWERS.has(guarded)) {
+        await this.deps.botStateRepository.set({
+          ownerId,
+          state: IDLE,
+          pendingMovementId: null,
+          pendingNote: null,
+        });
+        await send(
+          { intent: "correct_category", ok: true, action: "none", amount: null, category: "otro", note: null },
+          otroKeptReply(),
+        );
+        return;
+      }
+      if (CATEGORY_AFFIRM_ANSWERS.has(guarded)) {
+        await this.safeReply(reply, categoryFollowUpReply());
+        return;
+      }
+      if (guarded.length === 0) {
+        await send(
+          { intent: "correct_category", ok: false, action: "asked_category", amount: null, category: null, note: trimmed },
+          categoryNotFoundReply(trimmed, categories.map((category) => category.name)),
+        );
+        return;
+      }
       try {
         const created = await this.deps.categoryService.createCategory(ownerId, trimmed);
         await this.answerCorrection(state, created.name, ownerId, send, reply);
@@ -1018,8 +1084,9 @@ export class TelegramService {
   ): Promise<void> {
     void state;
     // T6: an explicit abandonment answer clears the collect before any field
-    // resolution — nothing registers from the abandoned message.
-    if (COLLECT_ABANDON_ANSWERS.has(normalizeForMatch(body.trim()))) {
+    // resolution — nothing registers from the abandoned message. Guard
+    // normalization folds "no,"/"no." onto the abandonment set.
+    if (COLLECT_ABANDON_ANSWERS.has(normalizeForMatchGuard(body.trim()))) {
       await this.deps.botStateRepository.set({ ownerId, state: IDLE, pendingMovementId: null, pendingNote: null });
       await send(
         { intent: "register_expense", ok: false, action: "none", amount: null, category: null, note: body },
@@ -1128,7 +1195,7 @@ export class TelegramService {
     const trimmed = answer;
 
     // Abandon words: an explicit out clears the collect, nothing registers.
-    if (COLLECT_ABANDON_ANSWERS.has(normalizedAnswer)) {
+    if (COLLECT_ABANDON_ANSWERS.has(normalizeForMatchGuard(answer))) {
       await this.deps.botStateRepository.set({ ownerId, state: IDLE, pendingMovementId: null, pendingNote: null });
       await send(
         { intent: "register_expense", ok: false, action: "none", amount: null, category: null, note: body },
@@ -1156,7 +1223,7 @@ export class TelegramService {
 
     // An affirmation to the collect question keeps the dialog open and
     // re-asks — never auto-creates a category named "si" (T9).
-    if (CATEGORY_AFFIRM_ANSWERS.has(normalizedAnswer)) {
+    if (CATEGORY_AFFIRM_ANSWERS.has(normalizeForMatchGuard(answer))) {
       await send(
         {
           intent: "register_expense",
@@ -1188,6 +1255,48 @@ export class TelegramService {
     // guarded choke point. A reserved reject keeps the collect open with a
     // redirect.
     if (trimmed.split(/\s+/).length === 1) {
+      // Single-token guard reject: a token that guard-normalizes to a guard
+      // word routes to the collect abandon / affirmation re-ask; a
+      // punctuation-only token is a non-answer that lists the categories.
+      const guarded = normalizeForMatchGuard(trimmed);
+      if (COLLECT_ABANDON_ANSWERS.has(guarded)) {
+        await this.deps.botStateRepository.set({ ownerId, state: IDLE, pendingMovementId: null, pendingNote: null });
+        await send(
+          { intent: "register_expense", ok: false, action: "none", amount: null, category: null, note: body },
+          collectAbandonedReply(),
+        );
+        return;
+      }
+      if (CATEGORY_AFFIRM_ANSWERS.has(guarded)) {
+        await send(
+          {
+            intent: "register_expense",
+            ok: false,
+            action: "asked_registration",
+            amount: payload.amount,
+            category: null,
+            note: payload.note,
+            asked_field: "category",
+          },
+          keptCollectingReply("category"),
+        );
+        return;
+      }
+      if (guarded.length === 0) {
+        await send(
+          {
+            intent: "register_expense",
+            ok: false,
+            action: "asked_registration",
+            amount: payload.amount,
+            category: null,
+            note: trimmed,
+            asked_field: "category",
+          },
+          categoryNotFoundReply(trimmed, categories.map((category) => category.name)),
+        );
+        return;
+      }
       try {
         const created = await this.deps.categoryService.createCategory(ownerId, trimmed);
         await this.registerWithCategory(payload.body, payload.amount as number, payload.note, created.name, ownerId, payload.shared, payload.planned, payload.override, send);
@@ -1289,11 +1398,11 @@ private async handleDialogMessage(
     // "dale" must never be classified register_expense(amount:null) and
     // destroy the collect via abandon+re-enter (design "Pre-brain
     // interception" :855-861).
-    if (state.state === AWAITING_CATEGORY && CATEGORY_AFFIRM_ANSWERS.has(normalizeForMatch(body.trim()))) {
+    if (state.state === AWAITING_CATEGORY && CATEGORY_AFFIRM_ANSWERS.has(normalizeForMatchGuard(body.trim()))) {
       await this.safeReply(reply, categoryFollowUpReply());
       return;
     }
-    if (state.state === AWAITING_REGISTRATION && CATEGORY_AFFIRM_ANSWERS.has(normalizeForMatch(body.trim()))) {
+    if (state.state === AWAITING_REGISTRATION && CATEGORY_AFFIRM_ANSWERS.has(normalizeForMatchGuard(body.trim()))) {
       const payload = this.decodeCollectPayload(state.pendingNote);
       if (payload !== null) {
         const openField = payload.amount === null ? "amount" : "category";
@@ -1431,7 +1540,8 @@ private async handleDialogMessage(
     const normalizedAnswer = normalizeForMatch(answer);
 
     // Keep the movement in "otro": explicit abandonment answers never dead-end.
-    if (KEEP_OTRO_ANSWERS.has(normalizedAnswer)) {
+    // Guard normalization folds "no." onto the set (spec "Punctuated guard").
+    if (KEEP_OTRO_ANSWERS.has(normalizeForMatchGuard(answer))) {
       await this.deps.botStateRepository.set({ ownerId, state: IDLE, pendingMovementId: null, pendingNote: null });
       await send(
         { intent: "correct_category", ok: true, action: "none", amount: null, category: "otro", note: null },
@@ -1472,6 +1582,29 @@ private async handleDialogMessage(
     // routed through the guarded choke point. A reserved reject keeps the
     // correction open with a redirect.
     if (answer.split(/\s+/).length === 1) {
+      // Single-token guard reject: a guard-normalized guard word routes to the
+      // matching abandon/affirmation handling; a punctuation-only token lists
+      // the categories. Neither reaches category creation.
+      const guarded = normalizeForMatchGuard(answer);
+      if (KEEP_OTRO_ANSWERS.has(guarded)) {
+        await this.deps.botStateRepository.set({ ownerId, state: IDLE, pendingMovementId: null, pendingNote: null });
+        await send(
+          { intent: "correct_category", ok: true, action: "none", amount: null, category: "otro", note: null },
+          otroKeptReply(),
+        );
+        return;
+      }
+      if (CATEGORY_AFFIRM_ANSWERS.has(guarded)) {
+        await this.safeReply(reply, categoryFollowUpReply());
+        return;
+      }
+      if (guarded.length === 0) {
+        await send(
+          { intent: "correct_category", ok: false, action: "asked_category", amount: null, category: null, note: answer },
+          categoryNotFoundReply(answer, categories.map((category) => category.name)),
+        );
+        return;
+      }
       try {
         const created = await this.deps.categoryService.createCategory(ownerId, answer);
         await this.answerCorrection(state, created.name, ownerId, send, reply);
@@ -1889,13 +2022,16 @@ private async handleDialogMessage(
       }
 
       case "configurar": {
+        // The question lists the owner's existing categories (dynamic listing,
+        // never fixed text — spec "Setup question lists existing categories").
+        const existing = await this.deps.categoryService.listCategories(ownerId);
         await this.deps.botStateRepository.set({
           ownerId,
           state: AWAITING_SETUP,
           pendingMovementId: null,
           pendingNote: null,
         });
-        await this.safeReply(reply, setupQuestionReply());
+        await this.safeReply(reply, setupQuestionReply(existing.map((category) => category.name)));
         return;
       }
 
@@ -2130,14 +2266,6 @@ private async handleDialogMessage(
     } catch (error) {
       this.deps.logger?.(`Telegram: reply failed: ${String(error)}`);
     }
-  }
-
-  private extractCategoryNames(body: string): string[] {
-    const raw = body
-      .split(/[\n,]+/)
-      .map((name) => name.trim())
-      .filter((name) => name.length > 0);
-    return this.dedupeNames(raw);
   }
 
   private dedupeNames(names: string[]): string[] {

@@ -22,12 +22,17 @@ import {
   correctionAbandonedReply,
   correctionDoneReply,
   correctionOfferReply,
+  deletedMovementReply,
+  deleteAskReply,
   duplicateCategoryReply,
   formatARS,
   greetingReply,
   helpReply,
   keptCollectingReply,
   keywordAssociatedReply,
+  markPaidAlreadyReply,
+  markPaidAskReply,
+  markPaidReply,
   missingCategoryReply,
   monthQueryReply,
   movementAmbiguousReply,
@@ -36,6 +41,8 @@ import {
   movementNoMatchReply,
   movementNoReferenceReply,
   movementSelectionAbandonedReply,
+  nothingPendingReply,
+  nothingToDeleteReply,
   otroDeleteForbiddenReply,
   otroKeptReply,
   plannedQueryReply,
@@ -45,6 +52,7 @@ import {
   questionDroppedReply,
   recentQueryReply,
   reservedCategoryReply,
+  setupBatchDoneReply,
   setupDoneReply,
   setupDoneWithRedirectsReply,
   setupQuestionReply,
@@ -108,8 +116,8 @@ describe("reply builders", () => {
     expect(text).toContain("configurar categorias");
   });
 
-  it("builds the setup question", () => {
-    expect(setupQuestionReply()).toContain("categorías");
+it("builds the setup question", () => {
+    expect(setupQuestionReply([])).toContain("categorías");
   });
 
   it("builds the setup retry question", () => {
@@ -546,11 +554,106 @@ describe("registration collection reply templates", () => {
     expect(text).toContain("No guardé nada");
   });
 
-  it("greets warmly and expense-scoped, with a registration example", () => {
+it("greets warmly and expense-scoped, with a registration example", () => {
     const text = greetingReply();
 
     expect(text).toContain("¡Hola!");
     expect(text).toContain("gastos");
     expect(text).toContain("2500 supermercado");
+  });
+});
+
+describe("bot expense lifecycle reply templates", () => {
+  it("confirms a marked-paid transition with amount, note and category", () => {
+    expect(markPaidReply(2500, "alquiler", "Vivienda")).toBe(
+      'Listo, marqué como pagado: $\u00A02.500,00 (alquiler) — Categoría: Vivienda.',
+    );
+  });
+
+  it("confirms a marked-paid transition without a category when it is unknown", () => {
+    expect(markPaidReply(2500, null, null)).toBe('Listo, marqué como pagado: $\u00A02.500,00.');
+  });
+
+  it("builds the already-paid conflict notice", () => {
+    expect(markPaidAlreadyReply()).toBe("Ese movimiento ya estaba pagado: no cambié nada.");
+  });
+
+  it("builds the nothing-pending reply", () => {
+    expect(nothingPendingReply()).toBe("No encontré ningún gasto previsto pendiente que coincida con eso.");
+  });
+
+  it("builds the nothing-to-delete reply stating nothing was deleted", () => {
+    expect(nothingToDeleteReply()).toBe("No encontré ningún movimiento que coincida con eso para borrar. No borré nada.");
+  });
+
+  it("confirms a deleted expense with amount, note and category", () => {
+    expect(deletedMovementReply(2500, "cafe", "Cafe")).toBe('Borré el gasto: $\u00A02.500,00 (cafe) — Categoría: Cafe.');
+  });
+
+  it("asks which planned expense was paid with numbered candidates", () => {
+    const text = markPaidAskReply([
+      { amount: 2500, note: "alquiler", date: "2026-09-19" },
+      { amount: 2500, note: "gym", date: "2026-09-17" },
+    ]);
+
+    expect(text).toContain("¿Cuál de estos gastos previstos marcaste como pagado?");
+    expect(text).toContain("1) 19/09 · $\u00A02.500,00 · alquiler");
+    expect(text).toContain("2) 17/09 · $\u00A02.500,00 · gym");
+  });
+
+  it("asks which expense to delete with numbered candidates", () => {
+    const text = deleteAskReply([{ amount: 8000, note: "super", date: "2026-09-18" }]);
+
+    expect(text).toContain("¿Cuál de estos gastos querés borrar?");
+    expect(text).toContain("1) 18/09 · $\u00A08.000,00 · super");
+  });
+
+  it("builds the setup question without categories (today's text plus command examples)", () => {
+    const text = setupQuestionReply([]);
+
+    expect(text).toContain("categorías");
+    expect(text).toContain("borrar categoria: X");
+    expect(text).toContain("renombrar categoria: X a: Y");
+  });
+
+  it("builds the setup question listing the existing categories", () => {
+    const text = setupQuestionReply(["Cafe", "Transporte"]);
+
+    expect(text).toContain("Tus categorías actuales:");
+    expect(text).toContain("- Cafe");
+    expect(text).toContain("- Transporte");
+    expect(text).toContain("borrar categoria: X");
+  });
+
+  it("builds the batch-done summary with created, deleted and renamed entries", () => {
+    const text = setupBatchDoneReply({
+      created: ["Salud", "otro"],
+      redirects: [],
+      deleted: ["no"],
+      renamed: [{ from: "Cafe", to: "Cafeteria" }],
+    });
+
+    expect(text).toContain("Categorías creadas: Salud, otro.");
+    expect(text).toContain("Borradas: no.");
+    expect(text).toContain('"Cafe" a "Cafeteria"');
+  });
+
+  it("builds the batch-done summary with reserved redirects", () => {
+    const text = setupBatchDoneReply({
+      created: ["otro"],
+      redirects: [{ name: "gastos fijos", concept: "gasto fijo" }],
+      deleted: [],
+      renamed: [],
+    });
+
+    expect(text).toContain("gastos fijos");
+    expect(text).toContain("previsto");
+  });
+
+it("lists mark-paid and delete in the capabilities summary", () => {
+    const summary = capabilitiesSummaryReply();
+
+    expect(summary).toContain("marcar como pagado");
+    expect(summary).toContain("borrar un gasto");
   });
 });

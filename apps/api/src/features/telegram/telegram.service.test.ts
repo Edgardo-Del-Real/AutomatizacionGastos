@@ -413,6 +413,45 @@ describe("TelegramService state machine", () => {
     expect(h.replies.length).toBeGreaterThan(before);
   });
 
+  it("executes 'borrar categoria: no' through the service without creating a literal (batch command)", async () => {
+    h.mockListCategories.mockResolvedValueOnce([]); // gate: no categories → setup
+    await h.service.handleUpdate(textUpdate({ text: "$2500 cafe", messageId: 1 }), h.reply);
+    h.mockCreateCategory.mockClear();
+
+    await h.service.handleUpdate(textUpdate({ text: "borrar categoria: no", messageId: 2 }), h.reply);
+
+    expect(h.mockDeleteCategory).toHaveBeenCalledWith(ownerId, "no");
+    expect(h.mockCreateCategory).not.toHaveBeenCalled();
+    expect(h.mockSetState).toHaveBeenLastCalledWith({
+      ownerId,
+      state: "idle",
+      pendingMovementId: null,
+      pendingNote: null,
+    });
+    expect(h.replies.at(-1)).toContain("Borradas: no.");
+  });
+
+  it("executes a batch rename inside a mixed setup reply without creating a literal", async () => {
+    h.mockListCategories.mockResolvedValueOnce([]); // gate: no categories → setup
+    await h.service.handleUpdate(textUpdate({ text: "$2500 cafe", messageId: 1 }), h.reply);
+    h.mockRenameCategory.mockResolvedValue({
+      id: "c1",
+      ownerId,
+      name: "Cafeteria",
+      createdAt: new Date(),
+    });
+    h.mockCreateCategory.mockClear();
+
+    await h.service.handleUpdate(
+      textUpdate({ text: "Cafe\nrenombrar categoria: Cafe a: Cafeteria", messageId: 2 }),
+      h.reply,
+    );
+
+    expect(h.mockRenameCategory).toHaveBeenCalledWith(ownerId, "Cafe", "Cafeteria");
+    expect(h.replies.at(-1)).toContain('"Cafe" a "Cafeteria"');
+    expect(h.replies.at(-1)).toContain("Cafe");
+  });
+
   it("skips categories that already exist during setup (append semantics)", async () => {
     h.mockListCategories
       .mockResolvedValueOnce([])
@@ -856,6 +895,52 @@ describe("TelegramService ambiguity rules (awaiting_category, D6)", () => {
     // The pending correction stays open: the state is untouched (movement in "otro").
     expect(h.mockSetState).not.toHaveBeenCalled();
     expect(h.replies.at(-1)).toBe(reservedCategoryReply("previsto", "previsto"));
+  });
+
+  it.each(["no.", "no,"])('keeps the movement as "otro" for the punctuated guard answer "%s" (no category created)', async (answer) => {
+    await h.service.handleUpdate(textUpdate({ text: "$1000 anterior", messageId: 1 }), h.reply);
+    h.mockCreateCategory.mockClear();
+    h.mockUpdateMovement.mockClear();
+
+    await h.service.handleUpdate(textUpdate({ text: answer, messageId: 2 }), h.reply);
+
+    expect(h.mockCreateCategory).not.toHaveBeenCalled();
+    expect(h.mockUpdateMovement).not.toHaveBeenCalled();
+    expect(h.mockSetState).toHaveBeenLastCalledWith({
+      ownerId,
+      state: "idle",
+      pendingMovementId: null,
+      pendingNote: null,
+    });
+    expect(h.replies.at(-1)).toBe('Listo, quedó en "otro".');
+  });
+
+  it.each(["si.", "s\u00ed."])('a punctuated affirmation ("%s") never auto-creates a category and keeps the dialog open', async (answer) => {
+    await h.service.handleUpdate(textUpdate({ text: "$1000 anterior", messageId: 1 }), h.reply);
+    h.mockCreateCategory.mockClear();
+    h.mockSetState.mockClear();
+
+    await h.service.handleUpdate(textUpdate({ text: answer, messageId: 2 }), h.reply);
+
+    expect(h.mockCreateCategory).not.toHaveBeenCalled();
+    expect(h.mockUpdateMovement).not.toHaveBeenCalled();
+    expect(h.mockSetState).not.toHaveBeenCalled();
+    expect(h.replies.at(-1)).toBe('Dale, \u00bfa qu\u00e9 categor\u00eda lo asigno? Escrib\u00ed el nombre o "no".');
+    const state = await h.botStateRepository.get(ownerId);
+    expect(state?.state).toBe("awaiting_category");
+  });
+
+  it('a punctuation-only answer ("...") never auto-creates: it lists the categories and keeps the state open', async () => {
+    await h.service.handleUpdate(textUpdate({ text: "$1000 anterior", messageId: 1 }), h.reply);
+    h.mockCreateCategory.mockClear();
+    h.mockSetState.mockClear();
+
+    await h.service.handleUpdate(textUpdate({ text: "...", messageId: 2 }), h.reply);
+
+    expect(h.mockCreateCategory).not.toHaveBeenCalled();
+    expect(h.mockUpdateMovement).not.toHaveBeenCalled();
+    expect(h.mockSetState).not.toHaveBeenCalled();
+    expect(h.replies.at(-1)).toContain('No encontr\u00e9 la categor\u00eda');
   });
 });
 
@@ -1405,6 +1490,82 @@ expect(h.mockBrainInterpret).not.toHaveBeenCalled();
     expect(h.replies.at(-1)).toBe(keptCollectingReply("category"));
   });
 
+  it('a punctuated "no," during the collect abandons it (guard normalization: no category, nothing registers)', async () => {
+    await seedAwaitingRegistration();
+    h.mockCreateCategory.mockClear();
+    h.mockCreateExpense.mockClear();
+
+    await h.service.handleUpdate(textUpdate({ text: "no,", messageId: 2 }), h.reply);
+
+    expect(h.mockCreateCategory).not.toHaveBeenCalled();
+    expect(h.mockCreateExpense).not.toHaveBeenCalled();
+    expect(h.mockSetState).toHaveBeenLastCalledWith({
+      ownerId,
+      state: "idle",
+      pendingMovementId: null,
+      pendingNote: null,
+    });
+    expect(h.replies.at(-1)).toBe(collectAbandonedReply());
+  });
+
+  it('a punctuated "si." during the collect re-asks the open field without creating anything', async () => {
+    await seedAwaitingRegistration();
+    h.mockBrainInterpret.mockClear();
+    h.mockSetState.mockClear();
+
+    await h.service.handleUpdate(textUpdate({ text: "si.", messageId: 2 }), h.reply);
+
+    expect(h.mockBrainInterpret).not.toHaveBeenCalled();
+    expect(h.mockCreateCategory).not.toHaveBeenCalled();
+    expect(h.mockCreateExpense).not.toHaveBeenCalled();
+    expect(h.mockSetState).not.toHaveBeenCalled();
+    expect(h.replies.at(-1)).toBe(keptCollectingReply("amount"));
+  });
+
+  it('a resolve answer with category "no," abandons the collect via the guarded set (never a category named "no")', async () => {
+    await seedAwaitingRegistration({ amount: 5000, category: null });
+    h.mockBrainInterpret.mockResolvedValue({
+      intent: "register_expense",
+      amount: null,
+      category: "no,",
+      note: null,
+      dialog_action: "resolve",
+    });
+    h.mockCreateCategory.mockClear();
+
+    await h.service.handleUpdate(textUpdate({ text: "no,", messageId: 2 }), h.reply);
+
+    expect(h.mockCreateCategory).not.toHaveBeenCalled();
+    expect(h.mockCreateExpense).not.toHaveBeenCalled();
+    expect(h.mockSetState).toHaveBeenLastCalledWith({
+      ownerId,
+      state: "idle",
+      pendingMovementId: null,
+      pendingNote: null,
+    });
+    expect(h.replies.at(-1)).toBe(collectAbandonedReply());
+  });
+
+  it('a resolve answer with category "si." re-asks the open field (single-token guard reject, never auto-created)', async () => {
+    await seedAwaitingRegistration({ amount: 5000, category: null });
+    h.mockBrainInterpret.mockResolvedValue({
+      intent: "register_expense",
+      amount: null,
+      category: "si.",
+      note: null,
+      dialog_action: "resolve",
+    });
+    h.mockCreateCategory.mockClear();
+    h.mockSetState.mockClear();
+
+    await h.service.handleUpdate(textUpdate({ text: "si.", messageId: 2 }), h.reply);
+
+    expect(h.mockCreateCategory).not.toHaveBeenCalled();
+    expect(h.mockCreateExpense).not.toHaveBeenCalled();
+    expect(h.mockSetState).not.toHaveBeenCalled();
+    expect(h.replies.at(-1)).toBe(keptCollectingReply("category"));
+  });
+
   it("2.5: a corrupt collect payload yields a null context so the D6 fallback owns the message", async () => {
     await h.botStateRepository.set({
       ownerId,
@@ -1446,6 +1607,28 @@ describe("TelegramService commands", () => {
     expect(h.mockCreateCategory).toHaveBeenCalledWith(ownerId, "previsto");
     expect(h.replies.at(-1)).toBe(reservedCategoryReply("previsto", "previsto"));
     expect(h.replies.at(-1)).toContain("previsto: <monto> <nota>");
+  });
+
+  it.each([
+    ["gasto provisorio", "previsto"],
+    ["provisorios", "previsto"],
+  ])("redirects the provisorio alias 'registrar categoria: %s' with the previsto teaching and creates nothing", async (name, concept) => {
+    h.mockCreateCategory.mockRejectedValue(
+      new ReservedCategoryError(`Category "${name}" is the reserved concept "${concept}"`, concept as "previsto"),
+    );
+
+    await h.service.handleUpdate(textUpdate({ text: `registrar categoria: ${name}`, messageId: 1 }), h.reply);
+
+    expect(h.mockCreateCategory).toHaveBeenCalledWith(ownerId, name);
+    expect(h.replies.at(-1)).toBe(reservedCategoryReply(name, concept as "previsto"));
+    expect(h.replies.at(-1)).toContain("previsto: <monto> <nota>");
+  });
+
+  it("creates 'un otro gasto' through the command path (real concept words inside names stay creatable)", async () => {
+    await h.service.handleUpdate(textUpdate({ text: "registrar categoria: un otro gasto", messageId: 1 }), h.reply);
+
+    expect(h.mockCreateCategory).toHaveBeenCalledWith(ownerId, "un otro gasto");
+    expect(h.replies.at(-1)).toContain("un otro gasto");
   });
 
   it("redirects a reserved 'renombrar categoria: X a: ahorros' with the ahorro teaching", async () => {
@@ -2878,6 +3061,51 @@ describe("TelegramService dialog controller (brain-routed)", () => {
       pendingNote: null,
     });
     expect(h.replies.at(-1)).toBe('Listo, el movimiento quedó en "Transporte".');
+  });
+
+  it('a resolve answer with category "no." keeps the movement in "otro" (guard normalization, no category created)', async () => {
+    await seedAwaitingCategory("mov-9");
+    h.mockBrainInterpret.mockResolvedValue({
+      intent: "correct_category",
+      amount: null,
+      category: "no.",
+      note: null,
+      dialog_action: "resolve",
+    });
+    h.mockCreateCategory.mockClear();
+    h.mockUpdateMovement.mockClear();
+
+    await h.service.handleUpdate(textUpdate({ text: "no.", messageId: 2 }), h.reply);
+
+    expect(h.mockCreateCategory).not.toHaveBeenCalled();
+    expect(h.mockUpdateMovement).not.toHaveBeenCalled();
+    expect(h.mockSetState).toHaveBeenLastCalledWith({
+      ownerId,
+      state: "idle",
+      pendingMovementId: null,
+      pendingNote: null,
+    });
+    expect(h.replies.at(-1)).toBe('Listo, quedó en "otro".');
+  });
+
+  it('a resolve answer with category "si." re-asks the target category (single-token guard reject, never auto-created)', async () => {
+    await seedAwaitingCategory("mov-9");
+    h.mockBrainInterpret.mockResolvedValue({
+      intent: "correct_category",
+      amount: null,
+      category: "si.",
+      note: null,
+      dialog_action: "resolve",
+    });
+    h.mockCreateCategory.mockClear();
+    h.mockSetState.mockClear();
+
+    await h.service.handleUpdate(textUpdate({ text: "si.", messageId: 2 }), h.reply);
+
+    expect(h.mockCreateCategory).not.toHaveBeenCalled();
+    expect(h.mockUpdateMovement).not.toHaveBeenCalled();
+    expect(h.mockSetState).not.toHaveBeenCalled();
+    expect(h.replies.at(-1)).toBe('Dale, ¿a qué categoría lo asigno? Escribí el nombre o "no".');
   });
 
   it("routes an explicit abandon to today's D6 rules verbatim", async () => {

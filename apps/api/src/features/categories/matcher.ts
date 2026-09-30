@@ -155,6 +155,23 @@ export function foldSpanishPluralToken(token: string): string {
 }
 
 /**
+ * Guard-word normalization: `normalizeForMatch` (lowercase + accent fold,
+ * length-preserving) followed by punctuation stripping and whitespace
+ * collapse. Used ONLY for guard-set matching and the single-token auto-create
+ * reject, so "no."/"si."/"no," fold to their guard words and NEVER reach
+ * category creation. The literal `normalizeForMatch` stays byte-identical —
+ * its length-preserving contract is load-bearing for commands, dedupe and
+ * correction scoring (C14).
+ */
+export function normalizeForMatchGuard(value: string): string {
+  return normalizeForMatch(value)
+    .replace(/[^a-z0-9\s]/g, "")
+    .split(/\s+/)
+    .filter((token) => token.length > 0)
+    .join(" ");
+}
+
+/**
  * Tolerant normalization for matching: `normalizeForMatch` (lowercase +
  * accent fold, length-preserving) followed by a per-token conservative plural
  * fold. Tokens split on any non-alphanumeric run and rejoin with single

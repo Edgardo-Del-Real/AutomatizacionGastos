@@ -1407,4 +1407,130 @@ describe("prompt contracts", () => {
     expect(resolve).toBeDefined();
     expect(abandon).toBeDefined();
   });
+
+  it("decodes lifecycle envelopes: mark_paid and delete_expense intents carry their reference cues", () => {
+    const markPaid = conversationEnvelopeSchema.safeParse({ intent: "mark_paid", category: "Alquiler", amount: null });
+    const deleteExpense = conversationEnvelopeSchema.safeParse({ intent: "delete_expense", amount: 2500, category: null });
+
+    expect(markPaid.success).toBe(true);
+    expect(deleteExpense.success).toBe(true);
+    if (markPaid.success) {
+      expect(markPaid.data.intent).toBe("mark_paid");
+      expect(markPaid.data.category).toBe("Alquiler");
+    }
+    if (deleteExpense.success) {
+      expect(deleteExpense.data.intent).toBe("delete_expense");
+      expect(deleteExpense.data.amount).toBe(2500);
+    }
+  });
+
+  it("teaches the mark_paid intent with conversational phrasings and the never-register rule", () => {
+    expect(INTERPRET_SYSTEM_PROMPT).toContain("mark_paid");
+    expect(INTERPRET_SYSTEM_PROMPT).toContain("ya lo pagué");
+    expect(INTERPRET_SYSTEM_PROMPT).toContain("pásalo a pagado");
+    expect(INTERPRET_SYSTEM_PROMPT).toContain("el previsto de alquiler lo pagué");
+    expect(INTERPRET_SYSTEM_PROMPT).toContain("Nunca son \"register_expense\"");
+  });
+
+  it("teaches the delete_expense intent with conversational phrasings and the never-register rule", () => {
+    expect(INTERPRET_SYSTEM_PROMPT).toContain("delete_expense");
+    expect(INTERPRET_SYSTEM_PROMPT).toContain("borra ese gasto");
+    expect(INTERPRET_SYSTEM_PROMPT).toContain("borralo");
+    expect(INTERPRET_SYSTEM_PROMPT).toContain("borrá el de cafe");
+    expect(INTERPRET_SYSTEM_PROMPT).toContain("no crean movimientos ni categorías");
+  });
+
+  it("teaches the deterministic reference resolution for lifecycle intents (category/amount, recency, never ids)", () => {
+    expect(INTERPRET_SYSTEM_PROMPT).toContain("category");
+    expect(INTERPRET_SYSTEM_PROMPT).toContain("amount");
+    expect(INTERPRET_SYSTEM_PROMPT).toContain("más reciente");
+    expect(INTERPRET_SYSTEM_PROMPT).toContain("Nunca inventes ids");
+  });
+
+  it("teaches the category-resolution hint: suggestions resolve against the owner's categories and 'otro' is the fallback", () => {
+    expect(INTERPRET_SYSTEM_PROMPT).toContain("se resuelve contra las categorías existentes");
+    expect(INTERPRET_SYSTEM_PROMPT).toContain("\"otro\"");
+    expect(INTERPRET_SYSTEM_PROMPT).toContain("categoría de respaldo");
+    expect(INTERPRET_SYSTEM_PROMPT).toContain("Nunca inventes categorías nuevas");
+  });
+
+  it("models the six lifecycle few-shots including the anti-degradation 'marcá pagado' shot", () => {
+    const userShots = FEW_SHOTS.filter((message) => message.role === "user").map((message) => message.content);
+    expect(userShots).toContain("ya lo pagué");
+    expect(userShots).toContain("el previsto de alquiler lo pagué");
+    expect(userShots).toContain("ya lo pagué, los 2500");
+    expect(userShots).toContain("borra ese gasto");
+    expect(userShots).toContain("borra el de cafe");
+    expect(userShots).toContain("marcá pagado el gasto de 2500");
+
+    const markPaidShot = FEW_SHOTS.find(
+      (message) => message.role === "assistant" && message.content.includes('"intent":"mark_paid"'),
+    );
+    expect(markPaidShot).toBeDefined();
+    const parsed = JSON.parse(markPaidShot?.content ?? "{}") as { intent: string; amount: number | null; category: string | null };
+    expect(parsed.intent).toBe("mark_paid");
+    expect(parsed.amount).toBeNull();
+    expect(parsed.category).toBeNull();
+
+    const deleteShot = FEW_SHOTS.find(
+      (message) => message.role === "assistant" && message.content.includes('"intent":"delete_expense"'),
+    );
+    expect(deleteShot).toBeDefined();
+
+    const antiShot = FEW_SHOTS.find(
+      (message) => message.role === "user" && message.content.includes("marcá pagado el gasto de 2500"),
+    );
+    const antiAnswer = FEW_SHOTS[FEW_SHOTS.indexOf(antiShot as { role: "user"; content: string }) + 1];
+    const antiParsed = JSON.parse(antiAnswer?.content ?? "{}") as { intent: string; amount: number | null };
+    expect(antiParsed.intent).toBe("mark_paid");
+    expect(antiParsed.amount).toBe(2500);
+  });
+
+  it("teaches the reply to confirm marked_paid and deleted_movement actions from the executed facts", () => {
+    expect(REPLY_SYSTEM_PROMPT).toContain("marked_paid");
+    expect(REPLY_SYSTEM_PROMPT).toContain("quedó pagado");
+    expect(REPLY_SYSTEM_PROMPT).toContain("deleted_movement");
+    expect(REPLY_SYSTEM_PROMPT).toContain("se borró");
+  });
+
+  it("teaches the reply the abandoned_dialog fact and the merged single-message rule", () => {
+    expect(REPLY_SYSTEM_PROMPT).toContain("abandoned_dialog");
+    expect(REPLY_SYSTEM_PROMPT).toContain("reemplazó un diálogo anterior");
+    expect(REPLY_SYSTEM_PROMPT).toContain("mismo mensaje");
+  });
+
+  it("lists mark-paid and delete in the reply capabilities enumeration", () => {
+    expect(REPLY_SYSTEM_PROMPT).toContain("marcar pagado");
+    expect(REPLY_SYSTEM_PROMPT).toContain("borrar");
+  });
+
+  it("extends the awaiting_category dialog addendum to route lifecycle intents as dialog_action null", () => {
+    const addendum = DIALOG_INTERPRET_ADDENDUM["awaiting_category"];
+    expect(addendum).toContain("marcar pagado o borrar un gasto");
+  });
+
+  it("extends the awaiting_registration dialog addendum to route lifecycle intents as dialog_action null", () => {
+    const addendum = DIALOG_INTERPRET_ADDENDUM["awaiting_registration"];
+    expect(addendum).toContain("marcar pagado o borrar un gasto");
+  });
+
+  it("models a mark_paid few-shot inside the awaiting_category dialog shots", () => {
+    const shots = DIALOG_FEW_SHOTS["awaiting_category"];
+    const shot = shots.find((message) => message.role === "user" && message.content === "ya lo pagué");
+    expect(shot).toBeDefined();
+    const answer = shots[shots.indexOf(shot as { role: "user"; content: string }) + 1];
+    const parsed = JSON.parse(answer?.content ?? "{}") as { intent: string; dialog_action: string | null };
+    expect(parsed.intent).toBe("mark_paid");
+    expect(parsed.dialog_action).toBeNull();
+  });
+
+  it("models a delete_expense few-shot inside the awaiting_registration dialog shots", () => {
+    const shots = DIALOG_FEW_SHOTS["awaiting_registration"];
+    const shot = shots.find((message) => message.role === "user" && message.content === "borralo");
+    expect(shot).toBeDefined();
+    const answer = shots[shots.indexOf(shot as { role: "user"; content: string }) + 1];
+    const parsed = JSON.parse(answer?.content ?? "{}") as { intent: string; dialog_action: string | null };
+    expect(parsed.intent).toBe("delete_expense");
+    expect(parsed.dialog_action).toBeNull();
+  });
 });

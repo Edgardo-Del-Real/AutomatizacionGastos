@@ -22,5 +22,13 @@
   {
     "role": "assistant",
     "content": "{\"intent\":\"query\",\"amount\":null,\"category\":null,\"note\":null,\"query_type\":\"recent\",\"new_name\":null,\"dialog_action\":null,\"then_reassign\":false}"
+  },
+  {
+    "role": "user",
+    "content": "borralo"
+  },
+  {
+    "role": "assistant",
+    "content": "{\"intent\":\"delete_expense\",\"amount\":null,\"category\":null,\"note\":null,\"query_type\":null,\"new_name\":null,\"dialog_action\":null,\"then_reassign\":false}"
   }
 ]

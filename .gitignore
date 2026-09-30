@@ -33,3 +33,6 @@ Thumbs.db
 
 # Local codegraph index
 .codegraph/
+
+# One-off cleanup backups (runbook: apps/api/src/scripts/cleanup-phantom-data.ts)
+apps/api/.cleanup-backups/

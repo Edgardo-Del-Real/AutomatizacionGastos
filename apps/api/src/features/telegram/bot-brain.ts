@@ -19,6 +19,8 @@ export const BOT_INTENTS = [
   "help",
   "off_topic",
   "greeting",
+  "mark_paid",
+  "delete_expense",
 ] as const;
 
 export type BotIntent = (typeof BOT_INTENTS)[number];
@@ -74,7 +76,9 @@ export type BotAction =
   | "renamed"
   | "capabilities"
   | "asked_movement"
-  | "created_reassigned";
+  | "created_reassigned"
+  | "marked_paid"
+  | "deleted_movement";
 
 export type CategoryCommandErrorCode =
   | "duplicate"
@@ -113,6 +117,13 @@ export type ExecutionResult = {
    * and never invent the other one.
    */
   asked_field?: "amount" | "category" | null;
+  /**
+   * CR-5 merged-reply fact: true when a register-during-dialog message
+   * abandoned an open dialog AND registered the new message in one reply. The
+   * reply MUST confirm both facts in the same message without contradicting
+   * itself.
+   */
+  abandoned_dialog?: boolean;
 };
 
 /**
@@ -205,7 +216,7 @@ export const conversationEnvelopeSchema = z
     intent: z.enum(BOT_INTENTS),
     amount: llmAmount.nullable(),
     category: z.string().trim().min(1).max(60).nullable(),
-    note: z.string().trim().min(1).max(200).nullable(),
+    note: z.string().trim().min(1).max(200).nullable().default(null),
     query_type: z.enum(QUERY_TYPES).nullable().default(null),
     new_name: z.string().trim().min(1).max(60).nullable().default(null),
     dialog_action: z.enum(["resolve", "abandon"]).nullable().default(null),
@@ -233,6 +244,7 @@ export const INTERPRET_SYSTEM_PROMPT = [
   'Todo es en pesos argentinos (ARS): ignorá símbolos o nombres de moneda ($, usd, €) y no conviertas.',
   '"1.234,50" y "1234,50" significan 1234.50; "1234.5" significa 1234.5; "5 mil" o "cinco mil" significan 5000 — devolvé el número.',
   '"category" es una sugerencia de categoría (ej: "Supermercado", "Transporte"), máximo 60 caracteres, null si no estás seguro.',
+  '"category" se resuelve contra las categorías existentes del dueño: sugerí el nombre más parecido a una existente (los plurales valen, ej: "cafes" para "Cafe"); si nada se parece usá "otro", la categoría de respaldo. Nunca inventes categorías nuevas.',
   '"note" es la descripción concreta del gasto o ingreso, máximo 200 caracteres, null si no hay.',
   'Para preguntas sobre los datos del dueño usá "query" con su "query_type": "categories" (qué categorías tiene/disponibles), "recent" (últimos movimientos), "balance" (saldo, "cuánto me queda", "cuál es mi saldo"), "month" (resumen del mes), "savings" (cuánto ahorró este mes: "cuánto ahorré", "cuánto ahorré este mes"), "planned" (gastos fijos previstos del mes que viene: "cuánto tengo previsto", "gastos fijos previstos", "cuánto voy a gastar el mes que viene").',
   'Para preguntas sobre gastos fijos previstos usá "query_planned": "cuánto tengo previsto", "gastos fijos previstos", "cuánto voy a gastar el mes que viene" (también válido como "query" con "query_type": "planned").',
@@ -245,6 +257,7 @@ export const INTERPRET_SYSTEM_PROMPT = [
   'Los saludos ("hola", "buenas", "qué tal", "cómo andás") son "greeting": un saludo cálido, NO off_topic.',
   '"dialog_action" se usa SOLO cuando hay un diálogo abierto (pregunta pendiente del bot): "resolve" si el mensaje responde la pregunta con un valor presentado, "abandon" si el dueño abandona explícitamente ("no, dejalo"), null en cualquier otro caso. Fuera de diálogo siempre null.',
   'Para "correct_category": "category" es la categoría DESTINO; "amount" y/o "note" identifican el movimiento a corregir.',
+  'Para marcar pagado un gasto previsto ya registrado usá "mark_paid": "ya lo pagué", "pásalo a pagado", "el previsto de alquiler lo pagué". Para borrar un gasto ya registrado usá "delete_expense": "borra ese gasto", "borralo", "borrá el de cafe". Nunca son "register_expense": no crean movimientos ni categorías. En "mark_paid" y "delete_expense", "category" y/o "amount" identifican el movimiento ya registrado (ej: "Alquiler" en category, 2500 en amount); si el mensaje no trae referencia usá null en ambos y el bot usa el más reciente. Nunca inventes ids.',
   '"then_reassign" es true SOLO cuando "create_category" pide guardar el movimiento pendiente en la categoría nueva (ej: "creá X y guardalo ahí"); en cualquier otro caso false.',
   '"shared" es true SOLO en "register_expense" cuando el dueño pide que el gasto sea compartido con su pareja ("ponelo compartido", "es compartido"); en cualquier otro caso false. Si el mensaje ya trae el prefijo "compartido:" el bot lo maneja solo: no lo dupliques.',
   '"planned" es true SOLO en "register_expense" cuando el dueño expresa intención explícita de agendar el gasto: escribe "previsto", "gasto previsto" o "gasto fijo previsto", o frases como "dejalo para el mes que viene", "lo pago el mes que viene", "agendalo", "quiero dejar un gasto previsto para el mes que viene". En cualquier otro caso false: un "gasto fijo" sin señal de futuro es un gasto normal ya pagado, NUNCA previsto. Si el mensaje ya trae el prefijo "previsto:" el bot lo maneja solo: no lo dupliques.',
@@ -346,6 +359,19 @@ export const FEW_SHOTS: readonly ChatMessage[] = [
   },
   { role: "user", content: "5000" },
   { role: "assistant", content: '{"intent":"correct_amount","amount":5000,"category":null,"note":null}' },
+  { role: "user", content: "ya lo pagué" },
+  { role: "assistant", content: '{"intent":"mark_paid","amount":null,"category":null,"note":null}' },
+  { role: "user", content: "el previsto de alquiler lo pagué" },
+  { role: "assistant", content: '{"intent":"mark_paid","amount":null,"category":"alquiler","note":null}' },
+  { role: "user", content: "ya lo pagué, los 2500" },
+  { role: "assistant", content: '{"intent":"mark_paid","amount":2500,"category":null,"note":null}' },
+  { role: "user", content: "borra ese gasto" },
+  { role: "assistant", content: '{"intent":"delete_expense","amount":null,"category":null,"note":null}' },
+  { role: "user", content: "borra el de cafe" },
+  { role: "assistant", content: '{"intent":"delete_expense","amount":null,"category":"cafe","note":null}' },
+  // Anti-degradation: "marcá pagado" must never classify as register_expense.
+  { role: "user", content: "marcá pagado el gasto de 2500" },
+  { role: "assistant", content: '{"intent":"mark_paid","amount":2500,"category":null,"note":null}' },
 ];
 
 export const REPLY_SYSTEM_PROMPT = [
@@ -353,11 +379,12 @@ export const REPLY_SYSTEM_PROMPT = [
   "Recibís SOLO el JSON del resultado ejecutado y respondés con un objeto JSON: {\"reply\": string}.",
   "NUNCA afirmes un dato que no esté en el resultado: si amount es null no menciones montos.",
   "Máximo 2 oraciones, sin markdown.",
-  "Según action: registered = el movimiento se guardó o actualizó — confirmalo con los datos presentes; asked_amount = el monto es ambiguo — pedí el número exacto sin afirmar cuál es el correcto; asked_category = el movimiento quedó guardado en la categoría — ofrecé reasignarla; answered = respondé la consulta usando SOLO los datos del campo query (query_type y sus valores), sin inventar montos, categorías ni fechas; redirected = todavía no se puede — decilo con honestidad; none = no se ejecutó nada — guiá al dueño; created = la categoría se creó — confirmalo con category; deleted = la categoría se borró — confirmalo con category; renamed = la categoría se renombró — confirmá category a new_name; capabilities = enumerá lo que el bot puede hacer (registrar gastos, corregir, consultar categorías/últimos movimientos/saldo/resumen del mes/ahorro del mes, crear/borrar/renombrar categorías, asociar palabras, ayuda); asked_movement = el bot preguntó qué movimiento corregir — enumerá SOLO los candidatos recibidos, sin inventar datos; created_reassigned = la categoría se creó y el movimiento pendiente se reasignó — confirmá ambos hechos; asked_registration = el bot está juntando un registro — preguntá SOLO el campo de asked_field (\"amount\": pedí el monto; \"category\": pedí el nombre de la categoría), nunca inventes el otro campo.",
+  "Según action: registered = el movimiento se guardó o actualizó — confirmalo con los datos presentes; asked_amount = el monto es ambiguo — pedí el número exacto sin afirmar cuál es el correcto; asked_category = el movimiento quedó guardado en la categoría — ofrecé reasignarla; answered = respondé la consulta usando SOLO los datos del campo query (query_type y sus valores), sin inventar montos, categorías ni fechas; redirected = todavía no se puede — decilo con honestidad; none = no se ejecutó nada — guiá al dueño; created = la categoría se creó — confirmalo con category; deleted = la categoría se borró — confirmalo con category; renamed = la categoría se renombró — confirmá category a new_name; capabilities = enumerá lo que el bot puede hacer (registrar gastos, corregir, consultar categorías/últimos movimientos/saldo/resumen del mes/ahorro del mes, crear/borrar/renombrar categorías, asociar palabras, marcar pagado un gasto previsto, borrar un gasto, ayuda); asked_movement = el bot preguntó qué movimiento corregir — enumerá SOLO los candidatos recibidos, sin inventar datos; created_reassigned = la categoría se creó y el movimiento pendiente se reasignó — confirmá ambos hechos; asked_registration = el bot está juntando un registro — preguntá SOLO el campo de asked_field (\"amount\": pedí el monto; \"category\": pedí el nombre de la categoría), nunca inventes el otro campo; marked_paid = el gasto previsto quedó pagado — confirmalo con amount y category, y que ya suma en los gastos; deleted_movement = el gasto se borró — confirmalo con amount y category.",
   "Si intent es greeting con action none: respondé con un saludo cálido de una línea orientado a gastos, sin cerrar ningún diálogo abierto.",
   "Si vienen gross_amount, net_amount y savings_amount (un ingreso con ahorro automático): confirmá el ingreso neto (net_amount) y cuánto ahorraste (savings_amount), sin inventar otros montos.",
   "Si vienen planned_month y planned_total (una consulta de gastos previstos): confirmá el total previsto para ese mes con esos datos exactos, sin inventar montos.",
   "Si planned es true en un registro (gasto previsto): confirmá el registro sin afirmar que ya cuenta en el saldo ni en los gastos.",
+  "Si abandoned_dialog es true: el registro nuevo reemplazó un diálogo anterior que dejaste sin efecto — confirmá ambos hechos en el mismo mensaje, sin contradecirte.",
   "Si ok es false y viene message, transmití ese error de forma amable y honesta sin inventar causas.",
 ].join(" ");
 
@@ -370,7 +397,7 @@ export const DIALOG_INTERPRET_ADDENDUM: Record<InterpretContext["state"], string
     "Estás en un diálogo de corrección: el dueño debe elegir la categoría del movimiento pendiente.",
     '"dialog_action" es "resolve" SOLO para una respuesta que nombra una categoría ("Transporte", "Gastos fijos").',
     '"dialog_action" es "abandon" SOLO para un abandono explícito ("no", "no, dejalo", "dejalo").',
-    'Cualquier otra cosa (consulta, registro nuevo, crear categoría) es "dialog_action" null con su intent real.',
+    'Cualquier otra cosa (consulta, registro nuevo, crear categoría, marcar pagado o borrar un gasto) es "dialog_action" null con su intent real.',
     'En "resolve", "category" es el nombre exacto de la categoría elegida; nunca inventes una.',
   ].join(" "),
   awaiting_amount_confirmation: [
@@ -385,7 +412,7 @@ export const DIALOG_INTERPRET_ADDENDUM: Record<InterpretContext["state"], string
     '"dialog_action" es "resolve" SOLO cuando el mensaje responde el campo abierto: un monto si la pregunta abierta es el monto, o un nombre de categoría si es la categoría.',
     'Una afirmación sin valor ("si", "dale") NUNCA es "resolve": usá "dialog_action" null.',
     '"dialog_action" es "abandon" SOLO para un abandono explícito ("no, dejalo", "cancelalo").',
-    'Cualquier otra cosa (consulta, registro nuevo, crear categoría) es "dialog_action" null con su intent real.',
+    'Cualquier otra cosa (consulta, registro nuevo, crear categoría, marcar pagado o borrar un gasto) es "dialog_action" null con su intent real.',
     'NUNCA inventes un monto ni una categoría que no estén en el mensaje.',
   ].join(" "),
 };
@@ -416,6 +443,12 @@ export const DIALOG_FEW_SHOTS: Record<InterpretContext["state"], readonly ChatMe
       role: "assistant",
       content:
         '{"intent":"create_category","amount":null,"category":"gastos hormiga","note":null,"query_type":null,"new_name":null,"dialog_action":null,"then_reassign":true}',
+    },
+    { role: "user", content: "ya lo pagué" },
+    {
+      role: "assistant",
+      content:
+        '{"intent":"mark_paid","amount":null,"category":null,"note":null,"query_type":null,"new_name":null,"dialog_action":null,"then_reassign":false}',
     },
   ],
   awaiting_amount_confirmation: [
@@ -456,6 +489,12 @@ export const DIALOG_FEW_SHOTS: Record<InterpretContext["state"], readonly ChatMe
       role: "assistant",
       content:
         '{"intent":"query","amount":null,"category":null,"note":null,"query_type":"recent","new_name":null,"dialog_action":null,"then_reassign":false}',
+    },
+    { role: "user", content: "borralo" },
+    {
+      role: "assistant",
+      content:
+        '{"intent":"delete_expense","amount":null,"category":null,"note":null,"query_type":null,"new_name":null,"dialog_action":null,"then_reassign":false}',
     },
   ],
 };

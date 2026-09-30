@@ -29,6 +29,11 @@ import {
 import { CategoryExecutor } from "./category-executor";
 import { isMilStance } from "./mil-stance";
 import { MovementCorrector } from "./movement-corrector";
+import {
+  MovementLifecycleExecutor,
+  type LifecycleCues,
+  type LifecycleResult,
+} from "./movement-lifecycle-executor";
 import { QueryExecutor } from "./query-executor";
 import { deriveQueryType, type PlannedQueryResult, type QueryExecutionResult } from "./query.types";
 import { parseCommand, parseSetupBatchCommand, type TelegramCommand } from "./telegram.commands";
@@ -52,11 +57,16 @@ import {
   correctionAbandonedReply,
   correctionDoneReply,
   correctionOfferReply,
+  deletedMovementReply,
+  deleteAskReply,
   duplicateCategoryReply,
   greetingReply,
   helpReply,
   keptCollectingReply,
   keywordAssociatedReply,
+  markPaidAlreadyReply,
+  markPaidAskReply,
+  markPaidReply,
   missingCategoryReply,
   movementAmbiguousReply,
   movementCorrectionDoneReply,
@@ -64,6 +74,8 @@ import {
   movementNoMatchReply,
   movementNoReferenceReply,
   movementSelectionAbandonedReply,
+  nothingPendingReply,
+  nothingToDeleteReply,
   offTopicRedirectReply,
   otroKeptReply,
   plannedReply,
@@ -185,6 +197,30 @@ export const movementSelectionPayloadSchema = z.object({
 
 export type MovementSelectionPayload = z.infer<typeof movementSelectionPayloadSchema>;
 
+/**
+ * Stored payload of an open movement-lifecycle question (design D6): the pick
+ * is resolved deterministically and executes `markPaidById`/`deleteById` —
+ * never by the brain. A SIBLING schema (not a discriminated union) so old
+ * persisted correction payloads keep decoding untouched (D6). Lives in
+ * `BotState.pendingNote` so it survives restarts.
+ */
+export const lifecycleSelectionPayloadSchema = z.object({
+  action: z.enum(["mark_paid", "delete_expense"]),
+  candidates: z
+    .array(
+      z.object({
+        id: z.string().min(1),
+        amount: z.number().positive(),
+        note: z.string().nullable(),
+        date: z.string().min(1),
+      }),
+    )
+    .min(1)
+    .max(10),
+});
+
+export type LifecycleSelectionPayload = z.infer<typeof lifecycleSelectionPayloadSchema>;
+
 /** Answers that keep the movement in "otro" and end the correction dialog. */
 const KEEP_OTRO_ANSWERS = new Set(["no", "otro", "dejalo", "deja", "nada"]);
 
@@ -209,11 +245,16 @@ export class TelegramService {
   private readonly queryExecutor: QueryExecutor;
   private readonly categoryExecutor: CategoryExecutor;
   private readonly movementCorrector: MovementCorrector;
+  private readonly movementLifecycleExecutor: MovementLifecycleExecutor;
 
   constructor(private readonly deps: TelegramServiceDeps) {
     this.queryExecutor = new QueryExecutor(deps.movementService, deps.categoryService);
     this.categoryExecutor = new CategoryExecutor(deps.categoryService);
     this.movementCorrector = new MovementCorrector(deps.movementService, deps.categoryService);
+    this.movementLifecycleExecutor = new MovementLifecycleExecutor({
+      movementService: deps.movementService,
+      expenseService: deps.expenseService,
+    });
   }
 
   async handleUpdate(update: unknown, reply?: ReplyPort): Promise<void> {
@@ -487,8 +528,12 @@ export class TelegramService {
     planned: boolean,
     override: SavingsOverride,
     reply?: ReplyPort,
+    /** CR-5: an optional merged sender injected by the register-during-dialog
+     * branch so the abandon fact and the registration outcome land in ONE
+     * reply. Absent → the regular brain-or-fixed sender. */
+    send?: Sender,
   ): Promise<void> {
-    const send = this.makeSender(true, reply);
+    const activeSend = send ?? this.makeSender(true, reply);
     const detAmount = parsed?.amount ?? null;
     const brainAmount = envelope.amount;
     // AD6 — the deterministic prefix is authoritative and wins over the brain
@@ -523,7 +568,7 @@ export class TelegramService {
         pendingMovementId: null,
         pendingNote: JSON.stringify(payload),
       });
-      await send(
+      await activeSend(
         {
           intent: "register_expense",
           ok: false,
@@ -551,7 +596,7 @@ export class TelegramService {
       amount = brainAmount as number;
     } else {
       // Genuine disagreement: ask the owner, nothing registers silently.
-      await this.askAmountConfirmation(body, detAmount, brainAmount, parsed, envelope, categories, ownerId, shared, effectivePlanned, override, send);
+      await this.askAmountConfirmation(body, detAmount, brainAmount, parsed, envelope, categories, ownerId, shared, effectivePlanned, override, activeSend);
       return;
     }
 
@@ -563,7 +608,7 @@ export class TelegramService {
     const matched = await this.deps.categoryService.matchNote(ownerId, note ?? body);
     const category = matched ?? this.resolveSuggestion(envelope.category, categories);
     if (category !== null) {
-      await this.registerWithCategory(body, amount, note, category, ownerId, shared, effectivePlanned, override, send);
+      await this.registerWithCategory(body, amount, note, category, ownerId, shared, effectivePlanned, override, activeSend);
       return;
     }
     // E2 (T2): the envelope SIGNALED a category ("category" non-null) but the
@@ -586,7 +631,7 @@ export class TelegramService {
         pendingMovementId: null,
         pendingNote: JSON.stringify(payload),
       });
-      await send(
+      await activeSend(
         {
           intent: "register_expense",
           ok: false,
@@ -600,7 +645,7 @@ export class TelegramService {
       );
       return;
     }
-    await this.registerOtroWithCorrection(body, amount, note, ownerId, shared, effectivePlanned, override, send);
+    await this.registerOtroWithCorrection(body, amount, note, ownerId, shared, effectivePlanned, override, activeSend);
   }
 
   /** Amounts differ: persist the question and ask; nothing registers silently. */
@@ -774,9 +819,12 @@ export class TelegramService {
   }
 
   /**
-   * Resolves a brain category suggestion against the owner's categories
-   * by exact normalized equality. Never creates categories; "otro" is treated
-   * as no suggestion so the normal correction flow follows.
+   * Resolves a brain category suggestion against the owner's categories:
+   * exact normalized equality first, then the tolerant plural fold (B2) so
+   * "cafes"→"Cafe" and "Otros"→"otro" resolve. Never creates categories; an
+   * exact "otro" suggestion is treated as NO suggestion so the normal
+   * correction flow follows (today's behavior); a FOLDED "otro" (e.g. "Otros")
+   * resolves to the fallback WITHOUT a correction offer (spec truth table).
    */
   private resolveSuggestion(suggestion: string | null, categories: CategoryWithKeywords[]): string | null {
     if (suggestion === null) {
@@ -785,8 +833,13 @@ export class TelegramService {
     if (normalizeForMatch(suggestion) === "otro") {
       return null;
     }
-    const match = categories.find((category) => normalizeForMatch(category.name) === normalizeForMatch(suggestion));
-    return match === undefined ? null : match.name;
+    const exact = categories.find((category) => normalizeForMatch(category.name) === normalizeForMatch(suggestion));
+    if (exact !== undefined) {
+      return exact.name;
+    }
+    const folded = normalizeForMatchTolerant(suggestion);
+    const foldedMatch = categories.find((category) => normalizeForMatchTolerant(category.name) === folded);
+    return foldedMatch === undefined ? null : foldedMatch.name;
   }
 
   private async handleSetupReply(body: string, ownerId: string, reply?: ReplyPort): Promise<void> {
@@ -1737,6 +1790,13 @@ private async handleDialogMessage(
       case "correct_category":
         await this.runMovementCorrection(envelope, ownerId, reply);
         return;
+      case "mark_paid":
+      case "delete_expense":
+        // Lifecycle intents route to the deterministic executor; they never
+        // enter the registration path (spec "Lifecycle intent routes to the
+        // executor").
+        await this.runMovementLifecycle(envelope, ownerId, reply);
+        return;
       case "register_expense":
         if (dialog !== undefined) {
           // A new registration abandons the pending correction/question first.
@@ -1752,9 +1812,120 @@ private async handleDialogMessage(
               : dialog.state.state === AWAITING_REGISTRATION
                 ? collectAbandonedReply()
                 : correctionAbandonedReply();
-          await this.safeReply(reply, abandoned);
+          // CR-5: ONE merged reply — the abandon template is NOT sent
+          // separately; the merged sender prepends it to the registration
+          // outcome and passes `abandoned_dialog: true` to the brain reply.
+          const base = this.makeSender(true, reply);
+          const merged: Sender = async (result, fixed) =>
+            base({ ...result, abandoned_dialog: true }, `${abandoned} ${fixed}`);
+          await this.executeRegistration(body, parseAmountAndNote(body), envelope, await this.deps.categoryService.listCategories(ownerId), ownerId, shared, planned, override, reply, merged);
+          return;
         }
         await this.executeRegistration(body, parseAmountAndNote(body), envelope, await this.deps.categoryService.listCategories(ownerId), ownerId, shared, planned, override, reply);
+        return;
+    }
+  }
+
+  /**
+   * Lifecycle intent execution (design "Executor status → reply mapping"): the
+   * deterministic `MovementLifecycleExecutor` resolves the reference (category
+   * → amount → recency) and the status maps to the reply — brain reply with the
+   * executed facts when available, else the fixed template. Cues come from
+   * `envelope.category`/`envelope.amount`; `note` is never a cue (D2). An
+   * ambiguity ask persists the lifecycle selection payload (D6) and replies
+   * fixed-only.
+   */
+  private async runMovementLifecycle(
+    envelope: ConversationEnvelope,
+    ownerId: string,
+    reply?: ReplyPort,
+  ): Promise<void> {
+    const intent = envelope.intent === "delete_expense" ? "delete_expense" : "mark_paid";
+    const cues: LifecycleCues = { category: envelope.category, amount: envelope.amount };
+    const result =
+      intent === "mark_paid"
+        ? await this.movementLifecycleExecutor.markPaid(ownerId, cues)
+        : await this.movementLifecycleExecutor.delete(ownerId, cues);
+
+    switch (result.status) {
+      case "ask": {
+        const payload: LifecycleSelectionPayload = {
+          action: intent,
+          candidates: result.candidates.map((candidate) => ({
+            id: candidate.id,
+            amount: candidate.amount,
+            note: candidate.note,
+            date: candidate.date,
+          })),
+        };
+        await this.deps.botStateRepository.set({
+          ownerId,
+          state: AWAITING_MOVEMENT_SELECTION,
+          pendingMovementId: null,
+          pendingNote: JSON.stringify(payload),
+        });
+        const fixed =
+          intent === "mark_paid" ? markPaidAskReply(result.candidates) : deleteAskReply(result.candidates);
+        await this.safeReply(reply, fixed);
+        return;
+      }
+      case "nothing_pending":
+        await this.safeReply(reply, nothingPendingReply());
+        return;
+      case "no_match":
+        await this.safeReply(reply, nothingToDeleteReply());
+        return;
+      default:
+        await this.sendLifecycleResult(intent, result, reply);
+    }
+  }
+
+  /**
+   * Status → reply mapping shared by the routing path and the selection pick
+   * (D5/D8): executed/already_paid go through the brain reply (grounded in the
+   * executed facts) with the fixed template as fallback; missing is fixed-only.
+   * nothing_pending/no_match/ask are handled by `runMovementLifecycle` before
+   * this point and are unreachable from the pick path.
+   */
+  private async sendLifecycleResult(
+    intent: "mark_paid" | "delete_expense",
+    result: LifecycleResult,
+    reply?: ReplyPort,
+  ): Promise<void> {
+    switch (result.status) {
+      case "executed":
+        await this.makeSender(true, reply)(
+          {
+            intent,
+            ok: true,
+            action: result.action,
+            amount: result.movement.amount,
+            category: result.movement.category || null,
+            note: result.movement.note,
+          },
+          intent === "mark_paid"
+            ? markPaidReply(result.movement.amount, result.movement.note, result.movement.category || null)
+            : deletedMovementReply(result.movement.amount, result.movement.note, result.movement.category || null),
+        );
+        return;
+      case "already_paid":
+        await this.makeSender(true, reply)(
+          {
+            intent,
+            ok: false,
+            action: "none",
+            amount: result.movement.amount,
+            category: result.movement.category || null,
+            note: result.movement.note,
+            message: markPaidAlreadyReply(),
+          },
+          markPaidAlreadyReply(),
+        );
+        return;
+      case "missing":
+        await this.safeReply(reply, movementMissingReply());
+        return;
+      default:
         return;
     }
   }
@@ -1885,9 +2056,19 @@ private async handleDialogMessage(
     override: SavingsOverride,
     reply?: ReplyPort,
   ): Promise<void> {
+    // Both sibling payload schemas decode from the same pendingNote (D6): the
+    // correction payload (category + candidates) and the lifecycle payload
+    // (action + candidates). Old persisted correction payloads keep decoding.
     const payload = this.decodeMovementSelectionPayload(state.pendingNote);
+    const lifecycle = this.decodeLifecycleSelectionPayload(state.pendingNote);
+
+    if (lifecycle !== null) {
+      await this.handleLifecycleSelection(state, lifecycle, body, ownerId, reply);
+      return;
+    }
 
     if (payload === null) {
+      // Corrupt or unknown payload: the existing dropped reply + reprocess.
       await this.deps.botStateRepository.set({ ownerId, state: IDLE, pendingMovementId: null, pendingNote: null });
       await this.safeReply(reply, questionDroppedReply());
       await this.handleRegistration(body, ownerId, shared, planned, override, reply);
@@ -1916,8 +2097,40 @@ private async handleDialogMessage(
     await this.safeReply(reply, correctionDoneReply(payload.category));
   }
 
+  /**
+   * Deterministic pick for an open LIFECYCLE selection question (design D6):
+   * the same `pickMovementSelection` resolution (number 1..N / note / amount)
+   * executes `markPaidById`/`deleteById` and replies ONCE with the status
+   * mapping. A non-answer abandons the question WITHOUT reprocessing — a pick
+   * attempt is never a registration (the lifecycle flow creates nothing).
+   */
+  private async handleLifecycleSelection(
+    state: BotStateRecord,
+    payload: LifecycleSelectionPayload,
+    body: string,
+    ownerId: string,
+    reply?: ReplyPort,
+  ): Promise<void> {
+    void state;
+    const picked = this.pickMovementSelection(body, payload);
+    if (picked === null) {
+      await this.deps.botStateRepository.set({ ownerId, state: IDLE, pendingMovementId: null, pendingNote: null });
+      await this.safeReply(reply, movementSelectionAbandonedReply());
+      return;
+    }
+    // The payload persists {id, amount, note, date} only — the category is not
+    // carried, so the by-id reply renders it as absent.
+    const candidate = { ...picked, category: "", occurredAtMs: 0 };
+    const result =
+      payload.action === "mark_paid"
+        ? await this.movementLifecycleExecutor.markPaidById(ownerId, candidate)
+        : await this.movementLifecycleExecutor.deleteById(ownerId, candidate);
+    await this.deps.botStateRepository.set({ ownerId, state: IDLE, pendingMovementId: null, pendingNote: null });
+    await this.sendLifecycleResult(payload.action, result, reply);
+  }
+
   /** Pure pick resolution: number 1..N, then note, then unique amount (design D4). */
-  private pickMovementSelection(body: string, payload: MovementSelectionPayload): MovementSelectionPayload["candidates"][number] | null {
+  private pickMovementSelection(body: string, payload: { candidates: MovementSelectionPayload["candidates"] }): MovementSelectionPayload["candidates"][number] | null {
     const candidates = payload.candidates;
     const amount = normalizeAmountString(body);
 
@@ -1953,6 +2166,18 @@ private async handleDialogMessage(
     }
     try {
       const parsed = movementSelectionPayloadSchema.safeParse(JSON.parse(pendingNote));
+      return parsed.success ? parsed.data : null;
+    } catch {
+      return null;
+    }
+  }
+
+  private decodeLifecycleSelectionPayload(pendingNote: string | null): LifecycleSelectionPayload | null {
+    if (pendingNote === null) {
+      return null;
+    }
+    try {
+      const parsed = lifecycleSelectionPayloadSchema.safeParse(JSON.parse(pendingNote));
       return parsed.success ? parsed.data : null;
     } catch {
       return null;

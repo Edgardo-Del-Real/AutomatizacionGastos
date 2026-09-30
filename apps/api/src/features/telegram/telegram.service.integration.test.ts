@@ -14,7 +14,7 @@ import { PrismaSavingsRuleRepository } from "../savings/savings.repository";
 import { SavingsRuleService } from "../savings/savings.service";
 import type { BotBrain, ConversationEnvelope } from "./bot-brain";
 import { HouseholdService } from "../household/household.service";
-import { formatARS } from "./reply-text";
+import { deletedMovementReply, formatARS, markPaidAlreadyReply, markPaidReply, nothingPendingReply, nothingToDeleteReply } from "./reply-text";
 import { registrationCollectPayloadSchema, TelegramService } from "./telegram.service";
 
 loadDotEnvFromDisk();
@@ -1367,5 +1367,187 @@ describe("TelegramService (integration)", () => {
     expect(rows).toHaveLength(1);
     expect(rows[0]?.amount.toNumber()).toBe(5000);
     expect(rows[0]?.visibility).toBe("SHARED");
+  });
+
+  async function seedExpense(input: {
+    amount: number;
+    category: string;
+    note: string | null;
+    status?: "PENDING" | "PAID";
+  }): Promise<string> {
+    const expenseService = new ExpenseService(new PrismaExpenseRepository(prisma));
+    const row = await expenseService.createExpense(
+      {
+        amount: input.amount,
+        category: input.category,
+        note: input.note,
+        occurredAt: new Date(),
+        status: input.status ?? "PAID",
+      },
+      ownerId,
+    );
+    return row.id;
+  }
+
+  it("lifecycle e2e: 'ya lo pagué' transitions the referenced PENDING expense to PAID with one reply", async () => {
+    await seedCategories(["Alquiler"]);
+    const expenseId = await seedExpense({ amount: 2500, category: "Alquiler", note: "alquiler", status: "PENDING" });
+    const replies: string[] = [];
+    const stubbed = buildService(
+      () => undefined,
+      stubBrain({
+        interpret: async () => ({ intent: "mark_paid", amount: null, category: "alquiler", note: null }),
+        reply: async () => null,
+      }),
+    );
+
+    await stubbed.handleUpdate(textUpdate({ messageId: 1, text: "el previsto de alquiler lo pagué" }), async (text) => {
+      replies.push(text);
+    });
+
+    const rows = await prisma.expense.findMany({ where: { ownerId, id: expenseId } });
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.status).toBe("PAID");
+    expect(replies).toHaveLength(1);
+    expect(replies[0]).toBe(markPaidReply(2500, "alquiler", "Alquiler"));
+    const state = await prisma.botState.findUnique({ where: { ownerId } });
+    expect(state).toBeNull();
+  });
+
+  it("lifecycle e2e: 'borralo' deletes the referenced expense row with one reply", async () => {
+    await seedCategories(["Cafe"]);
+    const expenseId = await seedExpense({ amount: 900, category: "Cafe", note: "cafe", status: "PAID" });
+    const replies: string[] = [];
+    const stubbed = buildService(
+      () => undefined,
+      stubBrain({
+        interpret: async () => ({ intent: "delete_expense", amount: null, category: "cafe", note: null }),
+        reply: async () => null,
+      }),
+    );
+
+    await stubbed.handleUpdate(textUpdate({ messageId: 1, text: "borra el de cafe" }), async (text) => {
+      replies.push(text);
+    });
+
+    expect(await prisma.expense.count({ where: { ownerId, id: expenseId } })).toBe(0);
+    expect(replies).toHaveLength(1);
+    expect(replies[0]).toBe(deletedMovementReply(900, "cafe", "Cafe"));
+  });
+
+  it("lifecycle e2e: an already-PAID reference replies the 409 conflict and changes no state", async () => {
+    await seedCategories(["Alquiler"]);
+    const expenseId = await seedExpense({ amount: 2500, category: "Alquiler", note: "alquiler", status: "PAID" });
+    const replies: string[] = [];
+    const stubbed = buildService(
+      () => undefined,
+      stubBrain({
+        interpret: async () => ({ intent: "mark_paid", amount: null, category: "alquiler", note: null }),
+        reply: async () => null,
+      }),
+    );
+
+    await stubbed.handleUpdate(textUpdate({ messageId: 1, text: "el previsto de alquiler lo pagué" }), async (text) => {
+      replies.push(text);
+    });
+
+    const rows = await prisma.expense.findMany({ where: { ownerId, id: expenseId } });
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.status).toBe("PAID");
+    expect(replies.at(-1)).toBe(markPaidAlreadyReply());
+  });
+
+  it("lifecycle e2e: no PENDING anywhere replies nothing_pending and changes no state", async () => {
+    await seedCategories(["Alquiler"]);
+    const replies: string[] = [];
+    const stubbed = buildService(
+      () => undefined,
+      stubBrain({
+        interpret: async () => ({ intent: "mark_paid", amount: null, category: "alquiler", note: null }),
+      }),
+    );
+
+    await stubbed.handleUpdate(textUpdate({ messageId: 1, text: "ya lo pagué" }), async (text) => {
+      replies.push(text);
+    });
+
+    expect(await prisma.expense.count()).toBe(0);
+    expect(replies.at(-1)).toBe(nothingPendingReply());
+  });
+
+  it("lifecycle e2e: no movement matches a delete and nothing is deleted", async () => {
+    await seedCategories(["Cafe"]);
+    const replies: string[] = [];
+    const stubbed = buildService(
+      () => undefined,
+      stubBrain({
+        interpret: async () => ({ intent: "delete_expense", amount: null, category: "supermercado", note: null }),
+      }),
+    );
+
+    await stubbed.handleUpdate(textUpdate({ messageId: 1, text: "borra el de supermercado" }), async (text) => {
+      replies.push(text);
+    });
+
+    expect(await prisma.expense.count()).toBe(0);
+    expect(replies.at(-1)).toBe(nothingToDeleteReply());
+  });
+
+  it("lifecycle e2e: two PENDING in the same category ask, and the pick '2' marks the picked one paid", async () => {
+    await seedCategories(["Alquiler"]);
+    await seedExpense({ amount: 2500, category: "Alquiler", note: "alquiler", status: "PENDING" });
+    await seedExpense({ amount: 3100, category: "Alquiler", note: "expensas", status: "PENDING" });
+    const replies: string[] = [];
+    const stubbed = buildService(
+      () => undefined,
+      stubBrain({
+        interpret: async () => ({ intent: "mark_paid", amount: null, category: "alquiler", note: null }),
+        reply: async () => null,
+      }),
+    );
+
+    await stubbed.handleUpdate(textUpdate({ messageId: 1, text: "el previsto de alquiler lo pagué" }), async (text) => {
+      replies.push(text);
+    });
+
+    // Ambiguity: no movement changed yet, the lifecycle payload is persisted.
+    expect(await prisma.expense.count({ where: { ownerId, status: "PENDING" } })).toBe(2);
+    const state = await prisma.botState.findUnique({ where: { ownerId } });
+    expect(state?.state).toBe("awaiting_movement_selection");
+    expect(replies.at(-1)).toContain("marcaste como pagado");
+
+    await stubbed.handleUpdate(textUpdate({ messageId: 2, text: "2" }), async (text) => {
+      replies.push(text);
+    });
+
+    // Exactly one PENDING row remains: the picked one transitioned to PAID.
+    const pending = await prisma.expense.findMany({ where: { ownerId, status: "PENDING" } });
+    expect(pending).toHaveLength(1);
+    const paid = await prisma.expense.findMany({ where: { ownerId, status: "PAID" } });
+    expect(paid).toHaveLength(1);
+    expect(replies.at(-1)).toContain("pagado");
+  });
+
+  it("lifecycle e2e: setup lists the real categories and a batch delete executes without a literal", async () => {
+    await seedCategories(["Cafe", "Transporte"]);
+    const replies: string[] = [];
+
+    await service.handleUpdate(textUpdate({ messageId: 1, text: "configurar categorias" }), async (text) => {
+      replies.push(text);
+    });
+
+    expect(replies.at(-1)).toContain("Cafe");
+    expect(replies.at(-1)).toContain("Transporte");
+    const state = await prisma.botState.findUnique({ where: { ownerId } });
+    expect(state?.state).toBe("awaiting_setup");
+
+    await service.handleUpdate(textUpdate({ messageId: 2, text: "borrar categoria: Cafe" }), async (text) => {
+      replies.push(text);
+    });
+
+    const names = (await categoryService.listCategories(ownerId)).map((category) => category.name);
+    expect(names).not.toContain("Cafe");
+    expect(names).not.toContain("borrar categoria: cafe");
+    expect(replies.at(-1)).toContain("Borradas: Cafe");
   });
 });

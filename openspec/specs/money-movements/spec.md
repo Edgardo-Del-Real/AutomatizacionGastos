@@ -31,7 +31,7 @@ The system MUST store a `type` field on every movement (enum `EXPENSE` | `INCOME
 
 ### Requirement: Movement Contracts
 
-`@rita/contracts` MUST export `movementSchema`, `listMovementsSchema`, `movementSummarySchema`, `createMovementSchema`, and `updateMovementSchema`. `updateMovementSchema` MUST make `amount`, `note`, and `category` all optional with at least one present. `category` MUST accept `null` (clears the category) or an owner category; an absent `category` MUST leave it unchanged. `amount`, when present, MUST be a positive number. The `expenseSchema` family MUST remain exported unchanged. Every movement API response MUST validate against these contracts. `movementTypeSchema` and `movementFiltersSchema.type` MUST accept `SAVINGS` in addition to `EXPENSE` and `INCOME`, so the list `type` filter supports SAVINGS. `movementSummarySchema` MUST include a current-calendar-month `savings` figure in `kpis` and per-month `savings` in `mom`. `movementStatusSchema` MUST be exported with values `PAID` and `PENDING`. `movementSchema` MUST include an optional `status` field. `createMovementSchema` MUST accept an optional `status`, and a `PENDING` status MUST be rejected for types other than `EXPENSE`. `updateMovementSchema` MUST NOT accept `status` or `occurredAt`; it stays `amount | note | category`. `movementSummarySchema` MUST include a `planned: { month, total }` block reporting the owner's next-month PENDING EXPENSE total.
+`@rita/contracts` MUST export `movementSchema`, `listMovementsSchema`, `movementSummarySchema`, `createMovementSchema`, and `updateMovementSchema`. `updateMovementSchema` MUST make `amount`, `note`, and `category` all optional with at least one present. `category` MUST accept `null` (clears the category) or an owner category; an absent `category` MUST leave it unchanged. `amount`, when present, MUST be a positive number. The `expenseSchema` family MUST remain exported unchanged. Every movement API response MUST validate against these contracts. `movementTypeSchema` and `movementFiltersSchema.type` MUST accept `SAVINGS` in addition to `EXPENSE` and `INCOME`, so the list `type` filter supports SAVINGS. `movementSummarySchema` MUST include a current-calendar-month `savings` figure in `kpis` and per-month `savings` in `mom`. `movementStatusSchema` MUST be exported with values `PAID` and `PENDING`. `movementSchema` MUST include an optional `status` field. `createMovementSchema` MUST accept an optional `status`, and a `PENDING` status MUST be rejected for types other than `EXPENSE`. `updateMovementSchema` MUST NOT accept `status` or `occurredAt`; it stays `amount | note | category`. `movementSummarySchema` MUST include a `planned: { month, total }` block reporting the owner's next-month PENDING EXPENSE total. `movementSchema` MUST carry `visibility` (`INDIVIDUAL`|`SHARED`) and `registrantId` (the creating owner).
 (Previously: only `movementSchema`, `listMovementsSchema`, and `movementSummarySchema` were defined, category was free-form nullable, and no status or planned concepts existed.)
 
 #### Scenario: Update schema optional fields
@@ -94,6 +94,12 @@ The system MUST store a `type` field on every movement (enum `EXPENSE` | `INCOME
 - WHEN validated against `updateMovementSchema`
 - THEN it fails validation (empty patch)
 
+#### Scenario: Movement carries visibility and registrant
+
+- GIVEN a persisted SHARED movement by Rita
+- WHEN it is validated against `movementSchema`
+- THEN it carries `visibility=SHARED` and `registrantId=rita`
+
 ### Requirement: Message Income Detection
 
 The system MUST classify an inbound message as `INCOME` when its normalized note matches any keyword (`ingreso|cobro|sueldo|venta|recibí|depósito`, case-insensitive) OR the amount is prefixed with `+`; otherwise it MUST classify as `EXPENSE`.
@@ -125,7 +131,7 @@ The system MUST classify an inbound message as `INCOME` when its normalized note
 
 ### Requirement: Movement List Endpoint
 
-`GET /movements` MUST return `listMovementsSchema` — an array of movements for the `ownerId` owner ordered by `occurredAt` DESC — filtered by optional `type` (`EXPENSE`|`INCOME`|`SAVINGS`), `from`/`to` date range on `occurredAt`, `category`, and `q` (case-insensitive note substring). Unknown owner or no matches MUST return an empty array. All currencies MUST appear (no currency filter).
+`GET /movements` MUST return `listMovementsSchema` — an array of movements visible to the `ownerId` viewer (own movements plus the partner's SHARED ones, per the viewer-scoped predicate) ordered by `occurredAt` DESC — filtered by optional `type` (`EXPENSE`|`INCOME`|`SAVINGS`), `visibility` (`mine`|`shared`|`all`), `from`/`to` date range on `occurredAt`, `category`, and `q` (case-insensitive note substring). Unknown owner or no matches MUST return an empty array. All currencies MUST appear (no currency filter).
 (Previously: the `type` filter accepted only `EXPENSE`|`INCOME`.)
 
 #### Scenario: Combined filters
@@ -145,9 +151,15 @@ The system MUST classify an inbound message as `INCOME` when its normalized note
 - WHEN `GET /movements?type=SAVINGS`
 - THEN only SAVINGS movements return, newest first
 
+#### Scenario: Visibility filter applied
+
+- GIVEN a viewer with own and partner SHARED movements
+- WHEN `GET /movements?visibility=shared`
+- THEN only SHARED movements visible to the viewer return
+
 ### Requirement: Movement Summary Endpoint
 
-`GET /movements/summary` MUST return `movementSummarySchema` for the `ownerId` owner with optional `from`/`to` filters. Totals MUST include ONLY `ARS` movements; other currencies MUST NOT be mixed into totals. Month/day bucketing MUST use `America/Argentina/Buenos_Aires`. SAVINGS movements MUST be excluded from income, expenses, balance, per-month/per-day buckets, category breakdowns, and top lists; `balance` MUST equal income − expenses with SAVINGS excluded. `kpis.savings` MUST report the current-calendar-month (Buenos Aires) sum of SAVINGS movements and `mom.months[].savings` MUST report per-month SAVINGS sums. PENDING movements MUST be excluded from income, expenses, balance, per-month/per-day buckets, category breakdowns, and top lists; `kpis.savings` MUST remain SAVINGS-only and unchanged by PENDING. The summary MUST include `planned: { month, total }`, the sum of the owner's PENDING EXPENSE movements targeted at the month following the current Buenos Aires month; the `planned` block MUST ignore `from`/`to`. Shape:
+`GET /movements/summary` MUST return `movementSummarySchema` for the `ownerId` viewer scoped by the viewer predicate (own + partner SHARED) with optional `from`/`to` filters and the `visibility` filter (`mine`|`shared`|`all`). Totals MUST include ONLY `ARS` movements; other currencies MUST NOT be mixed into totals. Month/day bucketing MUST use `America/Argentina/Buenos_Aires`. SAVINGS movements MUST be excluded from income, expenses, balance, per-month/per-day buckets, category breakdowns, and top lists; `balance` MUST equal income − expenses with SAVINGS excluded. `kpis.savings` MUST report the current-calendar-month (Buenos Aires) sum of SAVINGS movements and `mom.months[].savings` MUST report per-month SAVINGS sums. PENDING movements MUST be excluded from income, expenses, balance, per-month/per-day buckets, category breakdowns, and top lists; `kpis.savings` MUST remain SAVINGS-only and unchanged by PENDING. The summary MUST include `planned: { month, total }`, the sum of the owner's PENDING EXPENSE movements targeted at the month following the current Buenos Aires month; the `planned` block MUST ignore `from`/`to`. Shape:
 
 ```
 kpis:        { income, expenses, balance, savings, avgPerMonth, avgPerMovement, maxAmount, count }
@@ -220,6 +232,12 @@ planned:     { month, total }                                     // next month,
 - WHEN the summary is requested
 - THEN `planned.total` is 0
 
+#### Scenario: Visibility filter feeds charts
+
+- GIVEN a viewer with own and partner SHARED movements
+- WHEN `GET /movements/summary?visibility=mine`
+- THEN `categories`, `top`, and `kpis` derive only from the viewer's own movements
+
 ### Requirement: Expense Retrocompatibility
 
 `/expenses*` endpoints MUST keep current behavior and response shapes, returning ONLY movements with `type=EXPENSE`.
@@ -237,7 +255,7 @@ planned:     { month, total }                                     // next month,
 
 ### Requirement: Movement Update Endpoint
 
-The system MUST provide `PATCH /movements/:id` scoped by owner (`x-owner-id`). It MUST update only the fields present per `updateMovementSchema`, MUST support `EXPENSE`, `INCOME`, and `SAVINGS` movements, and MUST apply `category: null` by clearing the category and an absent field by leaving it unchanged. A category value MUST be validated against the owner's category set; an invalid category MUST return `422 ValidationFailedError`. Assigning the owner's SAVINGS category ("ahorro") to an `EXPENSE` or `INCOME` movement MUST return `422 ValidationFailedError`. A missing movement or one owned by another owner MUST return `404`.
+The system MUST provide `PATCH /movements/:id` scoped by owner (`x-owner-id`). It MUST update only the fields present per `updateMovementSchema`, MUST support `EXPENSE`, `INCOME`, and `SAVINGS` movements, and MUST apply `category: null` by clearing the category and an absent field by leaving it unchanged. A category value MUST be validated against the owner's category set; an invalid category MUST return `422 ValidationFailedError`. Assigning the owner's SAVINGS category ("ahorro") to an `EXPENSE` or `INCOME` movement MUST return `422 ValidationFailedError`. A missing movement, one owned by another owner, or a SHARED movement whose registrant is not the caller MUST return `404`. A partner MUST NOT update the registrant's movements.
 (Previously: PATCH supported only `EXPENSE` and `INCOME`, and the SAVINGS category did not exist.)
 
 #### Scenario: Update note only
@@ -282,6 +300,12 @@ The system MUST provide `PATCH /movements/:id` scoped by owner (`x-owner-id`). I
 - WHEN `PATCH /movements/:id` is called for the current owner
 - THEN `404` is returned
 
+#### Scenario: Partner cannot update a SHARED movement
+
+- GIVEN a SHARED movement registered by Rita and Edgardo as the caller
+- WHEN `PATCH /movements/:id` is called
+- THEN `404` is returned (registrant-only mutation)
+
 #### Scenario: SAVINGS category rejected on income/expense
 
 - GIVEN an `EXPENSE` or `INCOME` movement and the owner's "ahorro" category
@@ -290,7 +314,7 @@ The system MUST provide `PATCH /movements/:id` scoped by owner (`x-owner-id`). I
 
 ### Requirement: Movement Delete Endpoint
 
-The system MUST provide `DELETE /movements/:id` scoped by owner (`x-owner-id`). It MUST support both `EXPENSE` and `INCOME` movements. A missing movement or one owned by another owner MUST return `404`. Deleting a movement MUST update the dashboard list and KPIs after refresh.
+The system MUST provide `DELETE /movements/:id` scoped by owner (`x-owner-id`). It MUST support both `EXPENSE` and `INCOME` movements. A missing movement, one owned by another owner, or a SHARED movement whose registrant is not the caller MUST return `404`. A partner MUST NOT delete the registrant's movements. Deleting a movement MUST update the dashboard list and KPIs after refresh.
 
 #### Scenario: Delete income movement
 
@@ -315,6 +339,12 @@ The system MUST provide `DELETE /movements/:id` scoped by owner (`x-owner-id`). 
 - GIVEN a movement owned by a different owner
 - WHEN `DELETE /movements/:id` is called for the current owner
 - THEN `404` is returned
+
+#### Scenario: Partner cannot delete a SHARED movement
+
+- GIVEN a SHARED movement registered by Rita and Edgardo as the caller
+- WHEN `DELETE /movements/:id` is called
+- THEN `404` is returned (registrant-only mutation)
 
 ### Requirement: Category Read Endpoint
 
@@ -385,3 +415,96 @@ Existing movements with a `NULL` category or a legacy seed slug (e.g. "food", "o
 - GIVEN a payload with `occurredAt`
 - WHEN validated against `updateMovementSchema`
 - THEN it fails validation and no field changes
+
+### Requirement: Movement Visibility Model
+
+The system MUST store a `visibility` field on every movement (enum `INDIVIDUAL` | `SHARED`) with default `INDIVIDUAL`, and MUST backfill all existing rows to `INDIVIDUAL` when the migration applies. A SHARED movement MUST be visible to its registrant owner AND the partner owner; an INDIVIDUAL movement MUST be visible only to its owner.
+
+#### Scenario: Backfill preserves existing rows
+
+- GIVEN movements exist before the migration
+- WHEN the migration applies
+- THEN every existing row has `visibility=INDIVIDUAL`
+
+#### Scenario: Default on creation
+
+- GIVEN a new movement created without an explicit visibility
+- WHEN it is persisted
+- THEN it is stored as `INDIVIDUAL`
+
+#### Scenario: SHARED visible to both owners
+
+- GIVEN a SHARED movement owned by Rita
+- WHEN Edgardo queries his movements
+- THEN the movement is included in Edgardo's results
+
+### Requirement: Viewer-Scoped Read Predicate
+
+All movement read queries MUST scope by viewer using the single predicate `ownerId = viewer OR (visibility = 'SHARED' AND ownerId = partnerOf(viewer))`. The SAME predicate fragment MUST be applied to all raw movement queries (list, summary, and chart feeds). When the viewer has no partner (single-user mode), the predicate MUST reduce to `ownerId = viewer`.
+
+#### Scenario: Own movements always visible
+
+- GIVEN a viewer with own INDIVIDUAL and SHARED movements
+- WHEN the viewer queries
+- THEN all own movements are returned
+
+#### Scenario: Partner SHARED visible
+
+- GIVEN Edgardo owns a SHARED movement and Rita is the viewer
+- WHEN Rita queries
+- THEN the movement is returned
+
+#### Scenario: Partner INDIVIDUAL hidden
+
+- GIVEN Edgardo owns an INDIVIDUAL movement and Rita is the viewer
+- WHEN Rita queries
+- THEN the movement is NOT returned (no cross-owner leak)
+
+#### Scenario: Two-owner leak guard
+
+- GIVEN a household with two owners
+- WHEN integration tests exercise both directions
+- THEN neither owner sees the other's INDIVIDUAL movements, and both see SHARED ones
+
+### Requirement: Visibility Filter Parameter
+
+`GET /movements` and `GET /movements/summary` MUST accept a `visibility` query parameter with values `mine` | `shared` | `all`. `mine` MUST return only movements owned by the viewer; `shared` MUST return only movements with `visibility=SHARED` visible to the viewer; `all` (default) MUST return own movements plus the partner's SHARED ones. The parameter MUST also drive the dashboard chart feeds (e.g. category breakdown).
+
+#### Scenario: Mine filters to own
+
+- GIVEN a viewer with own and partner SHARED movements
+- WHEN `GET /movements?visibility=mine`
+- THEN only the viewer's own movements return
+
+#### Scenario: Shared filters to SHARED
+
+- GIVEN the same movements
+- WHEN `GET /movements?visibility=shared`
+- THEN only SHARED movements visible to the viewer return
+
+#### Scenario: All is the default
+
+- GIVEN the same movements
+- WHEN `GET /movements` with no visibility parameter
+- THEN own movements plus partner SHARED return
+
+#### Scenario: Invalid value rejected
+
+- GIVEN `visibility=foo`
+- WHEN the endpoint is called
+- THEN a validation error is returned
+
+### Requirement: Legacy Expense Endpoints Frozen
+
+`/expenses*` endpoints MUST remain owner-scoped and MUST NOT apply the visibility model, the viewer predicate, or the visibility filter. Their behavior and response shapes MUST NOT change in this change. (Migration: none — behavior pinned to current owner-scoped semantics.)
+
+#### Scenario: Expenses stay owner-scoped
+
+- GIVEN a household with two owners and SHARED movements
+- WHEN `GET /expenses` is called for Rita
+- THEN only Rita's EXPENSE movements return, with no partner rows and no visibility changes
+
+#### Scenario: Summary unchanged
+
+- GIVEN `GET /expenses/summary` for an owner
+- THEN the response matches `expenseSummarySchema` exactly as before

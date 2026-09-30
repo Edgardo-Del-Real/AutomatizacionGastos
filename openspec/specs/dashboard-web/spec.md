@@ -45,7 +45,7 @@ The dashboard MUST fetch `GET /movements/summary` for the configured owner and M
 
 ### Requirement: Movement List
 
-The dashboard MUST fetch `GET /movements` for the owner and MUST render a table ordered by `occurredAt` descending with columns for date, type, amount (es-AR), currency, category, and note. Each row MUST expose edit and delete actions. A SAVINGS row MUST render its type as "Ahorro" with an "Ahorro" badge. A PENDING row MUST render its status as "Previsto" with a "Previsto" badge and a "Marcar pagado" action for own rows.
+The dashboard MUST fetch `GET /movements` for the selected viewer and MUST render a table ordered by `occurredAt` descending with columns for date, type, amount (es-AR), currency, category, note, and the SHARED badge. Each row MUST expose edit and delete actions ONLY for movements the viewer registered (registrantId equals the selected viewer); partner rows MUST be read-only. The list MUST apply the visibility filter (`mine`|`shared`|`all`). A SAVINGS row MUST render its type as "Ahorro" with an "Ahorro" badge. A PENDING row MUST render its status as "Previsto" with a "Previsto" badge and a "Marcar pagado" action for own rows.
 (Previously: only INCOME/EXPENSE/SAVINGS rows existed with type labels/badges; no PENDING rendering.)
 
 #### Scenario: Render movements
@@ -66,6 +66,12 @@ The dashboard MUST fetch `GET /movements` for the owner and MUST render a table 
 - WHEN the row is inspected
 - THEN edit and delete actions are available
 
+#### Scenario: Partner rows read-only
+
+- GIVEN a SHARED movement registered by the partner
+- WHEN the row renders for the current viewer
+- THEN the row shows the SHARED badge and NO edit or delete actions
+
 #### Scenario: SAVINGS row renders with the Ahorro badge
 
 - GIVEN a movement with type `SAVINGS`
@@ -80,7 +86,7 @@ The dashboard MUST fetch `GET /movements` for the owner and MUST render a table 
 
 ### Requirement: Movement Filters
 
-The dashboard MUST provide combined filters — type, date range (from/to), category, and note text — that re-query `GET /movements` with those query params, MUST apply all active filters together, and MUST provide a reset action that restores the unfiltered list. The type filter MUST offer "Ahorro" as an option alongside Ingreso and Gasto. The filters MUST NOT include a status filter; planned expenses are surfaced only through the dedicated planned section.
+The dashboard MUST provide combined filters — type, date range (from/to), category, note text, and visibility (`mine`|`shared`|`all`) — that re-query `GET /movements` with those query params, MUST apply all active filters together, and MUST provide a reset action that restores the unfiltered list. The type filter MUST offer "Ahorro" as an option alongside Ingreso and Gasto. The filters MUST NOT include a status filter; planned expenses are surfaced only through the dedicated planned section.
 (Previously: the type filter offered only Ingreso and Gasto; no status-filter statement existed.)
 
 #### Scenario: Combined filter
@@ -113,21 +119,40 @@ The dashboard MUST provide combined filters — type, date range (from/to), cate
 - WHEN the owner inspects the filter options
 - THEN no status option appears
 
-### Requirement: Fixed Owner
+#### Scenario: Visibility combines with other filters
 
-The dashboard MUST derive the owner from a single deployment configuration value (`VITE_OWNER_ID`) and MUST use it for both API requests, defaulting to `"default"` when unset. The dashboard MUST NOT provide an owner selector.
+- GIVEN a viewer with own and partner SHARED movements
+- WHEN the user selects visibility "shared" plus a type filter
+- THEN only movements matching both are shown
 
-#### Scenario: Configured owner
+### Requirement: Viewer Selector
 
-- GIVEN `VITE_OWNER_ID` is set to `"acme"`
+The dashboard MUST fetch `GET /household/members` and MUST render a viewer selector (ownerId + name) that determines the owner for ALL API requests (list, summary, categories). The selected viewer MUST be the single source of ownerId, replacing `VITE_OWNER_ID` as the source of truth. When the household endpoint returns a single member or is unavailable, the dashboard MUST fall back to `VITE_OWNER_ID` (default `"default"`) with no selector. The selection MUST persist across reloads (e.g. localStorage).
+(Previously: "Fixed Owner" — the owner came only from `VITE_OWNER_ID` and no selector existed.)
+
+#### Scenario: Selector lists household members
+
+- GIVEN `GET /household/members` returns Rita and Edgardo
 - WHEN the dashboard loads
-- THEN both summary and list requests use `ownerId=acme`
+- THEN a selector shows both members and the requests use the selected viewer's ownerId
 
-#### Scenario: Default owner
+#### Scenario: Switching viewer re-queries
 
-- GIVEN `VITE_OWNER_ID` is unset
+- GIVEN the user switches the selector from Rita to Edgardo
+- WHEN the dashboard reloads data
+- THEN both summary and list requests use Edgardo's ownerId
+
+#### Scenario: Single-member fallback
+
+- GIVEN `GET /household/members` returns only `default` (or fails)
 - WHEN the dashboard loads
-- THEN both requests use `ownerId=default`
+- THEN no selector renders and requests use `VITE_OWNER_ID` or `"default"`
+
+#### Scenario: Selection persists
+
+- GIVEN the user selected Edgardo
+- WHEN the page reloads
+- THEN the selector still shows Edgardo and requests use his ownerId
 
 ### Requirement: Loading, Error and Empty States
 
@@ -278,3 +303,40 @@ The dashboard MUST provide a "Marcar pagado" action on own PENDING rows that cal
 - GIVEN a PENDING row whose status changed to PAID on another surface
 - WHEN the owner clicks "Marcar pagado"
 - THEN a Spanish error shows and the row stays unchanged
+
+### Requirement: Viewer Visibility Filter
+
+The dashboard MUST provide a visibility filter with values `mine` | `shared` | `all` (default `all`) that re-queries `GET /movements` AND `GET /movements/summary` with the `visibility` query param, so the list AND the charts (KPIs, category breakdown, top lists) reflect the filter. A reset action MUST restore `all`.
+
+#### Scenario: Filter applies to list and charts
+
+- GIVEN a viewer with own and partner SHARED movements
+- WHEN the user selects "shared"
+- THEN both the list and the summary requests carry `visibility=shared` and the charts reflect only SHARED movements
+
+#### Scenario: Reset restores all
+
+- GIVEN an active visibility filter
+- WHEN the user clicks reset
+- THEN the list and summary reload with `visibility=all`
+
+#### Scenario: Default is all
+
+- GIVEN the dashboard loads with no filter selected
+- THEN both requests carry `visibility=all` (own + partner SHARED)
+
+### Requirement: SHARED Badge
+
+The dashboard MUST render a SHARED badge on movement rows whose `visibility` is `SHARED`, showing the registrant's name. INDIVIDUAL rows MUST NOT show the badge.
+
+#### Scenario: Badge on shared row
+
+- GIVEN a SHARED movement registered by Edgardo
+- WHEN the row renders in Rita's list
+- THEN the row shows a SHARED badge with Edgardo's name
+
+#### Scenario: No badge on individual row
+
+- GIVEN an INDIVIDUAL movement
+- WHEN the row renders
+- THEN no badge is shown

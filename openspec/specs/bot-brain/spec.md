@@ -31,8 +31,8 @@ The system MUST expose a `BotBrain` port with `interpret(message: string, contex
 
 ### Requirement: Interpret Envelope Contract
 
-The brain MUST validate the LLM JSON with a zod schema `{intent, amount, category, note, dialog_action, then_reassign, planned}` where `intent` is one of `register_expense`, `correct_amount`, `correct_category`, `query`, `query_recent`, `query_balance`, `query_month`, `query_planned`, `create_category`, `delete_category`, `rename_category`, `associate_keyword`, `create_savings_rule`, `mark_paid`, `delete_expense`, `capabilities`, `help`, `off_topic`, `greeting`; `amount` accepts number or string and normalizes via `normalizeAmountString` to a positive finite number or `null`; `category` is a trimmed string of at most 60 chars or `null`; `note` is a trimmed string of at most 200 chars or `null`; `dialog_action` is one of `resolve`, `abandon`, or `null`; `then_reassign` is a boolean flag used only with `create_category`; `planned` is a boolean flag used only with `register_expense` (mirror of `shared`). A `planned` registration is never shared: the bot MUST persist a PENDING expense as `INDIVIDUAL` even when the envelope also carries `shared: true`. The call MUST use `temperature: 0` and `response_format: json_object`. A `register_expense` envelope with a non-null amount MUST satisfy `amount > 0` and finite. A `register_expense` envelope with `amount: null` MUST remain valid — it drives the `awaiting_registration` collection entry. A `mark_paid` or `delete_expense` envelope MUST carry its reference cues in `category` and/or `amount` and MUST NOT carry a movement id — the bot resolves the target deterministically against real data.
-(Previously: the schema accepted no `mark_paid` or `delete_expense` intents.)
+The brain MUST validate the LLM JSON with a zod schema `{intent, amount, category, note, dialog_action, then_reassign, planned, shared}` where `intent` is one of `register_expense`, `correct_amount`, `correct_category`, `query`, `query_recent`, `query_balance`, `query_month`, `query_planned`, `create_category`, `delete_category`, `rename_category`, `associate_keyword`, `create_savings_rule`, `mark_paid`, `delete_expense`, `capabilities`, `help`, `off_topic`, `greeting`; `amount` accepts number or string and normalizes via `normalizeAmountString` to a positive finite number or `null`; `category` is a trimmed string of at most 60 chars or `null`; `note` is a trimmed string of at most 200 chars or `null`; `dialog_action` is one of `resolve`, `abandon`, or `null`; `then_reassign` is a boolean flag used only with `create_category`; `planned` is a boolean flag used only with `register_expense` (mirror of `shared`); `shared` is an optional boolean used only with `register_expense` (mirror of `planned`). A `planned` registration is never shared: the bot MUST persist a PENDING expense as `INDIVIDUAL` even when the envelope also carries `shared: true`. The call MUST use `temperature: 0` and `response_format: json_object`. A `register_expense` envelope with a non-null amount MUST satisfy `amount > 0` and finite. A `register_expense` envelope with `amount: null` MUST remain valid — it drives the `awaiting_registration` collection entry. A `mark_paid` or `delete_expense` envelope MUST carry its reference cues in `category` and/or `amount` and MUST NOT carry a movement id — the bot resolves the target deterministically against real data.
+(Previously: the schema accepted no `mark_paid` or `delete_expense` intents and no `shared` flag.)
 
 #### Scenario: Envelope decodes strict JSON
 
@@ -87,6 +87,12 @@ The brain MUST validate the LLM JSON with a zod schema `{intent, amount, categor
 - GIVEN a Groq response `{"intent":"mark_paid","category":"Alquiler"}`
 - WHEN the payload is validated
 - THEN the envelope carries intent `mark_paid` with the category reference cue
+
+#### Scenario: Shared flag decodes with register_expense
+
+- GIVEN a Groq response `{"intent":"register_expense","amount":2000,"shared":true}`
+- WHEN the payload is validated
+- THEN the envelope carries `shared: true`
 
 ### Requirement: Reply-After-Action Contract
 
@@ -360,4 +366,26 @@ The brain MUST classify a dialog-state message with `dialog_action` in its envel
 - GIVEN an owner in `awaiting_registration` asked for the category
 - WHEN the message is "Transporte"
 - THEN the envelope carries `dialog_action: "resolve"` with the category answer
+
+### Requirement: Shared Flag Contract
+
+A `register_expense` envelope MAY carry a `shared` boolean. `shared: true` MUST signal a SHARED registration; `shared: false` or absent MUST signal INDIVIDUAL. The flag is a SIGNAL only — the deterministic `compartido:` prefix in the message text is authoritative and wins over the flag when both are present.
+
+#### Scenario: Shared flag signals shared
+
+- GIVEN a Groq response `{"intent":"register_expense","amount":2000,"note":"super","shared":true}`
+- WHEN the payload is validated
+- THEN the envelope carries `shared: true`
+
+#### Scenario: Absent flag means individual
+
+- GIVEN a Groq response `{"intent":"register_expense","amount":2000,"note":"super"}`
+- WHEN the payload is validated
+- THEN the envelope carries `shared: false` (or absent)
+
+#### Scenario: Invalid shared value degrades
+
+- GIVEN a Groq response with `shared: "yes"`
+- WHEN the payload is validated
+- THEN `null` is returned (schema mismatch degrades to deterministic flow)
 

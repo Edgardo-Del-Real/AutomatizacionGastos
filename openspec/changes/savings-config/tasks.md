@@ -66,7 +66,7 @@ Chain strategy: pending
 
 ## Phase 7: Integration + Blast Radius
 
-- [ ] 7.1 RED `telegram.service.integration.test.ts`: row, Otro→150/850, No apartar, net category, corrupt recovery
-- [ ] 7.2 RED household `pv:save` `:148/:210/:244`: legacy + SHARED
-- [ ] 7.3 GREEN full suite; `:809` unchanged; parse sites updated
-- [ ] 7.4 Verify test + typecheck + lint
+- [x] 7.1 RED `telegram.service.integration.test.ts`: row, Otro→150/850, No apartar, net category, corrupt recovery
+- [x] 7.2 RED household `pv:save` `:148/:210/:244`: legacy + SHARED
+- [x] 7.3 GREEN full suite; `:809` unchanged; parse sites updated
+- [x] 7.4 Verify test + typecheck + lint

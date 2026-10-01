@@ -1,13 +1,20 @@
 import type { PrismaClient } from "@prisma/client";
 
+/**
+ * v2 state machine (spec telegram-bot "Per-Owner State Machine"): the three
+ * dialog states (`awaiting_category`, `awaiting_registration`,
+ * `awaiting_amount_confirmation`) are removed. A persisted payload in any of
+ * the removed states (e.g. from a rollback) fails v2 enum membership and
+ * recovers to `idle` through the generic corrupt-payload discipline.
+ */
 export const BOT_STATES = [
   "idle",
   "awaiting_setup",
-  "awaiting_category",
-  "awaiting_amount_confirmation",
-  "awaiting_movement_selection",
-  "awaiting_registration",
+  "awaiting_capture",
   "awaiting_preview",
+  "awaiting_category_name",
+  "awaiting_movement_selection",
+  "awaiting_category_selection",
   "awaiting_delete_confirmation",
 ] as const;
 

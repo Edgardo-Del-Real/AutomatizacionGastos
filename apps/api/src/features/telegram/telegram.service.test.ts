@@ -392,8 +392,22 @@ describe("registrationCollectPayloadSchema", () => {
     ).toBe(false);
   });
 
-  it("declares awaiting_registration as a persisted bot state", () => {
-    expect(BOT_STATES).toContain("awaiting_registration");
+  it("declares the eight v2 bot states and drops the removed dialog states", () => {
+    for (const state of [
+      "idle",
+      "awaiting_setup",
+      "awaiting_capture",
+      "awaiting_preview",
+      "awaiting_category_name",
+      "awaiting_movement_selection",
+      "awaiting_category_selection",
+      "awaiting_delete_confirmation",
+    ]) {
+      expect(BOT_STATES).toContain(state);
+    }
+    expect(BOT_STATES).not.toContain("awaiting_category");
+    expect(BOT_STATES).not.toContain("awaiting_registration");
+    expect(BOT_STATES).not.toContain("awaiting_amount_confirmation");
   });
 });
 

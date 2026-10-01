@@ -37,6 +37,26 @@ function priorBaMonthKey(): string {
   return `${prior.getUTCFullYear()}-${String(prior.getUTCMonth() + 1).padStart(2, "0")}`;
 }
 
+/** Day key of the current Buenos Aires day (matches the service's daily buckets). */
+function currentBaDayKey(): string {
+  const now = new Date(Date.now() - BA_OFFSET_MS);
+  return `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, "0")}-${String(
+    now.getUTCDate(),
+  ).padStart(2, "0")}`;
+}
+
+/**
+ * Noon on the current Buenos Aires day — always inside the current-month bucket
+ * and the 30-day daily window, on any calendar day. A fixed calendar date (e.g.
+ * "2026-09-15") drifts out of the current-month bucket and the daily window.
+ */
+function currentBaDayNoonIso(): string {
+  const now = new Date(Date.now() - BA_OFFSET_MS);
+  return new Date(
+    Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), 12, 0, 0),
+  ).toISOString();
+}
+
 type SeedMovement = {
   ownerId: string;
   amount: number;
@@ -90,7 +110,7 @@ describe("movements savings exclusion (D1–D3)", () => {
         currency: movement.currency ?? "ARS",
         category: movement.category ?? null,
         note: movement.note ?? null,
-        occurredAt: new Date(movement.occurredAt ?? "2026-09-15T12:00:00.000Z"),
+        occurredAt: new Date(movement.occurredAt ?? currentBaDayNoonIso()),
         type: movement.type,
       },
     });
@@ -121,7 +141,7 @@ describe("movements savings exclusion (D1–D3)", () => {
   it("summaryDaily excludes SAVINGS from the day buckets", async () => {
     await seedExclusionFixture();
     const daily = await repository.summaryDaily(scope);
-    const day = daily.find((bucket) => bucket.day === "2026-09-15");
+    const day = daily.find((bucket) => bucket.day === currentBaDayKey());
     expect(day?.income).toBe(900);
     expect(day?.expenses).toBe(300);
   });

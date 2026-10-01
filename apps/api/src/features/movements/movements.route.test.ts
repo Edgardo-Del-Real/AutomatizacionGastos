@@ -41,10 +41,17 @@ function nextBaMonthKey(): string {
   return baMonthKey(new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1)));
 }
 
-/** Noon on the 5th of the current Buenos Aires month — inside the mom/daily windows. */
+/**
+ * Noon on the current Buenos Aires day — always inside the mom months window
+ * (current month) and the 30-day daily window (today), on any calendar day.
+ * A fixed day-of-month anchor (e.g. the 5th) lands outside the daily window
+ * whenever the suite runs on the 1st–4th of the month.
+ */
 function thisMonthNoonIso(): string {
   const now = baNow();
-  return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 5, 12, 0, 0)).toISOString();
+  return new Date(
+    Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), 12, 0, 0),
+  ).toISOString();
 }
 
 type SeedMovement = {

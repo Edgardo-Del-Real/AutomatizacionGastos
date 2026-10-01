@@ -10,6 +10,7 @@ import type { HouseholdService } from "../household/household.service";
 import type { BotStateRepository } from "./bot-state.repository";
 import type { SavingsRuleService } from "../savings/savings.service";
 import {
+  BOT_COMMANDS,
   createTelegramBot,
   recordApiCalls,
   redactToken,
@@ -100,6 +101,7 @@ function makeBotHarness(): BotHarness {
       createdAt: new Date(),
       type: "EXPENSE",
     })),
+    deleteExpense: vi.fn(async () => undefined),
   } as unknown as ExpenseService;
   const movementService = {
     updateMovement: vi.fn(async (_owner: string, id: string) => ({
@@ -113,10 +115,20 @@ function makeBotHarness(): BotHarness {
       createdAt: new Date(),
       type: "EXPENSE",
     })),
+    listMovements: vi.fn(async () => []),
+    getSummary: vi.fn(async () => ({
+      kpis: { income: 0, expenses: 0, balance: 0, count: 0, maxAmount: 0 },
+      byCategory: [],
+      mom: { months: [] },
+      daily: [],
+      planned: { month: "2026-10", total: 0 },
+      categories: [],
+    })),
+    markMovementPaid: vi.fn(async () => ({})),
   } as unknown as MovementService;
   const categoryService = {
     listCategories: vi.fn(async () => [
-      { id: "c1", ownerId, name: "otro", createdAt: new Date(), keywords: [] },
+      { id: "c1", ownerId, name: "otro", type: "NORMAL", createdAt: new Date(), keywords: [] },
     ]),
     listKeywordRules: vi.fn(async () => []),
     matchNote: vi.fn(async () => null),
@@ -124,17 +136,20 @@ function makeBotHarness(): BotHarness {
       id: `cat-${name}`,
       ownerId,
       name,
+      type: "NORMAL",
       createdAt: new Date(),
     })),
-    associateKeyword: vi.fn(async () => undefined),
+    deleteCategory: vi.fn(async () => ({})),
     renameCategory: vi.fn(async () => null),
+    associateKeyword: vi.fn(async () => undefined),
     ensureOtro: vi.fn(async () => ({
       id: "otro-id",
       ownerId,
       name: "otro",
+      type: "NORMAL",
       createdAt: new Date(),
     })),
-    assertOwnerCategory: vi.fn(async () => undefined),
+    ensureAhorro: vi.fn(async () => undefined),
   } as unknown as CategoryService;
   const botStateRepository = {
     get: vi.fn(async () => null),
@@ -410,7 +425,7 @@ describe("createTelegramBot callback wiring (D4)", () => {
 });
 
 describe("startTelegramBot (D12)", () => {
-  it("calls setMyCommands with the command list before starting the polling loop", async () => {
+  it("registers exactly the four owner-visible commands, never the text CRUD commands", async () => {
     const recorded: RecordedApiCall[] = [];
     const service = {
       handleUpdate: async () => undefined,
@@ -422,12 +437,13 @@ describe("startTelegramBot (D12)", () => {
 
     await startTelegramBot(bot);
 
-    expect(setMyCommandsSpy).toHaveBeenCalledWith(
-      expect.arrayContaining([
-        expect.objectContaining({ command: "menu" }),
-        expect.objectContaining({ command: "ayuda" }),
-      ]),
-    );
+    expect(setMyCommandsSpy).toHaveBeenCalledWith([...BOT_COMMANDS]);
+    const commands = (setMyCommandsSpy.mock.calls[0]?.[0] as unknown as { command: string }[]).map((entry) => entry.command);
+    expect(commands).toEqual(["menu", "ayuda", "listar_categorias", "configurar_categorias"]);
+    // Text category CRUD commands are NOT registered (button-driven admin).
+    expect(commands).not.toContain("registrar categoria:");
+    expect(commands).not.toContain("renombrar categoria:");
+    expect(commands).not.toContain("asociar palabra:");
     expect(startSpy).toHaveBeenCalled();
   });
 

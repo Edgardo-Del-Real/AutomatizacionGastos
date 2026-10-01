@@ -1188,6 +1188,17 @@ describe("TelegramService commands (v2 surface)", () => {
     expect(h.replies.at(-1)).toBe(ayudaReply());
   });
 
+  it("ayuda replies with the static help offline (no brain, GROQ_API_KEY unset)", async () => {
+    const hNoBrain = makeHarness({ noBrain: true });
+    seedHarnessCategories(hNoBrain, ["Cafe"]);
+
+    await hNoBrain.service.handleUpdate(textUpdate({ text: "/ayuda", messageId: 1 }), hNoBrain.reply);
+
+    expect(hNoBrain.replies.at(-1)).toBe(ayudaReply());
+    expect(hNoBrain.replies.at(-1)).toContain("Nuevo gasto");
+    expect(hNoBrain.replies.at(-1)).not.toContain("previsto:");
+  });
+
   it("lists the categories", async () => {
     seedHarnessCategories(h, ["Cafe", "Transporte"]);
 
@@ -1514,6 +1525,95 @@ describe("TelegramService reports sub-menu (rep:*)", () => {
 
     expect(h.replies.at(-2)).toContain("ahorraste");
     expect(h.replies.at(-1)).toBe(menuReply());
+  });
+});
+
+describe("TelegramService command supersession (menu/start abandon ANY flow)", () => {
+  let h: Harness;
+
+  beforeEach(() => {
+    h = makeHarness();
+    seedHarnessCategories(h, ["Cafe"]);
+  });
+
+  async function seedPendingState(state: string): Promise<void> {
+    switch (state) {
+      case "awaiting_capture":
+        await seedAwaitingCapture(h, "REAL");
+        return;
+      case "awaiting_preview":
+        await seedAwaitingCapture(h, "REAL");
+        await h.service.handleUpdate(textUpdate({ text: "30000 gym", messageId: 2 }), h.reply);
+        return;
+      case "awaiting_category_name": {
+        await seedAwaitingCapture(h, "REAL");
+        await h.service.handleUpdate(textUpdate({ text: "30000 gym", messageId: 2 }), h.reply);
+        const state = await h.botStateRepository.get(ownerId);
+        const payload = previewPayloadSchema.parse(JSON.parse(state?.pendingNote ?? "{}"));
+        await h.service.handleCallback(callbackUpdate({ data: `pv:catnew:${payload.saveToken}` }), h.reply);
+        return;
+      }
+      case "awaiting_movement_selection": {
+        const payload = {
+          action: "delete_expense",
+          candidates: [{ id: "m1", amount: 2500, note: "alquiler", date: "2026-09-19" }],
+        };
+        await h.botStateRepository.set({
+          ownerId,
+          state: "awaiting_movement_selection",
+          pendingMovementId: null,
+          pendingNote: JSON.stringify(payload),
+        });
+        return;
+      }
+      case "awaiting_delete_confirmation": {
+        const payload = {
+          action: "delete_expense",
+          candidates: [{ id: "m1", amount: 2500, note: "alquiler", date: "2026-09-19" }],
+        };
+        await h.botStateRepository.set({
+          ownerId,
+          state: "awaiting_movement_selection",
+          pendingMovementId: null,
+          pendingNote: JSON.stringify(payload),
+        });
+        await h.service.handleCallback(callbackUpdate({ data: "dk:m1" }), h.reply);
+        return;
+      }
+    }
+  }
+
+  it.each([
+    "awaiting_capture",
+    "awaiting_preview",
+    "awaiting_category_name",
+    "awaiting_movement_selection",
+    "awaiting_delete_confirmation",
+  ] as const)("the menu command supersedes %s and renders the eight-button menu", async (state) => {
+    await seedPendingState(state);
+    h.mockSetState.mockClear();
+
+    await h.service.handleUpdate(textUpdate({ text: "menu", messageId: 9 }), h.reply);
+
+    const lastCall = h.mockSetState.mock.calls.at(-1)?.[0] as BotStateRecord;
+    expect(lastCall.state).toBe("idle");
+    expect(lastCall.pendingNote).toBeNull();
+    expect(h.replies.at(-1)).toBe(menuReply());
+    const kb = h.keyboards.at(-1) as InlineKeyboard;
+    expect(kb).toHaveLength(8);
+  });
+
+  it("the start command supersedes the delete gate without deleting anything", async () => {
+    await seedPendingState("awaiting_delete_confirmation");
+    h.mockDeleteExpense.mockClear();
+
+    await h.service.handleUpdate(textUpdate({ text: "/start", messageId: 9 }), h.reply);
+
+    expect(h.mockDeleteExpense).not.toHaveBeenCalled();
+    const state = await h.botStateRepository.get(ownerId);
+    expect(state?.state).toBe("idle");
+    const kb = h.keyboards.at(-1) as InlineKeyboard;
+    expect(kb).toHaveLength(8);
   });
 });
 

@@ -63,6 +63,7 @@ import {
   setupQuestionReply,
   setupRetryReply,
   successReply,
+  successSplitReply,
   unresolvableReply,
 } from "./reply-text";
 
@@ -956,11 +957,13 @@ export class TelegramService {
 
   /**
    * v2 movement registration (spec money-movements "Bot Movement Type by Menu
-   * Button"): the type/status/visibility derive from the menu-chosen capture
-   * type, NEVER from text: REAL → EXPENSE+PAID+INDIVIDUAL; PENDING →
-   * EXPENSE+PENDING+INDIVIDUAL; INGRESO → INCOME+PAID+INDIVIDUAL (the savings
-   * split lands in Phase 4); COMPARTIDO → EXPENSE+PAID+SHARED. COMPARTIDO
-   * never splits and PENDING is always INDIVIDUAL.
+   * Button"; savings "Income Split and Rounding"): the type/status/visibility
+   * derive from the menu-chosen capture type, NEVER from text: REAL →
+   * EXPENSE+PAID+INDIVIDUAL; PENDING → EXPENSE+PENDING+INDIVIDUAL; INGRESO →
+   * INCOME+PAID+INDIVIDUAL with the automatic savings split (the rule ALWAYS
+   * applies — per-message overrides are removed, so resolveSplit runs with
+   * `{kind:"none"}`); COMPARTIDO → EXPENSE+PAID+SHARED. COMPARTIDO and
+   * PENDING never split.
    */
   private async registerCapture(
     amount: number,
@@ -970,6 +973,13 @@ export class TelegramService {
     ownerId: string,
     reply?: ReplyPort,
   ): Promise<boolean> {
+    if (type === "INGRESO") {
+      // The rule always applies: no per-message override exists in v2.
+      const split = await this.deps.savingsService.resolveSplit(ownerId, note ?? "", { kind: "none" });
+      if (split.kind === "split") {
+        return this.registerIncomeSplit(amount, note, ownerId, split.percent, reply);
+      }
+    }
     const movementType = type === "INGRESO" ? "INCOME" : "EXPENSE";
     const status = type === "PENDING" ? "PENDING" : "PAID";
     const visibility = type === "COMPARTIDO" ? "SHARED" : "INDIVIDUAL";
@@ -979,6 +989,41 @@ export class TelegramService {
     }
     const fixed = type === "PENDING" ? plannedReply(amount, note, category) : successReply(amount, note, category);
     await this.safeReply(reply, fixed);
+    await this.sendMenu(reply);
+    return true;
+  }
+
+  /**
+   * The savings split tail (design "Capture & Savings Data Flow"; savings
+   * spec "Income Split and Rounding"): ensures the SAVINGS "ahorro" category
+   * and persists net INCOME + SAVINGS in ONE transaction via
+   * `createIncomeWithSavings`; the fixed confirmation reports gross, net and
+   * saved, followed by the menu. Visibility is always INDIVIDUAL from the bot
+   * (the SHARED inheritance stays satisfied for pre-existing shared incomes).
+   */
+  private async registerIncomeSplit(
+    gross: number,
+    note: string | null,
+    ownerId: string,
+    percent: number,
+    reply?: ReplyPort,
+  ): Promise<boolean> {
+    await this.deps.categoryService.ensureAhorro(ownerId);
+    const result = await this.deps.expenseService.createIncomeWithSavings({
+      ownerId,
+      gross,
+      percent,
+      note,
+      occurredAt: new Date(),
+      category: "ahorro",
+      visibility: "INDIVIDUAL",
+    });
+    if (result.net === null && result.savings === null) {
+      return false;
+    }
+    const net = result.net?.amount ?? null;
+    const savings = result.savings?.amount ?? null;
+    await this.safeReply(reply, successSplitReply(gross, net ?? 0, savings ?? 0));
     await this.sendMenu(reply);
     return true;
   }
@@ -1293,11 +1338,10 @@ export class TelegramService {
       }
     }
 
-    await this.deps.categoryService.ensureOtro(ownerId);
+    // v2 (spec movement-categories "Setup creates no otro for new owners"): the
+    // legacy "otro" row is never auto-created — category is mandatory at the
+    // preview; an old "otro" row (pre-redesign) stays as a legacy reserved row.
     const finalCreated = this.dedupeNames(created);
-    if (!finalCreated.some((name) => normalizeForMatch(name) === "otro")) {
-      finalCreated.push("otro");
-    }
 
     await this.deps.botStateRepository.set({
       ownerId,

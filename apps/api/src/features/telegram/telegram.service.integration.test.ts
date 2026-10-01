@@ -174,7 +174,8 @@ describe("TelegramService (integration v2)", () => {
     await service.handleUpdate(textUpdate({ messageId: 2, text: "Cafe\nTransporte" }), reply);
 
     const categories = await categoryService.listCategories(ownerId);
-    expect(categories.map((category) => category.name).sort()).toEqual(["Cafe", "Transporte", "otro"]);
+    // v2: no legacy "otro" row is auto-created for new owners.
+    expect(categories.map((category) => category.name).sort()).toEqual(["Cafe", "Transporte"]);
     const after = await prisma.botState.findUnique({ where: { ownerId } });
     expect(after?.state).toBe("idle");
   });
@@ -222,9 +223,9 @@ describe("TelegramService (integration v2)", () => {
     expect(movements[0]?.status).toBe("PENDING");
   });
 
-  it("capture e2e: INGRESO registers a whole INCOME row (the split lands in Phase 4)", async () => {
+  it("capture e2e: INGRESO registers a whole INCOME row when no rule matches", async () => {
     await seedCategories(["Cafe"]);
-    const preview = await openPreview("INGRESO", "cobro sueldo de entrenuts 1000");
+    const preview = await openPreview("INGRESO", "cobro sueldo 1000");
     const { reply } = replyCollector();
     await service.handleCallback(callbackUpdate(`cat:${await categoryIdFor("Cafe")}`), reply);
     await service.handleCallback(callbackUpdate(`pv:save:${preview.saveToken}`), reply);
@@ -233,6 +234,28 @@ describe("TelegramService (integration v2)", () => {
     expect(movements).toHaveLength(1);
     expect(movements[0]?.type).toBe("INCOME");
     expect(movements[0]?.amount.toNumber()).toBe(1000);
+  });
+
+  it("capture e2e: an INGRESO with a matching savings rule splits net INCOME + SAVINGS in ahorro", async () => {
+    await seedCategories(["Cafe"]);
+    const savingsService = new SavingsRuleService(new PrismaSavingsRuleRepository(prisma));
+    await savingsService.defineRule(ownerId, "entrenuts", 10);
+    const preview = await openPreview("INGRESO", "cobro sueldo de entrenuts 1000");
+    const { replies, reply } = replyCollector();
+    await service.handleCallback(callbackUpdate(`cat:${await categoryIdFor("Cafe")}`), reply);
+    await service.handleCallback(callbackUpdate(`pv:save:${preview.saveToken}`), reply);
+
+    const movements = await prisma.expense.findMany({ where: { ownerId } });
+    expect(movements).toHaveLength(2);
+    const income = movements.find((movement) => movement.type === "INCOME");
+    const savings = movements.find((movement) => movement.type === "SAVINGS");
+    expect(income?.amount.toNumber()).toBe(900);
+    expect(savings?.amount.toNumber()).toBe(100);
+    expect(savings?.category).toBe("ahorro");
+    // The fixed confirmation reports gross, net and saved; the menu follows.
+    expect(replies.at(-1)).toBe(menuReply());
+    expect(replies.at(-2)).toContain("900");
+    expect(replies.at(-2)).toContain("100");
   });
 
   it("capture e2e: COMPARTIDO registers a SHARED EXPENSE row", async () => {

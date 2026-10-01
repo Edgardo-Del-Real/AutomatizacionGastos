@@ -8,7 +8,7 @@ import type { HouseholdService } from "../household/household.service";
 import type { BotStateRepository, BotStateRecord } from "./bot-state.repository";
 import type { InlineKeyboard } from "./telegram.parser";
 import { capturePayloadSchema, previewPayloadSchema, TelegramService } from "./telegram.service";
-import { menuReply, successReply } from "./reply-text";
+import { menuReply, successReply, successSplitReply } from "./reply-text";
 
 const OWNER_CHAT_ID = 123456789;
 const ownerId = "default";
@@ -42,9 +42,9 @@ function callbackUpdate(data: string): unknown {
 type Harness = {
   service: TelegramService;
   mockCreateExpense: ReturnType<typeof vi.fn>;
+  mockCreateIncomeWithSavings: ReturnType<typeof vi.fn>;
   mockResolveSplit: ReturnType<typeof vi.fn>;
   mockEnsureAhorro: ReturnType<typeof vi.fn>;
-  mockListCategories: ReturnType<typeof vi.fn>;
   botStateRepository: BotStateRepository;
   replies: string[];
   reply: (text: string, keyboard?: InlineKeyboard, editMessageId?: number) => Promise<void>;
@@ -70,6 +70,10 @@ function makeHarness(): Harness {
       type: "EXPENSE",
     })),
     deleteExpense: vi.fn(async () => undefined),
+    createIncomeWithSavings: vi.fn(async () => ({
+      net: { id: "net-1", ownerId, amount: 900, currency: "ARS", category: null, note: null, occurredAt: new Date(), createdAt: new Date(), type: "INCOME" },
+      savings: { id: "sav-1", ownerId, amount: 100, currency: "ARS", category: "ahorro", note: null, occurredAt: new Date(), createdAt: new Date(), type: "SAVINGS" },
+    })),
   } as unknown as ExpenseService;
   const movementService = {
     listMovements: vi.fn(async () => []),
@@ -139,16 +143,16 @@ function makeHarness(): Harness {
   return {
     service,
     mockCreateExpense: vi.mocked(expenseService.createExpense),
+    mockCreateIncomeWithSavings: vi.mocked(expenseService.createIncomeWithSavings),
     mockResolveSplit: vi.mocked(savingsService.resolveSplit),
     mockEnsureAhorro: vi.mocked(categoryService.ensureAhorro),
-    mockListCategories: vi.mocked(categoryService.listCategories),
     botStateRepository,
     replies,
     reply,
   };
 }
 
-describe("TelegramService savings flow (v2 — Phase 3: whole INGRESO)", () => {
+describe("TelegramService savings split on INGRESO (v2)", () => {
   let h: Harness;
 
   beforeEach(() => {
@@ -164,26 +168,81 @@ describe("TelegramService savings flow (v2 — Phase 3: whole INGRESO)", () => {
     await h.service.handleCallback(callbackUpdate(`pv:save:${payload.saveToken}`), h.reply);
   }
 
-  it("an INGRESO capture registers a whole INCOME (the automatic split lands in Phase 4)", async () => {
+  it("splits an INGRESO with a matching rule: net INCOME + SAVINGS in ahorro, one transaction", async () => {
+    h.mockResolveSplit.mockResolvedValue({ kind: "split", percent: 10 });
+
     await saveIngreso("cobro sueldo de entrenuts 1000");
 
+    expect(h.mockResolveSplit).toHaveBeenCalledWith(ownerId, "cobro sueldo de entrenuts", { kind: "none" });
+    expect(h.mockEnsureAhorro).toHaveBeenCalledWith(ownerId);
+    expect(h.mockCreateIncomeWithSavings).toHaveBeenCalledWith({
+      ownerId,
+      gross: 1000,
+      percent: 10,
+      note: "cobro sueldo de entrenuts",
+      category: "ahorro",
+      visibility: "INDIVIDUAL",
+      occurredAt: expect.any(Date),
+    });
+    expect(h.mockCreateExpense).not.toHaveBeenCalled();
+    expect(h.replies.at(-2)).toBe(successSplitReply(1000, 900, 100));
+    expect(h.replies.at(-1)).toBe(menuReply());
+  });
+
+  it("registers whole INCOME with the standard confirmation when no rule matches", async () => {
+    h.mockResolveSplit.mockResolvedValue({ kind: "whole" });
+
+    await saveIngreso("cobro sueldo 1000");
+
+    expect(h.mockResolveSplit).toHaveBeenCalledWith(ownerId, "cobro sueldo", { kind: "none" });
+    expect(h.mockCreateIncomeWithSavings).not.toHaveBeenCalled();
     expect(h.mockCreateExpense).toHaveBeenCalledWith(
-      expect.objectContaining({ amount: 1000, note: "cobro sueldo de entrenuts", category: "Cafe", type: "INCOME" }),
+      expect.objectContaining({ amount: 1000, note: "cobro sueldo", category: "Cafe", type: "INCOME" }),
       ownerId,
       { visibility: "INDIVIDUAL" },
     );
-    // Phase 3 registers whole: the savings split is not resolved yet.
-    expect(h.mockResolveSplit).not.toHaveBeenCalled();
-    expect(h.mockEnsureAhorro).not.toHaveBeenCalled();
-    expect(h.replies.at(-2)).toBe(successReply(1000, "cobro sueldo de entrenuts", "Cafe"));
+    expect(h.replies.at(-2)).toBe(successReply(1000, "cobro sueldo", "Cafe"));
     expect(h.replies.at(-1)).toBe(menuReply());
+  });
+
+  it("COMPARTIDO NEVER splits even when the note matches a rule (single SHARED EXPENSE)", async () => {
+    h.mockResolveSplit.mockResolvedValue({ kind: "split", percent: 10 });
+    h.mockResolveSplit.mockClear();
+
+    await h.service.handleCallback(callbackUpdate("m:shr"), h.reply);
+    await h.service.handleUpdate(textUpdate({ text: "2000 super de entrenuts", messageId: 2 }), h.reply);
+    const state = await h.botStateRepository.get(ownerId);
+    const payload = previewPayloadSchema.parse(JSON.parse(state?.pendingNote ?? "{}"));
+    await h.service.handleCallback(callbackUpdate("cat:c0"), h.reply);
+    await h.service.handleCallback(callbackUpdate(`pv:save:${payload.saveToken}`), h.reply);
+
+    expect(h.mockResolveSplit).not.toHaveBeenCalled();
+    expect(h.mockCreateIncomeWithSavings).not.toHaveBeenCalled();
+    expect(h.mockCreateExpense).toHaveBeenCalledWith(
+      expect.objectContaining({ amount: 2000, note: "super de entrenuts", category: "Cafe", type: "EXPENSE" }),
+      ownerId,
+      { visibility: "SHARED" },
+    );
+  });
+
+  it("PENDING never splits either (savings only apply to INGRESO)", async () => {
+    h.mockResolveSplit.mockResolvedValue({ kind: "split", percent: 10 });
+    h.mockResolveSplit.mockClear();
+
+    await h.service.handleCallback(callbackUpdate("m:prev"), h.reply);
+    await h.service.handleUpdate(textUpdate({ text: "2500 alquiler", messageId: 2 }), h.reply);
+    const state = await h.botStateRepository.get(ownerId);
+    const payload = previewPayloadSchema.parse(JSON.parse(state?.pendingNote ?? "{}"));
+    await h.service.handleCallback(callbackUpdate("cat:c0"), h.reply);
+    await h.service.handleCallback(callbackUpdate(`pv:save:${payload.saveToken}`), h.reply);
+
+    expect(h.mockResolveSplit).not.toHaveBeenCalled();
+    expect(h.mockCreateIncomeWithSavings).not.toHaveBeenCalled();
   });
 
   it("the menu tap persists capture type INGRESO", async () => {
     await h.service.handleCallback(callbackUpdate("m:inc"), h.reply);
 
-    const lastCall = h.mockListCategories.mock.calls.length;
-    expect(lastCall).toBeGreaterThan(0);
     const state = await h.botStateRepository.get(ownerId);
     const payload = capturePayloadSchema.parse(JSON.parse(state?.pendingNote ?? "{}"));
     expect(payload.type).toBe("INGRESO");

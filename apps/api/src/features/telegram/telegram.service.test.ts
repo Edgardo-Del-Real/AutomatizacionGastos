@@ -748,15 +748,19 @@ describe("TelegramService movement type mapping (v2)", () => {
     expect(h.replies.at(-2)).toBe(plannedReply(2500, "alquiler", "Cafe"));
   });
 
-  it("INGRESO registers INCOME + PAID + INDIVIDUAL (whole; the savings split lands in Phase 4)", async () => {
+  it("INGRESO registers INCOME + PAID + INDIVIDUAL when no rule matches (resolveSplit whole)", async () => {
+    h.mockResolveSplit.mockResolvedValue({ kind: "whole" });
+
     await saveCapture("INGRESO", "cobro sueldo de entrenuts 1000");
 
+    // The savings rule ALWAYS applies to INGRESO (no per-message overrides):
+    // resolveSplit runs with the neutral override and yields whole here.
+    expect(h.mockResolveSplit).toHaveBeenCalledWith(ownerId, "cobro sueldo de entrenuts", { kind: "none" });
     expect(h.mockCreateExpense).toHaveBeenCalledWith(
       expect.objectContaining({ amount: 1000, note: "cobro sueldo de entrenuts", category: "Cafe", type: "INCOME" }),
       ownerId,
       { visibility: "INDIVIDUAL" },
     );
-    expect(h.mockResolveSplit).not.toHaveBeenCalled();
   });
 
   it("COMPARTIDO registers EXPENSE + PAID + SHARED", async () => {
@@ -1166,8 +1170,12 @@ describe("TelegramService setup flow (awaiting_setup)", () => {
 
     expect(h.mockCreateCategory).toHaveBeenCalledWith(ownerId, "Cafe");
     expect(h.mockCreateCategory).toHaveBeenCalledWith(ownerId, "Transporte");
+    // v2: setup never creates the legacy "otro" row (spec movement-categories
+    // "Setup creates no otro for new owners").
+    expect(h.mockEnsureOtro).not.toHaveBeenCalled();
     const lastCall = h.mockSetState.mock.calls.at(-1)?.[0] as BotStateRecord;
     expect(lastCall.state).toBe("idle");
+    expect(h.replies.at(-1)).not.toContain("otro");
   });
 
   it("executes a batch delete command without creating a literal", async () => {

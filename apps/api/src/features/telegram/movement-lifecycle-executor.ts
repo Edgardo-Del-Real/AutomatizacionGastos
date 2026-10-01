@@ -33,6 +33,7 @@ export type LifecycleCandidate = {
 
 export type LifecycleResult =
   | { status: "executed"; action: "marked_paid" | "deleted_movement"; movement: LifecycleCandidate }
+  | { status: "gated"; candidate: LifecycleCandidate } // delete resolution, awaiting the 🗑 tap
   | { status: "already_paid"; movement: LifecycleCandidate }
   | { status: "missing" }
   | { status: "nothing_pending" } // mark_paid only
@@ -137,7 +138,13 @@ export class MovementLifecycleExecutor {
     return { status: "nothing_pending" };
   }
 
-  /** Delete resolution: ALL owner movements in the 10-row window (D7). */
+  /**
+   * Delete resolution (D6, resolve-only): scores ALL owner movements in the
+   * 10-row window and returns `gated` with the unique resolved candidate —
+   * the SERVICE persists the confirmation gate and `dc:ok` calls
+   * `deleteById`. No path from resolution to deletion exists without the
+   * owner's 🗑 tap (fixes bug #1, spec bot-expense-lifecycle).
+   */
   async delete(ownerId: string, cues: LifecycleCues): Promise<LifecycleResult> {
     const movements = await this.deps.movementService.listMovements(
       { viewerId: ownerId, partnerId: null, visibility: "mine" },
@@ -147,12 +154,25 @@ export class MovementLifecycleExecutor {
 
     const resolved = resolveCueMatch(window, cues);
     if (resolved.kind === "unique") {
-      return this.deleteById(ownerId, resolved.candidate);
+      return { status: "gated", candidate: resolved.candidate };
     }
     if (resolved.kind === "ask") {
       return { status: "ask", candidates: resolved.candidates };
     }
     return { status: "no_match" };
+  }
+
+  /**
+   * D10 — the delete window for the menu `Borrar` entry: the 10-row
+   * all-movements window, rendered as `dk:<id>` buttons (7 + nav row) so the
+   * owner picks the target BEFORE any gate opens. Never deletes anything.
+   */
+  async deleteWindow(ownerId: string): Promise<LifecycleCandidate[]> {
+    const movements = await this.deps.movementService.listMovements(
+      { viewerId: ownerId, partnerId: null, visibility: "mine" },
+      {},
+    );
+    return movements.slice(0, WINDOW_SIZE).map(toCandidate);
   }
 
   /** Executes the mark-paid transition for an already-picked candidate (selection pick). */

@@ -58,12 +58,24 @@ function mapMovementRow(row: MovementRow): Movement {
 function periodConditions(period: SummaryPeriod): Prisma.Sql[] {
   const conditions: Prisma.Sql[] = [];
   if (period.from) {
-    conditions.push(Prisma.sql`"occurredAt" >= ${new Date(`${period.from}T00:00:00.000Z`)}`);
+    // The day boundary is Buenos Aires wall-clock (−03:00): a movement created
+    // at 21:00–24:00 ART is on the NEXT UTC day but still the SAME BA month.
+    conditions.push(Prisma.sql`"occurredAt" >= ${baDayStart(period.from)}`);
   }
   if (period.to) {
-    conditions.push(Prisma.sql`"occurredAt" <= ${new Date(`${period.to}T23:59:59.999Z`)}`);
+    conditions.push(Prisma.sql`"occurredAt" <= ${baDayEnd(period.to)}`);
   }
   return conditions;
+}
+
+/** Start of a BA wall-clock day as a UTC instant: `YYYY-MM-DDT00:00:00-03:00`. */
+function baDayStart(day: string): Date {
+  return new Date(`${day}T00:00:00.000-03:00`);
+}
+
+/** End of a BA wall-clock day as a UTC instant: `YYYY-MM-DDT23:59:59.999-03:00`. */
+function baDayEnd(day: string): Date {
+  return new Date(`${day}T23:59:59.999-03:00`);
 }
 
 /**
@@ -146,10 +158,10 @@ export class PrismaMovementRepository implements MovementRepository {
       conditions.push(Prisma.sql`"type" = ${filters.type}::"MovementType"`);
     }
     if (filters.from) {
-      conditions.push(Prisma.sql`"occurredAt" >= ${new Date(`${filters.from}T00:00:00.000Z`)}`);
+      conditions.push(Prisma.sql`"occurredAt" >= ${baDayStart(filters.from)}`);
     }
     if (filters.to) {
-      conditions.push(Prisma.sql`"occurredAt" <= ${new Date(`${filters.to}T23:59:59.999Z`)}`);
+      conditions.push(Prisma.sql`"occurredAt" <= ${baDayEnd(filters.to)}`);
     }
     if (filters.category) {
       conditions.push(Prisma.sql`"category" = ${filters.category}`);

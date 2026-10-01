@@ -37,14 +37,18 @@ import {
 import { QueryExecutor } from "./query-executor";
 import { deriveQueryType, type PlannedQueryResult, type QueryExecutionResult } from "./query.types";
 import { parseCommand, parseSetupBatchCommand, type TelegramCommand } from "./telegram.commands";
-import { normalizeTelegramMessage, parseArrivalPrefixes, parseSavingsOverride } from "./telegram.parser";
+import { normalizeTelegramMessage, normalizeTelegramCallback, parseArrivalPrefixes, parseSavingsOverride, quickCaptureParse, buildCallbackData, type InlineButton, type InlineKeyboard, type QuickCapture, type TelegramCallback } from "./telegram.parser";
 import {
   amountConfirmationAbandonedReply,
   amountConflictReply,
+  alreadyProcessedReply,
   askAmountReply,
   askCategoryReply,
   associateKeywordRedirectReply,
+  callbackUnavailableReply,
   capabilitiesSummaryReply,
+  capturePromptReply,
+  categoryButtonsReply,
   categoryCommandReplyTemplate,
   categoryCreatedReassignedReply,
   categoryCreatedReply,
@@ -59,7 +63,12 @@ import {
   correctionOfferReply,
   deletedMovementReply,
   deleteAskReply,
+  deleteCancelledReply,
+  deleteConfirmReply,
+  deletePickListReply,
+  dialogClosedReply,
   duplicateCategoryReply,
+  formatARS,
   greetingReply,
   helpReply,
   keptCollectingReply,
@@ -67,6 +76,8 @@ import {
   markPaidAlreadyReply,
   markPaidAskReply,
   markPaidReply,
+  menuReply,
+  ayudaReply,
   missingCategoryReply,
   movementAmbiguousReply,
   movementCorrectionDoneReply,
@@ -78,8 +89,10 @@ import {
   nothingToDeleteReply,
   offTopicRedirectReply,
   otroKeptReply,
+  pendingCapturePromptReply,
   plannedReply,
   plannedSharedRejectedReply,
+  previewReply,
   queryRedirectReply,
   queryReplyTemplate,
   questionDroppedReply,
@@ -95,7 +108,15 @@ import {
   successSplitReply,
 } from "./reply-text";
 
-export type ReplyPort = (text: string) => Promise<void>;
+/**
+ * D2 — injectable reply port: sends a text message back to the sender chat,
+ * optionally with an inline keyboard, and edits an existing message when
+ * `editMessageId` is present. The trailing params are optional so every
+ * existing `reply(text)` call site stays assignable; keyboards are plain DTOs
+ * (never grammy types) and the production wiring maps them to `reply_markup`
+ * / `editMessageText` (spec telegram-bot "Reply Channel (Bidirectional)").
+ */
+export type ReplyPort = (text: string, keyboard?: InlineKeyboard, editMessageId?: number) => Promise<void>;
 
 /** Brain-written branch sender: sends the LLM reply when active, else the fixed template. */
 export type Sender = (result: ExecutionResult, fixed: string) => Promise<void>;
@@ -125,6 +146,15 @@ const AWAITING_CATEGORY = "awaiting_category";
 const AWAITING_AMOUNT_CONFIRMATION = "awaiting_amount_confirmation";
 const AWAITING_MOVEMENT_SELECTION = "awaiting_movement_selection";
 const AWAITING_REGISTRATION = "awaiting_registration";
+const AWAITING_PREVIEW = "awaiting_preview";
+const AWAITING_DELETE_CONFIRMATION = "awaiting_delete_confirmation";
+
+/** D4 — random 8-hex save token gating the preview Guardar callback (D5). */
+function newSaveToken(): string {
+  const bytes = new Uint8Array(4);
+  crypto.getRandomValues(bytes);
+  return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
+}
 
 /**
  * Stored payload of an open amount-conflict question. Lives in
@@ -220,6 +250,49 @@ export const lifecycleSelectionPayloadSchema = z.object({
 });
 
 export type LifecycleSelectionPayload = z.infer<typeof lifecycleSelectionPayloadSchema>;
+
+/**
+ * Stored payload of an open quick-capture preview (`awaiting_preview`, D4).
+ * Lives in `BotState.pendingNote` (a String column) so it survives restarts.
+ * The `saveToken` (random 8-hex) gates Guardar idempotency: a callback whose
+ * state+token does not match replies "ya procesado" and executes nothing
+ * (D5). The `shared`/`override` bits are persisted so a dialog-created
+ * registration keeps the signals of the message that opened the preview
+ * (AD6/D6); `type` is chosen by the preview buttons (REAL default, PENDING
+ * via the Previsto button) — never by the brain.
+ */
+export const quickCapturePreviewPayloadSchema = z.object({
+  body: z.string().min(1),
+  amount: z.number().positive(),
+  note: z.string().nullable(),
+  category: z.string().min(1),
+  type: z.enum(["REAL", "PENDING"]).default("REAL"),
+  saveToken: z.string().regex(/^[0-9a-f]{8}$/),
+  shared: z.boolean().default(false),
+  override: savingsOverrideSchema.default({ kind: "none" }),
+});
+
+export type QuickCapturePreviewPayload = z.infer<typeof quickCapturePreviewPayloadSchema>;
+
+/**
+ * Stored payload of an open delete-confirmation gate
+ * (`awaiting_delete_confirmation`, D6). Lives in `BotState.pendingNote` so it
+ * survives restarts. The persisted `target` is the ONLY movement a `dc:ok`
+ * callback may delete: no path from resolution to deletion exists without the
+ * owner's 🗑 tap (spec bot-expense-lifecycle, bug #1 fix).
+ */
+export const deleteConfirmPayloadSchema = z.object({
+  target: z.object({
+    id: z.string().min(1),
+    amount: z.number().positive(),
+    note: z.string().nullable(),
+    date: z.string().min(1),
+    category: z.string(),
+    occurredAtMs: z.number(),
+  }),
+});
+
+export type DeleteConfirmPayload = z.infer<typeof deleteConfirmPayloadSchema>;
 
 /** Answers that keep the movement in "otro" and end the correction dialog. */
 const KEEP_OTRO_ANSWERS = new Set(["no", "otro", "dejalo", "deja", "nada"]);
@@ -326,6 +399,32 @@ export class TelegramService {
       return;
     }
 
+    if (state?.state === AWAITING_PREVIEW) {
+      // D11 — any new non-command text during a preview abandons it (idle)
+      // and reprocesses normally: nothing registers from the preview facts.
+      await this.deps.botStateRepository.set({
+        ownerId,
+        state: IDLE,
+        pendingMovementId: null,
+        pendingNote: null,
+      });
+      await this.handleRegistration(stripped, ownerId, sharedByPrefix, planned, override, reply);
+      return;
+    }
+
+    if (state?.state === AWAITING_DELETE_CONFIRMATION) {
+      // D11 — any new non-command text during the delete gate abandons it
+      // (idle, nothing deleted) and reprocesses normally.
+      await this.deps.botStateRepository.set({
+        ownerId,
+        state: IDLE,
+        pendingMovementId: null,
+        pendingNote: null,
+      });
+      await this.handleRegistration(stripped, ownerId, sharedByPrefix, planned, override, reply);
+      return;
+    }
+
     if (state?.state === AWAITING_CATEGORY || state?.state === AWAITING_AMOUNT_CONFIRMATION || state?.state === AWAITING_REGISTRATION) {
       await this.handleDialogMessage(state, stripped, ownerId, sharedByPrefix, planned, override, reply);
       return;
@@ -337,6 +436,529 @@ export class TelegramService {
     }
 
     await this.handleRegistration(stripped, ownerId, sharedByPrefix, planned, override, reply);
+  }
+
+  /**
+   * D4 — callback channel: processes a `callback_query` update and dispatches
+   * on the stable action prefix in `data` (bot-inline-interactions "Callback
+   * Query Routing"). Returns true when the callback was processed (the caller
+   * MUST `answerCallbackQuery`), false when it was ignored (unknown chat,
+   * non-callback update, non-string data — nothing executes, no reply).
+   * An unknown action prefix replies honestly ("acción no disponible") and
+   * changes no state (spec "Unknown action replied honestly").
+   */
+  async handleCallback(update: unknown, reply?: ReplyPort): Promise<boolean> {
+    const callback = normalizeTelegramCallback(update);
+    if (callback === null) {
+      return false;
+    }
+
+    // The chat gate runs BEFORE anything: callbacks from unknown chats are
+    // ignored entirely (no answer, no reply, no state change).
+    const ownerId = this.deps.household.resolveOwnerByChatId(callback.fromId);
+    if (ownerId === null) {
+      this.deps.logger?.(`Telegram: ignoring callback ${callback.data} from an unknown chat`);
+      return false;
+    }
+
+    await this.dispatchCallback(callback, ownerId, reply);
+    return true;
+  }
+
+  /** D4 — action-prefix dispatch for a gated callback (see the callback_data scheme table). */
+  private async dispatchCallback(callback: TelegramCallback, ownerId: string, reply?: ReplyPort): Promise<void> {
+    const [action] = callback.data.split(":");
+
+    switch (action) {
+      case "m":
+        await this.handleMenuCallback(callback, ownerId, reply);
+        return;
+      case "pv":
+        await this.handlePreviewCallback(callback, ownerId, reply);
+        return;
+      case "dc":
+        await this.handleDeleteGateCallback(callback, ownerId, reply);
+        return;
+      case "dk":
+      case "dkp":
+        await this.handleDeletePickCallback(callback, ownerId, reply);
+        return;
+      case "cat":
+      case "cp":
+        await this.handleCategoryPickCallback(callback, ownerId, reply);
+        return;
+      default:
+        // Unknown action prefix: honest reply, no state change (spec
+        // "Unknown action replied honestly").
+        await this.safeReply(reply, callbackUnavailableReply());
+    }
+  }
+
+  /** D4/D8 — menu callbacks (m:new/m:prev/m:del/m:rep/m:help). */
+  private async handleMenuCallback(callback: TelegramCallback, ownerId: string, reply?: ReplyPort): Promise<void> {
+    const [, sub] = callback.data.split(":");
+    switch (sub) {
+      case "new":
+        // Nuevo gasto: start text capture (idle, no state change).
+        await this.safeReply(reply, capturePromptReply());
+        return;
+      case "prev":
+        // Gasto previsto (D8): teaches the `previsto:` prefix AND the Previsto
+        // preview button. NO remembered intent, NO new state — the ONLY PENDING
+        // producers stay the prefix and the preview button.
+        await this.safeReply(reply, pendingCapturePromptReply());
+        return;
+      case "del": {
+        // Borrar (D10): the delete window renders as dk:<id> buttons; a pick
+        // then opens the confirmation gate. Nothing is deleted here.
+        const window = await this.movementLifecycleExecutor.deleteWindow(ownerId);
+        if (window.length === 0) {
+          await this.safeReply(reply, nothingToDeleteReply());
+          return;
+        }
+        const payload: LifecycleSelectionPayload = {
+          action: "delete_expense",
+          candidates: window.map((candidate) => ({
+            id: candidate.id,
+            amount: candidate.amount,
+            note: candidate.note,
+            date: candidate.date,
+          })),
+        };
+        await this.deps.botStateRepository.set({
+          ownerId,
+          state: AWAITING_MOVEMENT_SELECTION,
+          pendingMovementId: null,
+          pendingNote: JSON.stringify(payload),
+        });
+        await this.safeReply(
+          reply,
+          deletePickListReply(window),
+          window.map((candidate) => [{ text: `${candidate.date} · ${formatARS(candidate.amount)}`, callback_data: buildCallbackData(["dk", candidate.id]) }]),
+          undefined,
+        );
+        return;
+      }
+      case "rep":
+        // Reporte: the recent-query executor answers from the owner's real
+        // movements (spec bot-main-menu "Reporte answers from real data").
+        await this.executeRecentQuery(ownerId, reply);
+        return;
+      case "help":
+        // Ayuda: static help, zero LLM calls (spec "Ayuda replies offline").
+        await this.safeReply(reply, ayudaReply());
+        return;
+      default:
+        await this.safeReply(reply, callbackUnavailableReply());
+    }
+  }
+
+  /** D8 — the Reporte menu action: the deterministic recent query against real data. */
+  private async executeRecentQuery(ownerId: string, reply?: ReplyPort): Promise<void> {
+    try {
+      const result = await this.queryExecutor.execute(this.scopeFor(ownerId), "recent");
+      await this.makeSender(true, reply)(
+        {
+          intent: "query_recent",
+          ok: true,
+          action: "answered",
+          amount: null,
+          category: null,
+          note: null,
+          query_type: "recent",
+          query: result,
+        },
+        queryReplyTemplate(result),
+      );
+    } catch (error) {
+      this.deps.logger?.(`Telegram: menu recent query failed: ${String(error)}`);
+      await this.safeReply(reply, queryRedirectReply());
+    }
+  }
+
+  /** D4/D5 — quick-capture preview callbacks (pv:save/pv:edit/pv:typ). */
+  private async handlePreviewCallback(callback: TelegramCallback, ownerId: string, reply?: ReplyPort): Promise<void> {
+    const parts = callback.data.split(":");
+    const sub = parts[1];
+    // Token position: pv:save:<tok> / pv:edit:<tok> (index 2); pv:typ:<r|p>:<tok> (index 3).
+    const token = sub === "typ" ? parts[3] : parts[2];
+    if (token === undefined) {
+      await this.safeReply(reply, callbackUnavailableReply());
+      return;
+    }
+    const state = await this.deps.botStateRepository.get(ownerId);
+    const payload = this.decodePreviewPayload(state?.pendingNote ?? null);
+
+    // D5 — state+token gate: a callback whose expected state+token does not
+    // match replies "ya procesado" and executes nothing (retries are
+    // ANSWERED, never double-executed).
+    if (state?.state !== AWAITING_PREVIEW || payload === null || payload.saveToken !== token) {
+      await this.safeReply(reply, alreadyProcessedReply());
+      return;
+    }
+
+    switch (sub) {
+      case "save":
+        await this.saveQuickCapture(state, payload, ownerId, reply);
+        return;
+      case "edit":
+        // Corregir (D4): abandon the preview, return to idle, prompt a new capture.
+        await this.deps.botStateRepository.set({ ownerId, state: IDLE, pendingMovementId: null, pendingNote: null });
+        await this.safeReply(reply, capturePromptReply());
+        return;
+      case "typ": {
+        // Type selection by button (D4): REAL or PENDING, never a brain
+        // inference. The preview re-renders with the chosen type.
+        const typeChar = parts[2];
+        const type = typeChar === "p" ? "PENDING" : "REAL";
+        const updated: QuickCapturePreviewPayload = { ...payload, type };
+        await this.deps.botStateRepository.set({
+          ownerId,
+          state: AWAITING_PREVIEW,
+          pendingMovementId: null,
+          pendingNote: JSON.stringify(updated),
+        });
+        await this.safeReply(reply, previewReply(payload.amount, payload.note, payload.category, type), this.previewKeyboard(updated), callback.messageId);
+        return;
+      }
+      default:
+        await this.safeReply(reply, callbackUnavailableReply());
+    }
+  }
+
+  /** D4 — enters the quick-capture preview: persists the payload and renders the Guardar/Corregir + type keyboard. */
+  private async enterQuickCapturePreview(
+    body: string,
+    capture: QuickCapture,
+    ownerId: string,
+    shared: boolean,
+    planned: boolean,
+    override: SavingsOverride,
+    reply?: ReplyPort,
+  ): Promise<void> {
+    const payload: QuickCapturePreviewPayload = {
+      body,
+      amount: capture.amount,
+      note: capture.note,
+      category: capture.category,
+      // The `previsto:` prefix is a sanctioned PENDING producer (D7/D8); the
+      // default REAL is switched by the Previsto button.
+      type: planned ? "PENDING" : "REAL",
+      saveToken: newSaveToken(),
+      shared,
+      override,
+    };
+    await this.deps.botStateRepository.set({
+      ownerId,
+      state: AWAITING_PREVIEW,
+      pendingMovementId: null,
+      pendingNote: JSON.stringify(payload),
+    });
+    await this.safeReply(reply, previewReply(payload.amount, payload.note, payload.category, payload.type), this.previewKeyboard(payload), undefined);
+  }
+
+  /** D4 — the preview keyboard: actions row (Guardar/Corregir) + type row (Real/Previsto), ids never names. */
+  private previewKeyboard(payload: QuickCapturePreviewPayload): InlineKeyboard {
+    const token = payload.saveToken;
+    const typeLabel = (type: "REAL" | "PENDING") => (payload.type === type ? "●" : "○");
+    return [
+      [
+        { text: "✅ Guardar", callback_data: buildCallbackData(["pv", "save", token]) },
+        { text: "✏️ Corregir", callback_data: buildCallbackData(["pv", "edit", token]) },
+      ],
+      [
+        { text: `${typeLabel("REAL")} Gasto real`, callback_data: buildCallbackData(["pv", "typ", "r", token]) },
+        { text: `${typeLabel("PENDING")} Previsto`, callback_data: buildCallbackData(["pv", "typ", "p", token]) },
+      ],
+    ];
+  }
+
+  /**
+   * D4/D5 — Guardar executes exactly once: the state transitions to idle FIRST
+   * (the state IS the consumption record), then the movement registers with
+   * the previewed facts. A retried callback finds no matching gate and replies
+   * "ya procesado" (spec quick-capture "Save Idempotency").
+   */
+  private async saveQuickCapture(
+    state: BotStateRecord,
+    payload: QuickCapturePreviewPayload,
+    ownerId: string,
+    reply?: ReplyPort,
+  ): Promise<void> {
+    void state;
+    await this.deps.botStateRepository.set({ ownerId, state: IDLE, pendingMovementId: null, pendingNote: null });
+    const planned = payload.type === "PENDING";
+    // PENDING registers as EXPENSE + PENDING and is NEVER SHARED (spec
+    // quick-capture "Save with Previsto registers PENDING").
+    await this.registerWithCategory(payload.body, payload.amount, payload.note, payload.category, ownerId, payload.shared, planned, payload.override, this.makeSender(false, reply));
+  }
+
+  /** D4 — decodes a persisted preview payload; corrupt JSON yields null (spec "Corrupt preview payload recovers"). */
+  private decodePreviewPayload(pendingNote: string | null): QuickCapturePreviewPayload | null {
+    if (pendingNote === null) {
+      return null;
+    }
+    try {
+      const parsed = quickCapturePreviewPayloadSchema.safeParse(JSON.parse(pendingNote));
+      return parsed.success ? parsed.data : null;
+    } catch {
+      return null;
+    }
+  }
+
+  /** D4/D6 — delete-gate callbacks (dc:ok/dc:no). */
+  private async handleDeleteGateCallback(callback: TelegramCallback, ownerId: string, reply?: ReplyPort): Promise<void> {
+    const [, sub, targetId] = callback.data.split(":");
+    if (targetId === undefined) {
+      await this.safeReply(reply, callbackUnavailableReply());
+      return;
+    }
+    const state = await this.deps.botStateRepository.get(ownerId);
+    const payload = this.decodeDeleteConfirmPayload(state?.pendingNote ?? null);
+
+    // Corrupt gate payload: the gate cannot be trusted, so it abandons to idle
+    // WITHOUT deleting anything (spec bot-expense-lifecycle: "A retried or
+    // corrupt gate payload MUST recover without deleting").
+    if (state?.state === AWAITING_DELETE_CONFIRMATION && payload === null) {
+      await this.deps.botStateRepository.set({ ownerId, state: IDLE, pendingMovementId: null, pendingNote: null });
+      await this.safeReply(reply, alreadyProcessedReply());
+      return;
+    }
+
+    // D5/D6 — state+target gate: a dc:ok/dc:no whose expected state+target
+    // does not match replies "ya procesado" and executes nothing (a retried
+    // confirm never double-deletes).
+    if (state?.state !== AWAITING_DELETE_CONFIRMATION || payload === null || payload.target.id !== targetId) {
+      await this.safeReply(reply, alreadyProcessedReply());
+      return;
+    }
+
+    if (sub === "no") {
+      // Cancel (D6): close the gate, nothing is deleted.
+      await this.deps.botStateRepository.set({ ownerId, state: IDLE, pendingMovementId: null, pendingNote: null });
+      await this.safeReply(reply, deleteCancelledReply());
+      return;
+    }
+
+    // Confirm: transition to idle FIRST (the state is the consumption record),
+    // then delete the persisted target; a 404 (deleted elsewhere) replies
+    // movement missing (spec "Deleted target replies missing").
+    await this.deps.botStateRepository.set({ ownerId, state: IDLE, pendingMovementId: null, pendingNote: null });
+    const result = await this.movementLifecycleExecutor.deleteById(ownerId, payload.target);
+    await this.sendLifecycleResult("delete_expense", result, reply);
+  }
+
+  /** D6 — decodes a persisted delete-gate payload; corrupt JSON yields null (corrupt gate recovers without deleting). */
+  private decodeDeleteConfirmPayload(pendingNote: string | null): DeleteConfirmPayload | null {
+    if (pendingNote === null) {
+      return null;
+    }
+    try {
+      const parsed = deleteConfirmPayloadSchema.safeParse(JSON.parse(pendingNote));
+      return parsed.success ? parsed.data : null;
+    } catch {
+      return null;
+    }
+  }
+
+  /** D4/D10 — delete-pick callbacks (dk:<id>): resolve the picked candidate from the persisted selection payload and open the gate. */
+  private async handleDeletePickCallback(callback: TelegramCallback, ownerId: string, reply?: ReplyPort): Promise<void> {
+    const [, targetId] = callback.data.split(":");
+    if (targetId === undefined) {
+      await this.safeReply(reply, callbackUnavailableReply());
+      return;
+    }
+    const state = await this.deps.botStateRepository.get(ownerId);
+    const lifecycle = this.decodeLifecycleSelectionPayload(state?.pendingNote ?? null);
+
+    // The pick only applies to an open delete selection; anything else is
+    // answered honestly and changes no state.
+    if (state?.state !== AWAITING_MOVEMENT_SELECTION || lifecycle === null || lifecycle.action !== "delete_expense") {
+      await this.safeReply(reply, alreadyProcessedReply());
+      return;
+    }
+
+    const picked = lifecycle.candidates.find((candidate) => candidate.id === targetId);
+    if (picked === undefined) {
+      // The candidate disappeared (stale button): re-render the window honestly.
+      const window = await this.movementLifecycleExecutor.deleteWindow(ownerId);
+      if (window.length === 0) {
+        await this.deps.botStateRepository.set({ ownerId, state: IDLE, pendingMovementId: null, pendingNote: null });
+        await this.safeReply(reply, nothingToDeleteReply());
+        return;
+      }
+      const updated: LifecycleSelectionPayload = {
+        action: "delete_expense",
+        candidates: window.map((candidate) => ({
+          id: candidate.id,
+          amount: candidate.amount,
+          note: candidate.note,
+          date: candidate.date,
+        })),
+      };
+      await this.deps.botStateRepository.set({
+        ownerId,
+        state: AWAITING_MOVEMENT_SELECTION,
+        pendingMovementId: null,
+        pendingNote: JSON.stringify(updated),
+      });
+      await this.safeReply(reply, deletePickListReply(window));
+      return;
+    }
+
+    // The pick opens the delete GATE with the picked target (D6/D10): nothing
+    // is deleted until the 🗑 tap.
+    const candidate = { ...picked, category: "", occurredAtMs: 0 };
+    const gatePayload: DeleteConfirmPayload = { target: candidate };
+    await this.deps.botStateRepository.set({
+      ownerId,
+      state: AWAITING_DELETE_CONFIRMATION,
+      pendingMovementId: null,
+      pendingNote: JSON.stringify(gatePayload),
+    });
+    await this.safeReply(
+      reply,
+      deleteConfirmReply(candidate.amount, candidate.note, null),
+      [
+        [
+          { text: "❌ Cancelar", callback_data: buildCallbackData(["dc", "no", candidate.id]) },
+          { text: "🗑 Borrar", callback_data: buildCallbackData(["dc", "ok", candidate.id]) },
+        ],
+      ],
+      undefined,
+    );
+  }
+
+  /** D9 — renders the closed-set category buttons for the correction dialog (`awaiting_category`). */
+  private async renderCategoryButtons(
+    ownerId: string,
+    _state: BotStateRecord,
+    _send: Sender,
+    reply?: ReplyPort,
+  ): Promise<void> {
+    // D3 — keyboards render ONLY on deterministic fixed surfaces; the sender
+    // (brain-or-fixed) stays text-only, so the buttons go through safeReply.
+    await this.safeReply(reply, categoryButtonsReply(), await this.categoryKeyboard(ownerId, 0), undefined);
+  }
+
+  /** D9 — renders the closed-set category buttons for the registration collect (`awaiting_registration`). */
+  private async renderCollectCategoryButtons(
+    ownerId: string,
+    _payload: RegistrationCollectPayload,
+    _send: Sender,
+    reply?: ReplyPort,
+  ): Promise<void> {
+    await this.safeReply(reply, categoryButtonsReply(), await this.categoryKeyboard(ownerId, 0), undefined);
+  }
+
+  /**
+   * D9/D4 — the closed-set category keyboard: `cat:<id>` buttons (7 per page)
+   * plus an "otro" row and `cp:<page>` navigation when the set exceeds the
+   * limit (Telegram: ≤ 8 rows, ≤ 64 bytes per callback_data; ids, never names).
+   */
+  private async categoryKeyboard(ownerId: string, page: number): Promise<InlineKeyboard> {
+    const categories = await this.deps.categoryService.listCategories(ownerId);
+    const ordered = [...categories].sort((a, b) => a.name.localeCompare(b.name));
+    const otro = ordered.filter((category) => normalizeForMatch(category.name) === "otro");
+    const rest = ordered.filter((category) => normalizeForMatch(category.name) !== "otro");
+    const pageSize = 7;
+    const start = page * pageSize;
+    const pageItems = rest.slice(start, start + pageSize);
+    const rows: InlineButton[][] = pageItems.map((category) => [
+      { text: category.name, callback_data: buildCallbackData(["cat", category.id]) },
+    ]);
+    for (const category of otro) {
+      rows.push([{ text: category.name, callback_data: buildCallbackData(["cat", category.id]) }]);
+    }
+    if (rest.length > pageSize) {
+      const totalPages = Math.ceil(rest.length / pageSize);
+      rows.push([
+        { text: "◀️", callback_data: buildCallbackData(["cp", String(Math.max(0, page - 1))]) },
+        { text: `${page + 1}/${totalPages}`, callback_data: buildCallbackData(["cp", String(page)]) },
+        { text: "▶️", callback_data: buildCallbackData(["cp", String(Math.min(totalPages - 1, page + 1))]) },
+      ]);
+    }
+    return rows;
+  }
+
+  /** D9 — shared correction tail: reassigns the pending movement to the picked category (text and cat: callbacks run identical code). */
+  private async applyCategoryCorrection(
+    category: string,
+    ownerId: string,
+    state: BotStateRecord,
+    send: Sender,
+    reply?: ReplyPort,
+  ): Promise<void> {
+    await this.answerCorrection(state, category, ownerId, send, reply);
+  }
+
+  /** D9 — shared collect tail: completes the registration with the picked category (text and cat: callbacks run identical code). */
+  private async applyCollectCategory(
+    payload: RegistrationCollectPayload,
+    category: string,
+    ownerId: string,
+    send: Sender,
+  ): Promise<void> {
+    await this.registerWithCategory(payload.body, payload.amount as number, payload.note, category, ownerId, payload.shared, payload.planned, payload.override, send);
+  }
+
+  /** D4/D9 — category-pick callbacks (cat:<id>/cp:<page>). */
+  private async handleCategoryPickCallback(callback: TelegramCallback, ownerId: string, reply?: ReplyPort): Promise<void> {
+    const [action, value] = callback.data.split(":");
+    const state = await this.deps.botStateRepository.get(ownerId);
+
+    if (action === "cp") {
+      // Pagination: re-render the same keyboard page without touching state.
+      const page = Number.isFinite(Number(value)) && Number(value) >= 0 ? Number(value) : 0;
+      if (state?.state === AWAITING_CATEGORY) {
+        await this.safeReply(reply, categoryButtonsReply(), await this.categoryKeyboard(ownerId, page), undefined);
+      } else if (state?.state === AWAITING_REGISTRATION) {
+        const payload = this.decodeCollectPayload(state.pendingNote);
+        if (payload === null) {
+          await this.safeReply(reply, dialogClosedReply());
+          return;
+        }
+        await this.safeReply(reply, categoryButtonsReply(), await this.categoryKeyboard(ownerId, page), undefined);
+      } else {
+        await this.safeReply(reply, dialogClosedReply());
+      }
+      return;
+    }
+
+    // cat:<id> — re-resolve the id → name at callback time (D9): a deleted
+    // category replies honestly and re-renders the buttons (state stays open);
+    // a closed dialog replies dialog-closed.
+    const categoryId = value;
+    const categories = await this.deps.categoryService.listCategories(ownerId);
+    const category = categories.find((candidate) => candidate.id === categoryId);
+
+    if (state?.state === AWAITING_CATEGORY) {
+      if (category === undefined) {
+        await this.safeReply(reply, categoryButtonsReply(), await this.categoryKeyboard(ownerId, 0), undefined);
+        return;
+      }
+      const send = this.makeSender(true, reply);
+      await this.applyCategoryCorrection(category.name, ownerId, state, send, reply);
+      return;
+    }
+
+    if (state?.state === AWAITING_REGISTRATION) {
+      const payload = this.decodeCollectPayload(state.pendingNote);
+      if (payload === null) {
+        await this.deps.botStateRepository.set({ ownerId, state: IDLE, pendingMovementId: null, pendingNote: null });
+        await this.safeReply(reply, questionDroppedReply());
+        return;
+      }
+      if (category === undefined) {
+        await this.safeReply(reply, categoryButtonsReply(), await this.categoryKeyboard(ownerId, 0), undefined);
+        return;
+      }
+      const send = this.makeSender(true, reply);
+      await this.applyCollectCategory(payload, category.name, ownerId, send);
+      return;
+    }
+
+    await this.safeReply(reply, dialogClosedReply());
   }
 
   private async handleRegistration(
@@ -359,6 +981,17 @@ export class TelegramService {
         pendingNote: null,
       });
       await this.safeReply(reply, setupQuestionReply(categories.map((category) => category.name)));
+      return;
+    }
+
+    // D4 — deterministic-first: the quick-capture parser runs BEFORE the
+    // brain for every non-command owner message in idle (spec quick-capture
+    // "Deterministic-First Ordering"). On a match the preview flow runs and
+    // the brain is NEVER invoked for this message; on a miss the routing
+    // falls back to the brain for the uncaptured intent.
+    const quickCapture = quickCaptureParse(body, await this.deps.categoryService.listKeywordRules(ownerId));
+    if (quickCapture !== null) {
+      await this.enterQuickCapturePreview(body, quickCapture, ownerId, shared, planned, override, reply);
       return;
     }
 
@@ -539,10 +1172,11 @@ export class TelegramService {
     // AD6 — the deterministic prefix is authoritative and wins over the brain
     // flag: visibility = prefixShared OR envelope.shared === true.
     const shared = sharedByPrefix || envelope.shared === true;
-    // C1 — mirror of shared: the deterministic `previsto:` prefix is
-    // authoritative and wins over the brain flag:
-    // planned = prefixPlanned OR envelope.planned === true.
-    const effectivePlanned = planned || envelope.planned === true;
+    // D7 — the planned type is a deterministic button/prefix decision: the
+    // brain never signals it (the `planned` key is rejected by the envelope
+    // schema, presence → null), so only the arrival prefix produces PENDING
+    // here. The preview button materializes PENDING in its own save path.
+    const effectivePlanned = planned;
 
     if (detAmount === null && brainAmount === null) {
       // E1 (T1): a register_expense with no amount (deterministic nor brain)
@@ -1032,29 +1666,18 @@ export class TelegramService {
         );
         return;
       }
-      try {
-        const created = await this.deps.categoryService.createCategory(ownerId, trimmed);
-        await this.answerCorrection(state, created.name, ownerId, send, reply);
-        return;
-      } catch (error) {
-        if (error instanceof ReservedCategoryError) {
-          await send(
-            { intent: "correct_category", ok: false, action: "asked_category", amount: null, category: null, note: trimmed, error: "reserved", message: reservedCategoryReply(trimmed, error.concept) },
-            reservedCategoryReply(trimmed, error.concept),
-          );
-          return;
-        }
-        throw error;
-      }
+      // D9 — the single-token free-text auto-create is REMOVED: a non-match
+      // answer (reserved or not) renders the closed-set category buttons and
+      // the state stays open — nothing is created (spec
+      // conversational-categories "Unknown answer shows buttons").
+      await this.renderCategoryButtons(ownerId, state, send, reply);
+      return;
     }
 
-    // A multi-word non-category answer → DO NOT dead-end: list the existing
-    // categories so the user can pick, keeping the state open (the movement is
-    // already safe in "otro").
-    await send(
-      { intent: "correct_category", ok: false, action: "asked_category", amount: null, category: null, note: trimmed },
-      categoryNotFoundReply(trimmed, categories.map((category) => category.name)),
-    );
+    // A multi-word non-category answer → DO NOT dead-end: present the existing
+    // categories as buttons so the user can pick, keeping the state open (the
+    // movement is already safe in "otro").
+    await this.renderCategoryButtons(ownerId, state, send, reply);
   }
 
   /**
@@ -1350,46 +1973,17 @@ export class TelegramService {
         );
         return;
       }
-      try {
-        const created = await this.deps.categoryService.createCategory(ownerId, trimmed);
-        await this.registerWithCategory(payload.body, payload.amount as number, payload.note, created.name, ownerId, payload.shared, payload.planned, payload.override, send);
-        return;
-      } catch (error) {
-        if (error instanceof ReservedCategoryError) {
-          await send(
-            {
-              intent: "register_expense",
-              ok: false,
-              action: "asked_registration",
-              amount: payload.amount,
-              category: null,
-              note: trimmed,
-              asked_field: "category",
-              error: "reserved",
-              message: reservedCategoryReply(trimmed, error.concept),
-            },
-            reservedCategoryReply(trimmed, error.concept),
-          );
-          return;
-        }
-        throw error;
-      }
+      // D9 — the single-token free-text auto-create is REMOVED from the
+      // collect cascade too: a non-match renders the closed-set buttons and
+      // stays open (spec registration-collection "Single-token non-match
+      // shows buttons and never auto-creates").
+      await this.renderCollectCategoryButtons(ownerId, payload, send, reply);
+      return;
     }
 
-    // A multi-word non-category answer → DO NOT dead-end: list the existing
-    // categories so the user can pick, keeping the collect open.
-    await send(
-      {
-        intent: "register_expense",
-        ok: false,
-        action: "asked_registration",
-        amount: payload.amount,
-        category: null,
-        note: trimmed,
-        asked_field: "category",
-      },
-      categoryNotFoundReply(trimmed, categories.map((category) => category.name)),
-    );
+    // A multi-word non-category answer → DO NOT dead-end: present the existing
+    // categories as buttons, keeping the collect open.
+    await this.renderCollectCategoryButtons(ownerId, payload, send, reply);
   }
 
   private async answerCorrection(
@@ -1658,27 +2252,15 @@ private async handleDialogMessage(
         );
         return;
       }
-      try {
-        const created = await this.deps.categoryService.createCategory(ownerId, answer);
-        await this.answerCorrection(state, created.name, ownerId, send, reply);
-        return;
-      } catch (error) {
-        if (error instanceof ReservedCategoryError) {
-          await send(
-            { intent: "correct_category", ok: false, action: "asked_category", amount: null, category: null, note: answer, error: "reserved", message: reservedCategoryReply(answer, error.concept) },
-            reservedCategoryReply(answer, error.concept),
-          );
-          return;
-        }
-        throw error;
-      }
+      // D9 — the resolve-mode single-token auto-create is REMOVED: a non-match
+      // renders the closed-set buttons and the correction stays open (spec
+      // conversational-categories "Unknown answer shows buttons").
+      await this.renderCategoryButtons(ownerId, state, send, reply);
+      return;
     }
 
-    // Multi-word non-category answer → list the categories, keep the state open.
-    await send(
-      { intent: "correct_category", ok: false, action: "asked_category", amount: null, category: null, note: answer },
-      categoryNotFoundReply(answer, categories.map((category) => category.name)),
-    );
+    // Multi-word non-category answer → present the category buttons, keep the state open.
+    await this.renderCategoryButtons(ownerId, state, send, reply);
   }
 
   /**
@@ -1833,7 +2415,9 @@ private async handleDialogMessage(
    * executed facts when available, else the fixed template. Cues come from
    * `envelope.category`/`envelope.amount`; `note` is never a cue (D2). An
    * ambiguity ask persists the lifecycle selection payload (D6) and replies
-   * fixed-only.
+   * fixed-only; a delete resolution (`gated`) persists the confirmation gate
+   * with the target id and the `[❌ Cancelar] [🗑 Borrar]` keyboard — nothing
+   * is deleted yet (D6, bug #1 fix).
    */
   private async runMovementLifecycle(
     envelope: ConversationEnvelope,
@@ -1867,6 +2451,30 @@ private async handleDialogMessage(
         const fixed =
           intent === "mark_paid" ? markPaidAskReply(result.candidates) : deleteAskReply(result.candidates);
         await this.safeReply(reply, fixed);
+        return;
+      }
+      case "gated": {
+        // Delete confirmation gate (D6): persist the resolved target and reply
+        // with the [❌ Cancelar] [🗑 Borrar] keyboard. Deletion happens ONLY on
+        // the 🗑 tap.
+        const payload: DeleteConfirmPayload = { target: result.candidate };
+        await this.deps.botStateRepository.set({
+          ownerId,
+          state: AWAITING_DELETE_CONFIRMATION,
+          pendingMovementId: null,
+          pendingNote: JSON.stringify(payload),
+        });
+        await this.safeReply(
+          reply,
+          deleteConfirmReply(result.candidate.amount, result.candidate.note, result.candidate.category || null),
+          [
+            [
+              { text: "❌ Cancelar", callback_data: buildCallbackData(["dc", "no", result.candidate.id]) },
+              { text: "🗑 Borrar", callback_data: buildCallbackData(["dc", "ok", result.candidate.id]) },
+            ],
+          ],
+          undefined,
+        );
         return;
       }
       case "nothing_pending":
@@ -2100,9 +2708,11 @@ private async handleDialogMessage(
   /**
    * Deterministic pick for an open LIFECYCLE selection question (design D6):
    * the same `pickMovementSelection` resolution (number 1..N / note / amount)
-   * executes `markPaidById`/`deleteById` and replies ONCE with the status
-   * mapping. A non-answer abandons the question WITHOUT reprocessing — a pick
-   * attempt is never a registration (the lifecycle flow creates nothing).
+   * executes `markPaidById` or opens the delete GATE for the picked candidate
+   * and replies ONCE with the status mapping. A non-answer abandons the
+   * question WITHOUT reprocessing — a pick attempt is never a registration
+   * (the lifecycle flow creates nothing). A delete pick still requires the 🗑
+   * tap: the gate opens with the picked target (D6/D10).
    */
   private async handleLifecycleSelection(
     state: BotStateRecord,
@@ -2121,10 +2731,30 @@ private async handleDialogMessage(
     // The payload persists {id, amount, note, date} only — the category is not
     // carried, so the by-id reply renders it as absent.
     const candidate = { ...picked, category: "", occurredAtMs: 0 };
-    const result =
-      payload.action === "mark_paid"
-        ? await this.movementLifecycleExecutor.markPaidById(ownerId, candidate)
-        : await this.movementLifecycleExecutor.deleteById(ownerId, candidate);
+    if (payload.action === "delete_expense") {
+      // The pick resolves the delete target; the confirmation gate opens with
+      // it (nothing is deleted yet — spec bot-expense-lifecycle).
+      const gatePayload: DeleteConfirmPayload = { target: candidate };
+      await this.deps.botStateRepository.set({
+        ownerId,
+        state: AWAITING_DELETE_CONFIRMATION,
+        pendingMovementId: null,
+        pendingNote: JSON.stringify(gatePayload),
+      });
+      await this.safeReply(
+        reply,
+        deleteConfirmReply(candidate.amount, candidate.note, null),
+        [
+          [
+            { text: "❌ Cancelar", callback_data: buildCallbackData(["dc", "no", candidate.id]) },
+            { text: "🗑 Borrar", callback_data: buildCallbackData(["dc", "ok", candidate.id]) },
+          ],
+        ],
+        undefined,
+      );
+      return;
+    }
+    const result = await this.movementLifecycleExecutor.markPaidById(ownerId, candidate);
     await this.deps.botStateRepository.set({ ownerId, state: IDLE, pendingMovementId: null, pendingNote: null });
     await this.sendLifecycleResult(payload.action, result, reply);
   }
@@ -2243,6 +2873,30 @@ private async handleDialogMessage(
       case "list": {
         const categories = await this.deps.categoryService.listCategories(ownerId);
         await this.safeReply(reply, categoryListReply(categories));
+        return;
+      }
+
+      case "menu": {
+        // D8 — the five-button main menu (one per row). Reopening never
+        // changes state (spec bot-main-menu "Menu reopens without side effects").
+        await this.safeReply(
+          reply,
+          menuReply(),
+          [
+            [{ text: "Nuevo gasto", callback_data: buildCallbackData(["m", "new"]) }],
+            [{ text: "Gasto previsto", callback_data: buildCallbackData(["m", "prev"]) }],
+            [{ text: "Borrar", callback_data: buildCallbackData(["m", "del"]) }],
+            [{ text: "Reporte", callback_data: buildCallbackData(["m", "rep"]) }],
+            [{ text: "Ayuda", callback_data: buildCallbackData(["m", "help"]) }],
+          ],
+          undefined,
+        );
+        return;
+      }
+
+      case "ayuda": {
+        // D12 — static help, works with GROQ_API_KEY unset.
+        await this.safeReply(reply, ayudaReply());
         return;
       }
 
@@ -2482,12 +3136,17 @@ private async handleDialogMessage(
     return { viewerId: ownerId, partnerId: this.deps.household.partnerOf(ownerId), visibility: "all" };
   }
 
-  private async safeReply(reply: ReplyPort | undefined, text: string): Promise<void> {
+  private async safeReply(
+    reply: ReplyPort | undefined,
+    text: string,
+    keyboard?: InlineKeyboard,
+    editMessageId?: number,
+  ): Promise<void> {
     if (reply === undefined) {
       return;
     }
     try {
-      await reply(text);
+      await reply(text, keyboard, editMessageId);
     } catch (error) {
       this.deps.logger?.(`Telegram: reply failed: ${String(error)}`);
     }

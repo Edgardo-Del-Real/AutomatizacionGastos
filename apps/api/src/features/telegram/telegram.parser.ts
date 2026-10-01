@@ -1,5 +1,103 @@
 import type { SavingsOverride } from "../savings/savings.types";
+import { matchCategory, type KeywordRule } from "../categories/matcher";
+import { parseAmountAndNote } from "../messages/message.parser";
 import type { TelegramMessage } from "./telegram.types";
+
+/**
+ * D2/D4 — inline keyboard DTOs. Plain data-transfer objects (never grammy
+ * types inside the service): `InlineKeyboard` is rows of buttons, at most 8
+ * rows per Telegram's limit. The production wiring maps these to grammy's
+ * `reply_markup`; the offline harness records them as-is.
+ */
+export type InlineButton = { text: string; callback_data: string };
+export type InlineKeyboard = InlineButton[][]; // rows, ≤ 8
+
+/**
+ * D4 — normalized callback payload from a `callback_query` update: the sender
+ * id (owner resolution gate), the source chat, the source message id (edit
+ * target) and the `data` action string. Produced by `normalizeTelegramCallback`.
+ */
+export type TelegramCallback = {
+  fromId: number;
+  chatId: string;
+  messageId: number;
+  data: string;
+};
+
+/**
+ * D4 — deterministic quick-capture result: the amount parsed by the shared
+ * amount parsers and the category resolved by keyword matching against the
+ * owner's CLOSED category set. A miss returns null and falls through to
+ * normal routing (spec quick-capture "Deterministic Capture Parser").
+ */
+export type QuickCapture = { amount: number; note: string | null; category: string };
+
+/**
+ * D4 — pure quick-capture parser. Extracts the amount via `parseAmountAndNote`
+ * and resolves the category via `matchCategory(note ?? text, rules)` against
+ * the owner's closed-set keyword rules. Never creates categories, never calls
+ * the LLM, never writes state. Misses when there is no amount or no keyword in
+ * the closed set matches.
+ */
+export function quickCaptureParse(text: string, rules: KeywordRule[]): QuickCapture | null {
+  const parsed = parseAmountAndNote(text);
+  if (parsed === null) {
+    return null;
+  }
+  const category = matchCategory(parsed.note ?? text, rules);
+  if (category === null) {
+    return null;
+  }
+  return { amount: parsed.amount, note: parsed.note, category };
+}
+
+/**
+ * D4 — normalizes a `callback_query` update into the `TelegramCallback` DTO.
+ * Only private chats with a string `data` and a numeric `from.id` qualify;
+ * `edited_message`, group chats, missing data and non-object updates return
+ * null (spec telegram-bot "Update Filtering", bot-inline-interactions
+ * "Callback Query Routing").
+ */
+export function normalizeTelegramCallback(update: unknown): TelegramCallback | null {
+  if (!isRecord(update)) return null;
+
+  const callback = update.callback_query;
+  if (!isRecord(callback)) return null;
+
+  const from = callback.from;
+  if (!isRecord(from) || typeof from.id !== "number") return null;
+
+  const message = callback.message;
+  if (!isRecord(message) || typeof message.message_id !== "number") return null;
+
+  const chat = message.chat;
+  if (!isRecord(chat) || typeof chat.id !== "number" || chat.type !== "private") return null;
+
+  if (typeof callback.data !== "string") return null;
+
+  return {
+    fromId: from.id,
+    chatId: String(chat.id),
+    messageId: message.message_id,
+    data: callback.data,
+  };
+}
+
+/**
+ * D4 — builds a `callback_data` payload from colon-joined action parts and
+ * asserts the Telegram limits: ASCII-only and at most 64 bytes. A violation
+ * throws (a payload that would break the bot must never be built silently).
+ */
+export function buildCallbackData(parts: string[]): string {
+  const data = parts.join(":");
+  if (!/^[\x20-\x7E]*$/.test(data)) {
+    throw new Error(`callback_data must be ASCII-only, got: ${data}`);
+  }
+  if (Buffer.byteLength(data, "utf8") > 64) {
+    throw new Error(`callback_data exceeds 64 bytes: ${data}`);
+  }
+  return data;
+}
 
 /**
  * AD6 — the `compartido:` prefix is parsed ONCE at arrival and is

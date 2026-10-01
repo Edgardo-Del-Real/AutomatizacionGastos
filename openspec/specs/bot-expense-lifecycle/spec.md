@@ -36,35 +36,51 @@ The system MUST recognize conversational mark-paid messages ("ya lo pagué", "p�
 
 ### Requirement: Delete-Expense Intent Execution
 
-The system MUST recognize conversational delete messages ("borra ese gasto", "borralo") as the `delete_expense` intent and MUST delete the referenced expense through `ExpenseService.deleteExpense`, replying once with the executed facts. The system MUST NOT create any category or movement during this flow.
+The system MUST recognize conversational delete messages ("borra ese gasto", "borralo") as the `delete_expense` intent and MUST resolve the referenced expense deterministically, then MUST NOT delete anything immediately: it MUST enter `awaiting_delete_confirmation`, persist the resolved target id, and reply with the inline keyboard `[❌ Cancelar] [🗑 Borrar]`. The delete executes through `ExpenseService.deleteExpense` ONLY when the owner confirms with `🗑 Borrar`; `❌ Cancelar` or any new message abandons the gate with nothing deleted. A retried or corrupt gate payload MUST recover without deleting. The system MUST NOT create any category or movement during this flow.
+(Previously: the referenced expense was deleted immediately upon resolution, with no confirmation — the root cause of silent most-recent deletes.)
 
-#### Scenario: Delete by recency
+#### Scenario: Delete by recency asks for confirmation first
 
 - GIVEN an owner with a recent movement and the message "borra ese gasto"
 - WHEN the message is processed
-- THEN the most recent matching movement is deleted via `deleteExpense` and one confirmation reply is sent
+- THEN the most recent matching movement resolves as the target
+- AND the `[❌ Cancelar] [🗑 Borrar]` confirmation replies — nothing is deleted yet
 
-#### Scenario: Delete by category reference
+#### Scenario: Delete by category reference asks for confirmation first
 
 - GIVEN an owner with a movement in "Cafe" and the message "borra el de cafe"
 - WHEN the message is processed
-- THEN the referenced movement is deleted and one confirmation reply is sent
+- THEN the referenced movement resolves as the target and the confirmation keyboard replies
+- AND nothing is deleted yet
+
+#### Scenario: Confirmation deletes
+
+- GIVEN an owner in `awaiting_delete_confirmation` with a persisted target
+- WHEN they tap `🗑 Borrar`
+- THEN the target is deleted via `deleteExpense` and one confirmation reply is sent
+
+#### Scenario: Cancel keeps the movement
+
+- GIVEN an owner in `awaiting_delete_confirmation`
+- WHEN they tap `❌ Cancelar`
+- THEN nothing is deleted and the owner returns to `idle`
 
 #### Scenario: No candidate
 
 - GIVEN an owner with no matching movement
 - WHEN the message "borra ese gasto" is processed
-- THEN a clear reply states nothing matched and nothing is deleted
+- THEN a clear reply states nothing matched and nothing is deleted (no gate opens)
 
 ### Requirement: Movement Reference Resolution and Ambiguity
 
-The system MUST resolve the movement reference deterministically before acting: mark-paid MUST consider only the owner's PENDING EXPENSE movements; delete MUST score all owner movements using the corrector-style candidate window. Reference cues MUST be weighed in a fixed order — explicit category, then amount, then recency. Exactly one candidate MUST execute; zero candidates MUST reply with a clear no-match message; multiple candidates MUST reuse the `awaiting_movement_selection` ask and MUST NOT modify any movement until the owner picks one.
+The system MUST resolve the movement reference deterministically before acting: mark-paid MUST consider only the owner's PENDING EXPENSE movements; delete MUST score all owner movements using the corrector-style candidate window and MUST pass the resolved target to the confirmation gate — never to an immediate delete. Reference cues MUST be weighed in a fixed order — explicit category, then amount, then recency. For mark-paid, exactly one candidate MUST execute; for delete, exactly one candidate MUST become the gated target. Zero candidates MUST reply with a clear no-match message; multiple candidates MUST reuse the `awaiting_movement_selection` ask and MUST NOT modify any movement until the owner picks one, after which a delete proceeds to the confirmation gate.
+(Previously: exactly one candidate executed the lifecycle action immediately for both intents.)
 
-#### Scenario: Single candidate acts
+#### Scenario: Single candidate becomes the gated target
 
 - GIVEN exactly one movement matches the reference cues
-- WHEN a lifecycle intent is processed
-- THEN the action executes immediately and one reply is sent
+- WHEN a delete intent is processed
+- THEN the confirmation gate opens with that target and no movement changes yet
 
 #### Scenario: Ambiguous reference asks
 

@@ -29,7 +29,7 @@
   },
   {
     "role": "assistant",
-    "content": "{\"intent\":\"register_expense\",\"amount\":2500,\"category\":null,\"note\":\"alquiler\",\"planned\":true}"
+    "content": "{\"intent\":\"register_expense\",\"amount\":2500,\"category\":null,\"note\":\"alquiler\"}"
   },
   {
     "role": "user",
@@ -37,7 +37,7 @@
   },
   {
     "role": "assistant",
-    "content": "{\"intent\":\"register_expense\",\"amount\":2500,\"category\":null,\"note\":\"alquiler\",\"planned\":true}"
+    "content": "{\"intent\":\"register_expense\",\"amount\":2500,\"category\":null,\"note\":\"alquiler\"}"
   },
   {
     "role": "user",

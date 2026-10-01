@@ -6,6 +6,8 @@ export type TelegramCommand =
   | { type: "associate"; keyword: string; category: string }
   | { type: "list" }
   | { type: "configurar" }
+  | { type: "menu" }
+  | { type: "ayuda" }
   | { type: "savings-rule"; keyword: string; percent: number }
   | { type: "savings-rule-invalid" };
 
@@ -15,16 +17,31 @@ const DELETE_CATEGORY_RE = /^\s*borrar\s+categoria\s*:\s*(.+?)\s*$/;
 const ASSOCIATE_RE = /^\s*asociar\s+palabra\s*:\s*(.+?)\s+a\s+categoria\s*:\s*(.+?)\s*$/;
 const LIST_RE = /^\s*listar\s+categorias\s*$/;
 const CONFIGURAR_RE = /^\s*configurar\s+categorias\s*$/;
+const MENU_RE = /^\s*menu\s*$/;
+const AYUDA_RE = /^\s*ayuda\s*$/;
 const SAVINGS_RULE_RE = /^\s*registrar\s+ahorro\s*:\s*(.+?)\s+al\s+(-?\d+(?:[.,]\d+)?)%\s*$/;
 
 /**
- * Recognizes the five owner commands on accent- and case-insensitive text
+ * D12 — normalizes a leading `/` (bot-command syntax) and `_`→space before
+ * the existing regexes match: "/menu" → "menu", "/listar_categorias" →
+ * "listar categorias". Keeps the existing regexes as the single parser
+ * surface for `/listar_categorias` and "listar categorias".
+ */
+function normalizeCommandSyntax(text: string): string {
+  return text.replace(/^\//, "").replaceAll("_", " ");
+}
+
+/**
+ * Recognizes the owner commands on accent- and case-insensitive text
  * (D3). Values are sliced from the ORIGINAL text at the indices found on the
  * normalized text, so spelling is preserved ("Café" stays "Café").
  * Returns null when the text is not a command (falls through to registration).
  */
 export function parseCommand(text: string): TelegramCommand | null {
-  const normalized = normalizeForMatch(text);
+  // D12 — the leading `/` and `_` separators are normalized BEFORE matching;
+  // value extraction slices from the syntax-normalized text so indices map 1:1.
+  const syntaxNormalized = normalizeCommandSyntax(text);
+  const normalized = normalizeForMatch(syntaxNormalized);
 
   if (CONFIGURAR_RE.test(normalized)) {
     return { type: "configurar" };
@@ -32,18 +49,24 @@ export function parseCommand(text: string): TelegramCommand | null {
   if (LIST_RE.test(normalized)) {
     return { type: "list" };
   }
+  if (MENU_RE.test(normalized)) {
+    return { type: "menu" };
+  }
+  if (AYUDA_RE.test(normalized)) {
+    return { type: "ayuda" };
+  }
 
   const register = REGISTER_RE.exec(normalized);
   if (register !== null && register[1] !== undefined && register[1].length > 0) {
-    return { type: "register", name: sliceFromOriginal(text, normalized, register[1]) };
+    return { type: "register", name: sliceFromOriginal(syntaxNormalized, normalized, register[1]) };
   }
 
   const rename = RENAME_RE.exec(normalized);
   if (rename !== null) {
     return {
       type: "rename",
-      from: sliceFromOriginal(text, normalized, rename[1]!),
-      to: sliceFromOriginal(text, normalized, rename[2]!),
+      from: sliceFromOriginal(syntaxNormalized, normalized, rename[1]!),
+      to: sliceFromOriginal(syntaxNormalized, normalized, rename[2]!),
     };
   }
 
@@ -51,8 +74,8 @@ export function parseCommand(text: string): TelegramCommand | null {
   if (associate !== null) {
     return {
       type: "associate",
-      keyword: sliceFromOriginal(text, normalized, associate[1]!),
-      category: sliceFromOriginal(text, normalized, associate[2]!),
+      keyword: sliceFromOriginal(syntaxNormalized, normalized, associate[1]!),
+      category: sliceFromOriginal(syntaxNormalized, normalized, associate[2]!),
     };
   }
 
@@ -66,7 +89,7 @@ export function parseCommand(text: string): TelegramCommand | null {
     }
     return {
       type: "savings-rule",
-      keyword: sliceFromOriginal(text, normalized, savingsRule[1]!),
+      keyword: sliceFromOriginal(syntaxNormalized, normalized, savingsRule[1]!),
       percent,
     };
   }

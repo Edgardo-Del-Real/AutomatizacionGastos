@@ -24,8 +24,8 @@ The system MUST start the Telegram long-polling loop when the API process starts
 
 ### Requirement: Update Filtering
 
-The system MUST process only `message` updates. `edited_message`, channel posts, service/status updates, and group-chat messages MUST be ignored entirely — never recorded, never creating movements, never triggering a reply. A `message` without text MUST NOT create a movement or reply.
-(Previously: filtering was inbound-only with no reply consideration.)
+The system MUST process `message` and `callback_query` updates (callback routing per bot-inline-interactions). `edited_message`, channel posts, service/status updates, and group-chat messages MUST be ignored entirely — never recorded, never creating movements, never triggering a reply. A `message` without text MUST NOT create a movement or reply. A `callback_query` MUST be processed only when its action is known and its sender resolves to a household member.
+(Previously: only `message` updates were processed; `callback_query` updates were rejected by the normalizer.)
 
 #### Scenario: Edited message ignored
 
@@ -47,6 +47,13 @@ The system MUST process only `message` updates. `edited_message`, channel posts,
 - WHEN it is processed
 - THEN no movement is created
 - AND no reply is sent
+
+#### Scenario: Callback query processed
+
+- GIVEN a `callback_query` with a known action from a known owner chat
+- WHEN it is processed
+- THEN the callback action executes
+- AND no text movement is created
 
 ### Requirement: Owner Filtering
 
@@ -79,8 +86,8 @@ The system MUST identify the sender by `message.from.id` and MUST resolve it to 
 
 ### Requirement: Message Deduplication
 
-The system MUST record every processed `message` in `ProcessedMessage` under `(chatId, messageId)` and MUST skip, without error or reply, any message whose key already exists. Recording MUST happen AFTER the chat gate: unknown chats MUST NOT be recorded. Deduplication MUST be per `(chatId, messageId)` after the sender's owner has been resolved.
-(Previously: dedup applied before owner resolution; ordering relative to the gate was unspecified.)
+The system MUST record every processed `message` in `ProcessedMessage` under `(chatId, messageId)` and MUST skip, without error or reply, any message whose key already exists. Recording MUST happen AFTER the chat gate: unknown chats MUST NOT be recorded. Deduplication MUST be per `(chatId, messageId)` after the sender's owner has been resolved. Callback retries MUST be idempotent: every registering or destructive callback MUST carry a persisted token (save-token, target id) so a repeated callback MUST NOT double-execute and MUST reply "ya procesado" (per bot-inline-interactions).
+(Previously: dedup covered only text `message` updates via `ProcessedMessage`; callback retries had no protection.)
 
 #### Scenario: Duplicate update skipped
 
@@ -99,6 +106,13 @@ The system MUST record every processed `message` in `ProcessedMessage` under `(c
 - GIVEN a `message` from a chatId matching no household member
 - WHEN it is processed
 - THEN nothing is recorded in `ProcessedMessage`
+
+#### Scenario: Retried callback does not double-execute
+
+- GIVEN a callback whose action token was already consumed
+- WHEN the same callback arrives again
+- THEN a "ya procesado" reply is sent
+- AND nothing executes
 
 ### Requirement: Movement Parsing, Classification and Categorization
 
@@ -227,7 +241,8 @@ The system MUST require `TELEGRAM_BOT_TOKEN` with no default. When `HOUSEHOLD_ME
 
 ### Requirement: Reply Channel (Bidirectional)
 
-The system MUST expose an injectable reply port that sends a text message back to the sender chat. The reply port MUST be wired to the Telegram bot's reply mechanism in production and to a recording stub in offline tests. A reply failure MUST be logged and MUST NOT stop the polling loop or crash processing.
+The system MUST expose an injectable reply port `(text: string, keyboard?: InlineKeyboard, editMessageId?: number) => Promise<void>` that sends a text message back to the sender chat, optionally with an inline keyboard, and edits an existing message when `editMessageId` is present. The reply port MUST be wired to the Telegram bot's reply/edit mechanism in production and to a recording stub in offline tests; the stub MUST record text, keyboard rows, and edit target through `recordApiCalls` with zero network calls. A reply failure MUST be logged and MUST NOT stop the polling loop or crash processing.
+(Previously: the reply port accepted a plain text string only, and the offline harness recorded text replies.)
 
 #### Scenario: Successful reply wired
 
@@ -240,6 +255,18 @@ The system MUST expose an injectable reply port that sends a text message back t
 - GIVEN the Telegram API fails to send a reply
 - WHEN the pipeline attempts the reply
 - THEN the failure is logged and processing continues
+
+#### Scenario: Keyboard reply recorded offline
+
+- GIVEN a processed update that emits a reply with an inline keyboard
+- WHEN the pipeline emits the reply
+- THEN the stub records the text and the keyboard rows with no network call
+
+#### Scenario: Edit reply updates the message
+
+- GIVEN a reply emitted with `editMessageId` set
+- WHEN the pipeline emits it
+- THEN the port edits the existing message instead of sending a new one
 
 ### Requirement: Success and Help Reply Content
 
@@ -326,10 +353,11 @@ When an owner with no categories sends a valid registration, the system MUST rep
 
 ### Requirement: Correction Loop (awaiting_category) and Learning
 
-Dialog messages in `awaiting_category` MUST first route through the brain (see Dialog Controller): a `resolve` answer reassigns the pending movement; `null` intents (queries, CRUD) execute without consuming the pending; `register_expense` abandons the pending. When the brain is absent, returns `null`, or the envelope says `abandon`, the deterministic rules below apply verbatim: a reply whose normalized text exactly matches an existing category name is the ANSWER; a reply that parses as an amount is a NEW registration that abandons the pending correction; a single-token reply that is not an existing category MUST auto-create that category and apply it; any other multi-word reply MUST list the existing categories without closing the state. Before the single-token auto-create, the reply MUST be checked through the punctuation-stripped guard normalization (`normalizeForMatchGuard`): a reply that normalizes to a guard word ("no", "si", with or without punctuation) MUST route to the abandon/affirmation handling and MUST NOT auto-create a category. A valid answer MUST reassign the pending movement to that category and confirm. Correction answers MUST NOT learn keyword rules — keyword rules are created only through the explicit `asociar palabra` command.
+Dialog messages in `awaiting_category` MUST first route through the brain (see Dialog Controller): a `resolve` answer reassigns the pending movement; `null` intents (queries, CRUD) execute without consuming the pending; `register_expense` abandons the pending. When the brain is absent, returns `null`, or the envelope says `abandon`, the deterministic rules below apply verbatim: a reply whose normalized text exactly matches an existing category name is the ANSWER; a reply that parses as an amount is a NEW registration that abandons the pending correction; any other reply MUST present the existing categories as inline buttons (closed set) without closing the state. The single-token free-text auto-create is REMOVED: no reply in `awaiting_category` MUST create a category. Before the answer/button handling, the reply MUST be checked through the punctuation-stripped guard normalization (`normalizeForMatchGuard`): a reply that normalizes to a guard word ("no", "si", with or without punctuation) MUST route to the abandon/affirmation handling and MUST NOT create a category. A valid answer (exact text or category button) MUST reassign the pending movement to that category and confirm. Correction answers MUST NOT learn keyword rules — keyword rules are created only through the explicit `asociar palabra` command.
 (Previously: every `awaiting_category` message was classified by the deterministic rules alone; the brain was never involved.)
 (Previously: corrections learned a keyword rule mapping the original note's first significant word to the answered category, and every non-answer text was treated as a new registration.)
 (Previously: guard sets matched without punctuation stripping, so "no." fell through to the single-token auto-create and created a phantom category.)
+(Previously: a single-token non-category reply auto-created the category through the guarded path.)
 
 #### Scenario: Unmatched triggers correction
 
@@ -345,12 +373,12 @@ Dialog messages in `awaiting_category` MUST first route through the brain (see D
 - THEN the pending movement is reassigned to "Transporte"
 - AND no keyword rule is created
 
-#### Scenario: Unknown single-token answer auto-creates the category only
+#### Scenario: Unknown single-token answer shows buttons and never auto-creates
 
 - GIVEN the owner is in `awaiting_category`
 - WHEN they reply "Mascotas" which is not an existing category
-- THEN category "Mascotas" is auto-created and the pending movement is assigned to it
-- AND no keyword rule is learned
+- THEN no category is created and the existing categories render as buttons
+- AND the state stays open
 
 #### Scenario: Punctuated guard never auto-creates
 
@@ -365,17 +393,17 @@ Dialog messages in `awaiting_category` MUST first route through the brain (see D
 - THEN it is treated as a new registration, not an answer, and the pending correction is abandoned
 - AND processing follows the normal registration path
 
-#### Scenario: Multi-word non-category answer lists categories
+#### Scenario: Multi-word non-category answer lists categories as buttons
 
 - GIVEN the owner is in `awaiting_category`
 - WHEN they reply with a multi-word text that matches no category
-- THEN the bot lists the existing categories and the state stays open
+- THEN the bot presents the category buttons and the state stays open
 - AND the movement remains safely in "otro"
 
 ### Requirement: Per-Owner State Machine
 
-The system MUST persist, per owner, a state machine with values `idle`, `awaiting_setup`, and `awaiting_category`, plus a pending amount-conflict question (exact state value is a design decision). The system MUST add a fourth state `awaiting_registration` for registration detail collection, kept distinct from `awaiting_category` (correction of an already-registered movement) — the two MUST NOT be conflated. Transitions MUST be explicit and testable: registration when owner has no categories → `awaiting_setup`; assignment to "otro" → `awaiting_category`; resolved answer or completed setup → `idle`; an answer that is a new registration during `awaiting_category` MUST remain in the registration path without corrupting the pending correction; a registration with a null amount or an unresolvable category intent → `awaiting_registration` (see registration-collection); a completed or abandoned collection → `idle`. The pending movement for a correction MUST be persisted so it survives a restart. The pending amount-conflict question MUST be persisted with the same abandonment and restart semantics as `awaiting_category`. The `awaiting_registration` collect payload MUST be persisted with the same restart semantics, and a corrupt payload MUST recover without registering anything. With the brain active, a `resolve` answer MUST act ONLY on the persisted payload — a bare affirmation or a resolve with no matching payload value abandons the question with a clear reply and is NOT reprocessed as a registration (phantom guard); the deterministic fallback (brain null/absent) keeps today's behavior: a reply matching a presented amount resolves it, and any other text abandons it (nothing registers from the conflicting message) and is processed as a new registration.
-(Previously: the state machine had only `idle`, `awaiting_setup`, and `awaiting_category`; there was no `awaiting_registration` state and no collect-payload persistence.)
+The system MUST persist, per owner, a state machine with values `idle`, `awaiting_setup`, `awaiting_category`, `awaiting_registration`, `awaiting_movement_selection`, the pending amount-conflict question (exact state value is a design decision), `awaiting_preview` (quick-capture preview), and `awaiting_delete_confirmation` (delete gate). `awaiting_registration` stays distinct from `awaiting_category` (correction of an already-registered movement) — the two MUST NOT be conflated. Transitions MUST be explicit and testable: registration when owner has no categories → `awaiting_setup`; assignment to "otro" → `awaiting_category`; resolved answer or completed setup → `idle`; an answer that is a new registration during `awaiting_category` MUST remain in the registration path without corrupting the pending correction; a registration with a null amount or an unresolvable category intent → `awaiting_registration` (see registration-collection); a completed or abandoned collection → `idle`; a quick-capture parse match in `idle` → `awaiting_preview` (payload `{amount, note, category, type, saveToken}`); preview `✅ Guardar` → registers and `idle`, `✏️ Corregir` → `idle` with a capture prompt; a delete request in `idle` → `awaiting_delete_confirmation` with the resolved target id persisted; `🗑 Borrar` → deletes and `idle`, `❌ Cancelar` or any new message → `idle` with nothing deleted. The pending movement for a correction MUST be persisted so it survives a restart. The pending amount-conflict question MUST be persisted with the same abandonment and restart semantics as `awaiting_category`. The `awaiting_registration` collect payload, the `awaiting_preview` payload, and the `awaiting_delete_confirmation` target MUST be persisted with the same restart semantics, and a corrupt payload MUST recover without registering or deleting anything. With the brain active, a `resolve` answer MUST act ONLY on the persisted payload — a bare affirmation or a resolve with no matching payload value abandons the question with a clear reply and is NOT reprocessed as a registration (phantom guard); the deterministic fallback (brain null/absent) keeps today's behavior: a reply matching a presented amount resolves it, and any other text abandons it (nothing registers from the conflicting message) and is processed as a new registration.
+(Previously: the state machine had `idle`, `awaiting_setup`, `awaiting_category`, `awaiting_registration`, the amount-conflict question, and `awaiting_movement_selection`; there were no `awaiting_preview` or `awaiting_delete_confirmation` states.)
 
 #### Scenario: Idle to setup
 
@@ -425,9 +453,41 @@ The system MUST persist, per owner, a state machine with values `idle`, `awaitin
 - WHEN the registration is created
 - THEN the owner returns to `idle` and the collect payload clears
 
+#### Scenario: Capture enters preview
+
+- GIVEN a quick-capture parse match in `idle`
+- WHEN the message is processed
+- THEN the owner transitions to `awaiting_preview` and the parsed payload is persisted
+
+#### Scenario: Guardar registers and returns to idle
+
+- GIVEN an owner in `awaiting_preview`
+- WHEN they tap `✅ Guardar`
+- THEN the movement registers with the previewed facts and the owner returns to `idle`
+
+#### Scenario: Delete request enters confirmation
+
+- GIVEN an owner in `idle` requests a delete
+- WHEN the target resolves
+- THEN the owner enters `awaiting_delete_confirmation` with the target id persisted
+- AND nothing is deleted yet
+
+#### Scenario: Cancelar abandons without deleting
+
+- GIVEN an owner in `awaiting_delete_confirmation`
+- WHEN they tap `❌ Cancelar`
+- THEN the owner returns to `idle` and the target movement is untouched
+
+#### Scenario: Delete target survives restart
+
+- GIVEN an owner in `awaiting_delete_confirmation`
+- WHEN the process restarts
+- THEN the target id and the state are still present
+
 ### Requirement: Bot Commands
 
-The system MUST recognize and handle these owner commands: `registrar categoria: X`, `renombrar categoria: X a: Y`, `asociar palabra: P a categoria: X`, `listar categorias`, and `configurar categorias`. A rename MUST cascade to existing movements (see movement-categories). Unrecognized commands MUST fall through to normal registration parsing.
+The system MUST recognize and handle these owner commands: `registrar categoria: X`, `renombrar categoria: X a: Y`, `asociar palabra: P a categoria: X`, `listar categorias`, `configurar categorias`, `menu`, and `ayuda`. A rename MUST cascade to existing movements (see movement-categories). The `menu` command MUST render the five-button main menu and `ayuda` MUST render the static help (see bot-main-menu). The system MUST register the owner-visible command list via `setMyCommands` at startup. Unrecognized commands MUST fall through to normal registration parsing.
+(Previously: there was no `menu`/`ayuda` command and no `setMyCommands` registration.)
 
 #### Scenario: Create category
 
@@ -459,6 +519,18 @@ The system MUST recognize and handle these owner commands: `registrar categoria:
 - WHEN it is processed
 - THEN it is treated as a normal registration
 
+#### Scenario: Menu command shows actions
+
+- GIVEN owner sends `menu`
+- WHEN it is processed
+- THEN the five-button main menu replies
+
+#### Scenario: Commands registered on start
+
+- GIVEN the API process starts with a valid bot token
+- WHEN the bot boots
+- THEN `setMyCommands` is called with the command list
+
 ### Requirement: Offline Testability (Reply + Middleware)
 
 The system MUST be drivable offline for reply logic. The offline test harness MUST record outbound reply payloads instead of throwing on network calls, so that reply behavior is asserted without touching the Telegram network. The reply feature and this middleware change MUST be implemented together in the same test-driven cycle.
@@ -477,8 +549,8 @@ The system MUST be drivable offline for reply logic. The offline test harness MU
 
 ### Requirement: Intent-First Message Handling
 
-For every non-command owner message in `idle`, the system MUST invoke the bot brain's `interpret` before deterministic execution and MUST route on the returned intent: `register_expense` runs the existing registration flow (with the brain's amount/category/note; a null amount enters `awaiting_registration` per registration-collection); `query`/`query_recent`/`query_balance`/`query_month` execute the deterministic query executor and answer from real data (an honest redirect replies only when the query fails or the type is unresolvable); `associate_keyword` redirects to the `asociar palabra` command; `help` replies with help; `off_topic` replies with an expense-scoped redirect and MUST NOT be answered as general chat; `greeting` replies with a warm expense-scoped greeting and MUST NOT close any open dialog; `correct_amount` is reserved and replies with deterministic help in `idle`; `correct_category` runs the movement-correction flow (see movement-correction); `mark_paid` runs the movement-lifecycle executor to transition a referenced PENDING EXPENSE to PAID, and `delete_expense` runs it to delete a referenced expense (see bot-expense-lifecycle) — lifecycle intents MUST NOT enter the registration path. The setup gate (owner with no categories) MUST take precedence over `interpret`: such messages go straight to `awaiting_setup` with no brain call. The state machine MUST remain authoritative — the LLM MUST never decide state transitions. `interpret` MUST NOT be invoked for commands or the setup flow; for dialog-state messages (`awaiting_category`, `awaiting_amount_confirmation`, `awaiting_registration`) it MUST be invoked with dialog context and the envelope's `dialog_action` routes the message (see Dialog Controller), with today's deterministic rules as the fallback when the brain is null/absent. When `interpret` returns `null` in `idle`, the system MUST behave exactly as today.
-(Previously: queries were answered with an honest not-supported redirect; `correct_amount` and `correct_category` were both reserved with deterministic help; `interpret` was never invoked in dialog states; there was no `greeting` intent, no lifecycle intents, and null-amount registrations dead-ended in a free-text question with no state.)
+For every non-command owner message in `idle`, the system MUST run the deterministic `QuickCaptureParser` FIRST: on a parse match (amount + category resolved against the closed set) the capture preview flow runs and `interpret` MUST NOT be invoked for that message; on a miss, the system MUST invoke the bot brain's `interpret` as the FALLBACK for uncaptured intents and MUST route on the returned intent: `register_expense` runs the existing registration flow (with the brain's amount/category/note; a null amount enters `awaiting_registration` per registration-collection); `query`/`query_recent`/`query_balance`/`query_month` execute the deterministic query executor and answer from real data (an honest redirect replies only when the query fails or the type is unresolvable); `associate_keyword` redirects to the `asociar palabra` command; `help` replies with help; `off_topic` replies with an expense-scoped redirect and MUST NOT be answered as general chat; `greeting` replies with a warm expense-scoped greeting and MUST NOT close any open dialog; `correct_amount` is reserved and replies with deterministic help in `idle`; `correct_category` runs the movement-correction flow (see movement-correction); `mark_paid` runs the movement-lifecycle executor to transition a referenced PENDING EXPENSE to PAID, and `delete_expense` runs it to resolve a referenced expense and OPEN the confirmation gate (see bot-expense-lifecycle) — lifecycle intents MUST NOT enter the registration path and delete MUST NOT execute without confirmation. The setup gate (owner with no categories) MUST take precedence over the parser and `interpret`: such messages go straight to `awaiting_setup` with no parser and no brain call. The state machine MUST remain authoritative — the LLM MUST never decide state transitions, MUST never pick a delete target silently, and MUST never infer the planned type. `interpret` MUST NOT be invoked for commands or the setup flow; for dialog-state messages (`awaiting_category`, `awaiting_amount_confirmation`, `awaiting_registration`) it MUST be invoked with dialog context and the envelope's `dialog_action` routes the message (see Dialog Controller), with today's deterministic rules as the fallback when the brain is null/absent. When `interpret` returns `null` in `idle`, the system MUST behave exactly as today.
+(Previously: every non-command `idle` message invoked `interpret` first; there was no deterministic capture fast path, and `delete_expense` executed immediately on the resolved target.)
 
 #### Scenario: Register intent runs the existing flow
 
@@ -517,11 +589,11 @@ For every non-command owner message in `idle`, the system MUST invoke the bot br
 - WHEN the message is processed in `idle`
 - THEN the movement-lifecycle executor marks the referenced PENDING expense PAID and replies once
 
-#### Scenario: Setup gate precedes the brain
+#### Scenario: Setup gate precedes the parser and the brain
 
 - GIVEN an owner with no categories sends "$2500 cafe"
 - WHEN the message is processed
-- THEN the owner enters `awaiting_setup` and `interpret` is not invoked
+- THEN the owner enters `awaiting_setup` and neither the parser nor `interpret` is invoked
 
 #### Scenario: Brain null behaves as today
 
@@ -535,6 +607,24 @@ For every non-command owner message in `idle`, the system MUST invoke the bot br
 - WHEN it is processed
 - THEN `interpret` is invoked with dialog context and the envelope's `dialog_action` routes the message
 - AND the deterministic rules apply only as the fallback (brain null/absent/abandon)
+
+#### Scenario: Capture fast path skips the brain
+
+- GIVEN owner text "30000 gym" that parses against the closed set
+- WHEN it is processed in `idle`
+- THEN the preview flow runs and `interpret` is not invoked
+
+#### Scenario: Parser miss falls back to the brain
+
+- GIVEN owner text that does not parse
+- WHEN it is processed in `idle`
+- THEN `interpret` is invoked for the uncaptured intent
+
+#### Scenario: Delete intent opens the confirmation gate
+
+- GIVEN owner text classified `delete_expense`
+- WHEN it is processed in `idle`
+- THEN the delete target resolves, the confirmation gate opens, and nothing is deleted yet
 
 ### Requirement: LLM Branch Replies with Fixed Fallback
 
@@ -726,8 +816,8 @@ The system MUST answer "cuánto ahorré este mes" from real data with the sum of
 
 ### Requirement: Planned Expense Registration (`previsto:` prefix)
 
-The system MUST parse a `previsto:` prefix at arrival, alongside the `compartido:` prefix, and MUST register the movement as a `PENDING` EXPENSE through the existing create path. Planned expenses are INDIVIDUAL by design: `previsto:` MUST NOT compose with `compartido:` — a message combining both prefixes (in either order) MUST be rejected with an educational redirect and MUST NOT create anything, start a dialog, or change the bot state. The prefix MUST work on the brain-absent path. A `previsto:` registration MUST NOT trigger any savings split. The deterministic prefix MUST be authoritative: when both a `previsto:` prefix and a brain `planned` flag are present, the prefix wins; a brain `planned: true` flag without the prefix MAY register a PENDING EXPENSE; on the brain-absent path only the prefix can produce PENDING. A `PENDING` registration MUST always persist as INDIVIDUAL, even when a shared signal leaks in.
-(Previously: only the literal `previsto:` prefix could produce PENDING; the brain envelope carried no `planned` field; `previsto:` composed with `compartido:`.)
+The system MUST parse a `previsto:` prefix at arrival, alongside the `compartido:` prefix, and MUST register the movement as a `PENDING` EXPENSE through the existing create path. Planned expenses are INDIVIDUAL by design: `previsto:` MUST NOT compose with `compartido:` — a message combining both prefixes (in either order) MUST be rejected with an educational redirect and MUST NOT create anything, start a dialog, or change the bot state. The prefix MUST work on the brain-absent path. A `previsto:` registration MUST NOT trigger any savings split. The deterministic prefix MUST be authoritative: PENDING MUST be produced ONLY by the `previsto:` prefix or by the explicit Previsto button in the capture preview (see quick-capture); the brain MUST NOT signal planned status (the `planned` flag is removed from the envelope contract) — the type is a button decision, never an inference. A `PENDING` registration MUST always persist as INDIVIDUAL, even when a shared signal leaks in.
+(Previously: a brain `planned: true` flag without the prefix could register a PENDING EXPENSE, so the LLM could decide the planned type.)
 
 #### Scenario: previsto registers a planned expense
 
@@ -747,17 +837,18 @@ The system MUST parse a `previsto:` prefix at arrival, alongside the `compartido
 - WHEN "previsto: 2500 alquiler" is processed
 - THEN the PENDING EXPENSE still registers deterministically
 
-#### Scenario: Prefix wins over the flag
+#### Scenario: Prefix wins over a REAL classification
 
-- GIVEN the brain returns `planned: false` and the text carries "previsto: 2500 alquiler"
+- GIVEN the brain classifies a REAL expense and the text carries "previsto: 2500 alquiler"
 - WHEN it is processed
 - THEN the PENDING EXPENSE registers anyway (deterministic prefix authoritative)
 
-#### Scenario: Flag alone registers PENDING with the brain
+#### Scenario: Brain never decides the planned type
 
-- GIVEN the brain returns `planned: true` for "dejalo para el mes que viene: 2500 alquiler" with no prefix
+- GIVEN a `register_expense` envelope mentioning a future expense with no `previsto:` prefix and no Previsto button
 - WHEN it is processed
-- THEN a PENDING EXPENSE registers
+- THEN the movement registers as a REAL expense
+- AND PENDING results only from the prefix or the Previsto button
 
 ### Requirement: Recent Movements Exclude Planned
 
@@ -799,7 +890,8 @@ The system MUST answer "¿cuánto tengo previsto?" and equivalent phrasings ("ga
 
 ### Requirement: Guarded Category Creation Funnel
 
-Every bot-side category creation path — dialog single-token auto-create, `correct_category` target auto-create, `create_category` intent (including `then_reassign`), setup-list entries, and the `registrar categoria:` command — MUST funnel through the guarded `CategoryService.createCategory`. A name rejected by the reserved or duplicate-variant guards MUST produce a redirect reply, MUST NOT create any category, and MUST leave the pending correction (when one exists) open with the movement in "otro".
+Every bot-side category creation path — `correct_category` target auto-create, `create_category` intent (including `then_reassign`), setup-list entries, and the `registrar categoria:` command — MUST funnel through the guarded `CategoryService.createCategory`. The dialog single-token auto-create MUST NOT exist: `awaiting_category` and `awaiting_registration` answers resolve ONLY against the closed category set or the category buttons and MUST NEVER create a category (see conversational-categories). A name rejected by the reserved or duplicate-variant guards MUST produce a redirect reply, MUST NOT create any category, and MUST leave the pending correction (when one exists) open with the movement in "otro".
+(Previously: the dialog single-token auto-create was one of the funneled creation paths.)
 
 #### Scenario: registrar command redirected
 
@@ -807,11 +899,11 @@ Every bot-side category creation path — dialog single-token auto-create, `corr
 - WHEN it is processed
 - THEN no category is created and a redirect reply teaches "previsto: monto nota"
 
-#### Scenario: Dialog auto-create gated
+#### Scenario: Dialog answers never auto-create
 
-- GIVEN an owner in `awaiting_category` replies "previsto"
+- GIVEN an owner in `awaiting_category` replies "Mascotas" (not existing, not reserved)
 - WHEN it is processed
-- THEN no category is created, a redirect replies, and the pending correction stays open
+- THEN no category is created, the category buttons render, and the pending correction stays open
 
 #### Scenario: then_reassign gated
 

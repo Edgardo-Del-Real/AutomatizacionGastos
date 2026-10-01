@@ -73,6 +73,7 @@ function makeSavingsHarness(): SavingsHarness {
     listCategories: vi.fn(async () => [
       { id: "c-work", ownerId, name: "trabajo", type: "NORMAL", createdAt: new Date(), keywords: [] },
     ]),
+    listKeywordRules: vi.fn(async () => []),
     matchNote: vi.fn(async () => null),
     ensureOtro: vi.fn(async (owner: string) => ({
       id: "otro-id",

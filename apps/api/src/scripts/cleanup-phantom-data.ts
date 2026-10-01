@@ -1,25 +1,30 @@
 /**
  * One-off owner-scoped cleanup runbook (design "Migration / Rollout", proposal
- * "Cleanup"): removes the phantom categories and the junk expense created by
- * the pre-guard bot ("No.", "Borrar categoría: no", "si", "gasto provisorio"
- * categories; the 30000 PAID expense in category "No."), backs up every
- * to-be-deleted row to `apps/api/.cleanup-backups/`, and asserts the valid
- * PENDING "gastos hormiga" expense stays untouched.
+ * "Cleanup"): removes the phantom categories created by the pre-guard bot
+ * ("No.", "Borrar categoría: no", "si", "gasto provisorio") and, when present,
+ * the historical junk expense (30000 PAID in "No."), backing up every
+ * to-be-deleted row to `apps/api/.cleanup-backups/`.
  *
  * Run against the REAL database (`automatizacionrita`), NEVER the `_test` DB:
- *   pnpm --filter @rita/api exec tsx src/scripts/cleanup-phantom-data.ts
+ *   pnpm --filter @rita/api exec tsx src/scripts/cleanup-phantom-data.ts --dry-run   (default: report only)
+ *   pnpm --filter @rita/api exec tsx src/scripts/cleanup-phantom-data.ts --write      (apply after backup)
  *
- * Safety:
+ * Safety (D14):
+ * - `--dry-run` is the DEFAULT: it reports the phantoms/junk found and writes
+ *   NOTHING (no backup, no deletion). `--write` is required to apply.
  * - Owner-scoped: every read/write filters by `OWNER_ID` (default "default").
  * - Pre-asserted: the FULL expected phantom set must be present to delete;
  *   an already-clean state prints "already clean" and exits 0 (safe re-run);
- *   any partial drift aborts with exit 1 before touching anything.
+ *   any partial drift of the phantom set aborts with exit 1 before touching
+ *   anything. Junk/valid expenses are OPTIONAL evidence (the DB evolved during
+ *   real use — the 30000 PAID moved to "otro" and the owner deleted the valid
+ *   PENDING through the bot), never a delete contract by themselves.
  * - Row backup: every to-be-deleted row is written as full JSON BEFORE any
  *   deletion; restore = re-insert from the backup file.
  * - Deletion goes through the guarded services (CategoryService guards and
  *   ExpenseService.deleteExpense), never raw prisma deletes.
- * - Post-verified: phantoms gone, the valid PENDING row byte-identical to the
- *   captured pre-row; exit 0 only when every assertion passes.
+ * - Post-verified: phantoms gone (and junk gone when it existed); exit 0 only
+ *   when every assertion passes.
  *
  * The script is excluded from the build (`tsconfig.build.json` excludes
  * `src/scripts`): it is a manual runbook step, not shipped code.
@@ -38,8 +43,12 @@ import { normalizeForMatchTolerant } from "../features/categories/matcher";
 
 const PHANTOM_CATEGORY_NAMES = ["No.", "Borrar categoría: no", "si", "gasto provisorio"] as const;
 
+// Historical junk/valid evidence from when the script was authored. The real
+// DB evolved: the 30000 PAID moved to "otro" (dialog rewrite) and the valid
+// PENDING "gastos hormiga" was deleted by the owner through the bot during the
+// 2026-09-30 test. The CONTRACT is the phantom categories; junk/valid are
+// optional evidence only — the script never fabricates or deletes outside them.
 const JUNK_EXPENSE = { amount: 30000, category: "No.", status: "PAID" } as const;
-const VALID_EXPENSE = { amount: 30000, note: "gastos hormiga", status: "PENDING" } as const;
 
 type ExpenseRow = {
   id: string;
@@ -70,16 +79,16 @@ function assert(condition: boolean, message: string): void {
 }
 
 /** Assert-and-narrow: returns the value or throws, satisfying TS control flow. */
-function requireDefined<T>(value: T | undefined, message: string): T {
-  if (value === undefined) {
-    throw new Error(message);
-  }
-  return value;
+
+/** D14 — the write flag is EXPLICIT: absent means dry-run (report only, write nothing). */
+function parseWriteFlag(argv: string[]): boolean {
+  return argv.includes("--write");
 }
 
 async function main(): Promise<number> {
   const ownerId = env.OWNER_ID;
-  console.log(`[cleanup] owner: ${ownerId}`);
+  const apply = parseWriteFlag(process.argv.slice(2));
+  console.log(`[cleanup] owner: ${ownerId} · mode: ${apply ? "WRITE" : "DRY-RUN"}`);
   const prisma: PrismaClient = prismaClient;
   const categoryService = new CategoryService(new PrismaCategoryRepository(prisma));
   const expenseService = new ExpenseService(new PrismaExpenseRepository(prisma));
@@ -92,41 +101,45 @@ async function main(): Promise<number> {
   const phantoms = categories.filter((category) =>
     (PHANTOM_CATEGORY_NAMES as readonly string[]).includes(category.name),
   );
+  // The junk expense is optional evidence: it existed when this script was
+  // authored, but the real DB evolved (the 30000 PAID is now in "otro"). If it
+  // exists we delete it too; if not, that is NOT drift — the categories are the
+  // contract and the valid PENDING must stay untouched.
   const junkExpense = expenses.find(
     (expense) =>
       expense.amount.toNumber() === JUNK_EXPENSE.amount &&
       expense.category === JUNK_EXPENSE.category &&
       expense.status === JUNK_EXPENSE.status,
   );
-  const validExpense = expenses.find(
-    (expense) =>
-      expense.amount.toNumber() === VALID_EXPENSE.amount &&
-      expense.note === VALID_EXPENSE.note &&
-      expense.status === VALID_EXPENSE.status,
-  );
 
   const phantomNames = phantoms.map((category) => category.name);
 
-  // Already clean (safe re-run): no phantoms, no junk, valid expense intact.
-  if (phantomNames.length === 0 && junkExpense === undefined && validExpense !== undefined) {
-    console.log("[cleanup] already clean: no phantom categories, no junk expense, valid PENDING intact.");
+  // Already clean (safe re-run): no phantoms. The junk/valid expenses are
+  // optional evidence — only their PRESENCE in the backup matters, not their
+  // absence (the owner deleted the valid PENDING during the 2026-09-30 test).
+  if (phantomNames.length === 0) {
+    console.log("[cleanup] already clean: no phantom categories to remove.");
     return 0;
   }
 
-  // Pre-assert: the FULL expected set must be present to proceed; any partial
-  // drift aborts BEFORE any deletion or backup write.
+  // D14 — the DRY-RUN report lists what WOULD be deleted and writes nothing;
+  // the pre-assert still runs so a partial drift aborts even in dry-run.
   assert(
     phantomNames.length === PHANTOM_CATEGORY_NAMES.length,
     `partial drift: expected phantoms [${PHANTOM_CATEGORY_NAMES.join(", ")}], found [${phantomNames.join(", ")}]`,
   );
-  const junk = requireDefined(
-    junkExpense,
-    `partial drift: junk expense (${JUNK_EXPENSE.amount} ${JUNK_EXPENSE.category} ${JUNK_EXPENSE.status}) not found`,
-  );
-  const valid = requireDefined(
-    validExpense,
-    `partial drift: valid PENDING (${VALID_EXPENSE.amount} "${VALID_EXPENSE.note}" ${VALID_EXPENSE.status}) not found`,
-  );
+
+  if (!apply) {
+    console.log("[cleanup] DRY-RUN: nothing was written. Found:");
+    for (const phantom of phantoms) {
+      console.log(`  - phantom category "${phantom.name}" (id ${phantom.id})`);
+    }
+    if (junkExpense !== undefined) {
+      console.log(`  - junk expense ${junkExpense.id} (${JUNK_EXPENSE.amount}, "${junkExpense.note ?? ""}", category "No.")`);
+    }
+    console.log("[cleanup] Re-run with --write (after a DB backup) to apply.");
+    return 0;
+  }
 
   // Backup every to-be-deleted row (full JSON) BEFORE deleting.
   const scriptDir = path.dirname(fileURLToPath(import.meta.url));
@@ -151,8 +164,10 @@ async function main(): Promise<number> {
   console.log(`[cleanup] backup written: ${backupPath}`);
 
   // Delete through the guarded services (design "Delete" step).
-  await expenseService.deleteExpense(junk.id, ownerId);
-  console.log(`[cleanup] deleted junk expense ${junk.id} (${JUNK_EXPENSE.amount}, "${junk.note ?? ""}")`);
+  if (junkExpense !== undefined) {
+    await expenseService.deleteExpense(junkExpense.id, ownerId);
+    console.log(`[cleanup] deleted junk expense ${junkExpense.id} (${JUNK_EXPENSE.amount}, "${junkExpense.note ?? ""}")`);
+  }
   for (const phantom of phantoms) {
     await categoryService.deleteCategory(ownerId, phantom.name);
     console.log(`[cleanup] deleted phantom category "${phantom.name}"`);
@@ -170,23 +185,11 @@ async function main(): Promise<number> {
   for (const name of PHANTOM_CATEGORY_NAMES) {
     assert(!afterCategories.some((category) => category.name === name), `phantom category "${name}" still present after cleanup`);
   }
-  assert(!afterExpenses.some((expense) => expense.id === junk.id), "junk expense still present after cleanup");
+  if (junkExpense !== undefined) {
+    assert(!afterExpenses.some((expense) => expense.id === junkExpense.id), "junk expense still present after cleanup");
+  }
 
-  // The valid PENDING row must be identical to the captured pre-row.
-  const afterValid = requireDefined(
-    afterExpenses.find((expense) => expense.id === valid.id),
-    "valid PENDING expense was deleted by the cleanup",
-  );
-  assert(
-    afterValid.amount.toString() === valid.amount.toString() &&
-      afterValid.note === valid.note &&
-      afterValid.status === valid.status &&
-      afterValid.occurredAt.getTime() === valid.occurredAt.getTime() &&
-      afterValid.category === valid.category,
-    "valid PENDING expense changed by the cleanup",
-  );
-
-  console.log("[cleanup] done: phantoms removed, junk deleted, valid PENDING intact.");
+  console.log("[cleanup] done: phantom categories removed, backup written, junk deleted if present.");
   return 0;
 }
 

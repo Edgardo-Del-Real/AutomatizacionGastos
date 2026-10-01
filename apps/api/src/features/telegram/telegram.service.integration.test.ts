@@ -14,8 +14,8 @@ import { PrismaSavingsRuleRepository } from "../savings/savings.repository";
 import { SavingsRuleService } from "../savings/savings.service";
 import type { BotBrain, ConversationEnvelope } from "./bot-brain";
 import { HouseholdService } from "../household/household.service";
-import { deletedMovementReply, formatARS, markPaidAlreadyReply, markPaidReply, nothingPendingReply, nothingToDeleteReply } from "./reply-text";
-import { registrationCollectPayloadSchema, TelegramService } from "./telegram.service";
+import { categoryButtonsReply, formatARS, markPaidAlreadyReply, markPaidReply, nothingPendingReply, nothingToDeleteReply } from "./reply-text";
+import { quickCapturePreviewPayloadSchema, registrationCollectPayloadSchema, TelegramService } from "./telegram.service";
 
 loadDotEnvFromDisk();
 
@@ -217,19 +217,25 @@ describe("TelegramService (integration)", () => {
     expect(replies.at(-1)).toBe('Listo, el movimiento quedó en "Transporte".');
   });
 
-  it("correction: an unknown single-word answer auto-creates the category and applies it", async () => {
+  it("correction: an unknown single-word answer shows the category buttons and never auto-creates (D9)", async () => {
     await seedCategories([]);
-    const reply = async (): Promise<void> => undefined;
+    const replies: string[] = [];
+    const reply = async (text: string): Promise<void> => {
+      replies.push(text);
+    };
 
     await service.handleUpdate(textUpdate({ messageId: 1, text: "$8000 veterinaria" }), reply);
     await service.handleUpdate(textUpdate({ messageId: 2, text: "Mascotas" }), reply);
 
+    // The single-token auto-create is REMOVED: no category is created and the
+    // movement stays in "otro" while the correction stays open.
     const movements = await prisma.expense.findMany({ where: { ownerId } });
-    expect(movements[0]?.category).toBe("Mascotas");
+    expect(movements[0]?.category).toBe("otro");
     const categories = await categoryService.listCategories(ownerId);
-    expect(categories.some((category) => category.name === "Mascotas")).toBe(true);
-    const learned = await prisma.categoryKeyword.findMany({ where: { ownerId } });
-    expect(learned).toHaveLength(0);
+    expect(categories.some((category) => category.name === "Mascotas")).toBe(false);
+    const state = await prisma.botState.findUnique({ where: { ownerId } });
+    expect(state?.state).toBe("awaiting_category");
+    expect(replies.at(-1)).toBe(categoryButtonsReply());
   });
 
   it("correction: an amount reply is a new registration that replaces the pending correction", async () => {
@@ -266,7 +272,7 @@ describe("TelegramService (integration)", () => {
     expect(replies.at(-1)).toBe('Listo, quedó en "otro".');
   });
 
-  it("correction: a multi-word non-category answer lists the categories and keeps the state open", async () => {
+  it("correction: a multi-word non-category answer shows the category buttons and keeps the state open", async () => {
     await seedCategories(["Cafe"]);
     const replies: string[] = [];
     const reply = async (text: string): Promise<void> => {
@@ -278,8 +284,7 @@ describe("TelegramService (integration)", () => {
 
     const state = await prisma.botState.findUnique({ where: { ownerId } });
     expect(state?.state).toBe("awaiting_category");
-    expect(replies.at(-1)).toContain("No encontré la categoría");
-    expect(replies.at(-1)).toContain("Cafe");
+    expect(replies.at(-1)).toBe(categoryButtonsReply());
 
     // The pending correction is still resolvable afterwards.
     await service.handleUpdate(textUpdate({ messageId: 3, text: "Cafe" }), reply);
@@ -307,7 +312,7 @@ describe("TelegramService (integration)", () => {
     expect(state?.state).toBe("awaiting_category");
   });
 
-  it("learning: a later note containing an explicitly associated keyword auto-matches", async () => {
+  it("learning: a later note containing an explicitly associated keyword resolves through the quick-capture parser", async () => {
     await seedCategories(["Transporte"]);
     const reply = async (): Promise<void> => undefined;
 
@@ -315,11 +320,16 @@ describe("TelegramService (integration)", () => {
       textUpdate({ messageId: 1, text: "asociar palabra: uber a categoria: Transporte" }),
       reply,
     );
+    // The associated keyword now feeds the deterministic fast path: the note
+    // parses into a preview whose category resolves to Transporte (no LLM).
     await service.handleUpdate(textUpdate({ messageId: 2, text: "$500 uber al aeropuerto" }), reply);
 
-    const movements = await prisma.expense.findMany({ where: { ownerId }, orderBy: { createdAt: "asc" } });
-    expect(movements).toHaveLength(1);
-    expect(movements[0]?.category).toBe("Transporte");
+    const state = await prisma.botState.findUnique({ where: { ownerId } });
+    expect(state?.state).toBe("awaiting_preview");
+    const preview = quickCapturePreviewPayloadSchema.parse(JSON.parse(state?.pendingNote ?? "{}"));
+    expect(preview.amount).toBe(500);
+    expect(preview.category).toBe("Transporte");
+    expect(await prisma.expense.count({ where: { ownerId } })).toBe(0);
   });
 
   it("restart survival: a pending correction persists and resolves after the service is rebuilt", async () => {
@@ -1109,7 +1119,7 @@ describe("TelegramService (integration)", () => {
     expect(correctReplies.at(-1)).toContain("No encontré");
   });
 
-  it("planned e2e: a brain planned:true flag (no prefix) registers a PENDING EXPENSE through the guarded path", async () => {
+  it("planned e2e: without the previsto: prefix the brain can never register PENDING (D7)", async () => {
     await seedCategories(["Vivienda"]);
     const replies: string[] = [];
     const stubbed = buildService(
@@ -1120,7 +1130,6 @@ describe("TelegramService (integration)", () => {
           amount: 2500,
           category: "Vivienda",
           note: "alquiler",
-          planned: true,
         }),
       }),
     );
@@ -1132,13 +1141,15 @@ describe("TelegramService (integration)", () => {
       },
     );
 
+    // A future-expense phrasing WITHOUT the prefix registers as a REAL
+    // expense — PENDING results only from the prefix or the Previsto button
+    // (spec telegram-bot "Brain never decides the planned type").
     const rows = await prisma.expense.findMany({ where: { ownerId } });
     expect(rows).toHaveLength(1);
     expect(rows[0]?.amount.toNumber()).toBe(2500);
     expect(rows[0]?.category).toBe("Vivienda");
-    expect(rows[0]?.status).toBe("PENDING");
+    expect(rows[0]?.status).toBe("PAID");
     expect(rows[0]?.type).toBe("EXPENSE");
-    expect(replies.at(-1)).toContain("previsto");
   });
 
   it("planned e2e: the previsto: prefix beats a brain planned:false flag", async () => {
@@ -1414,7 +1425,7 @@ describe("TelegramService (integration)", () => {
     expect(state).toBeNull();
   });
 
-  it("lifecycle e2e: 'borralo' deletes the referenced expense row with one reply", async () => {
+  it("lifecycle e2e: 'borralo' opens the confirmation gate and the 🗑 tap deletes the row", async () => {
     await seedCategories(["Cafe"]);
     const expenseId = await seedExpense({ amount: 900, category: "Cafe", note: "cafe", status: "PAID" });
     const replies: string[] = [];
@@ -1430,9 +1441,33 @@ describe("TelegramService (integration)", () => {
       replies.push(text);
     });
 
+    // Nothing deleted yet: the confirmation gate holds the persisted target.
+    expect(await prisma.expense.count({ where: { ownerId, id: expenseId } })).toBe(1);
+    const gate = await prisma.botState.findUnique({ where: { ownerId } });
+    expect(gate?.state).toBe("awaiting_delete_confirmation");
+    expect(replies.at(-1)).toContain("Borrar");
+
+    // The owner confirms with 🗑 → the row is deleted through deleteExpense.
+    const storedTarget = JSON.parse(gate?.pendingNote ?? "{}") as { target: { id: string } };
+    await stubbed.handleCallback(
+      {
+        update_id: 9001,
+        callback_query: {
+          id: "cb_2",
+          chat_instance: "987654321",
+          from: { id: OWNER_CHAT_ID, is_bot: false, first_name: "Rita" },
+          message: { message_id: 3, chat: { id: OWNER_CHAT_ID, type: "private", first_name: "Rita" }, date: 1712803046, text: "gate" },
+          data: `dc:ok:${storedTarget.target.id}`,
+        },
+      },
+      async (text) => {
+        replies.push(text);
+      },
+    );
+
     expect(await prisma.expense.count({ where: { ownerId, id: expenseId } })).toBe(0);
-    expect(replies).toHaveLength(1);
-    expect(replies[0]).toBe(deletedMovementReply(900, "cafe", "Cafe"));
+    const after = await prisma.botState.findUnique({ where: { ownerId } });
+    expect(after?.state).toBe("idle");
   });
 
   it("lifecycle e2e: an already-PAID reference replies the 409 conflict and changes no state", async () => {
@@ -1549,5 +1584,180 @@ describe("TelegramService (integration)", () => {
     expect(names).not.toContain("Cafe");
     expect(names).not.toContain("borrar categoria: cafe");
     expect(replies.at(-1)).toContain("Borradas: Cafe");
+  });
+
+  it("quick-capture e2e: '30000 gym' → preview → Guardar registers a REAL expense row", async () => {
+    await seedCategories(["Gimnasio"]);
+    await categoryService.associateKeyword(ownerId, "gym", "Gimnasio");
+    const replies: string[] = [];
+
+    await service.handleUpdate(textUpdate({ messageId: 1, text: "30000 gym" }), async (text) => {
+      replies.push(text);
+    });
+
+    const state = await prisma.botState.findUnique({ where: { ownerId } });
+    expect(state?.state).toBe("awaiting_preview");
+    const preview = quickCapturePreviewPayloadSchema.parse(JSON.parse(state?.pendingNote ?? "{}"));
+    expect(preview.amount).toBe(30000);
+    expect(preview.category).toBe("Gimnasio");
+    expect(preview.type).toBe("REAL");
+
+    await service.handleCallback(
+      {
+        update_id: 9000,
+        callback_query: {
+          id: "cb_1",
+          chat_instance: "987654321",
+          from: { id: OWNER_CHAT_ID, is_bot: false, first_name: "Rita" },
+          message: { message_id: 1, chat: { id: OWNER_CHAT_ID, type: "private", first_name: "Rita" }, date: 1712803046, text: "preview" },
+          data: `pv:save:${preview.saveToken}`,
+        },
+      },
+      async (text) => {
+        replies.push(text);
+      },
+    );
+
+    const rows = await prisma.expense.findMany({ where: { ownerId } });
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.amount.toNumber()).toBe(30000);
+    expect(rows[0]?.category).toBe("Gimnasio");
+    expect(rows[0]?.status).toBe("PAID");
+    expect(replies.at(-1)).toContain("Registrado");
+  });
+
+  it("quick-capture e2e: Previsto button → Guardar registers a PENDING row, retry registers once", async () => {
+    await seedCategories(["Gimnasio"]);
+    await categoryService.associateKeyword(ownerId, "gym", "Gimnasio");
+    const replies: string[] = [];
+
+    await service.handleUpdate(textUpdate({ messageId: 1, text: "30000 gym" }), async (text) => {
+      replies.push(text);
+    });
+    const state = await prisma.botState.findUnique({ where: { ownerId } });
+    const preview = quickCapturePreviewPayloadSchema.parse(JSON.parse(state?.pendingNote ?? "{}"));
+
+    await service.handleCallback(
+      {
+        update_id: 9001,
+        callback_query: {
+          id: "cb_2",
+          chat_instance: "987654321",
+          from: { id: OWNER_CHAT_ID, is_bot: false, first_name: "Rita" },
+          message: { message_id: 1, chat: { id: OWNER_CHAT_ID, type: "private", first_name: "Rita" }, date: 1712803046, text: "preview" },
+          data: `pv:typ:p:${preview.saveToken}`,
+        },
+      },
+      async (text) => {
+        replies.push(text);
+      },
+    );
+    const afterToggle = await prisma.botState.findUnique({ where: { ownerId } });
+    const toggled = quickCapturePreviewPayloadSchema.parse(JSON.parse(afterToggle?.pendingNote ?? "{}"));
+
+    await service.handleCallback(
+      {
+        update_id: 9002,
+        callback_query: {
+          id: "cb_3",
+          chat_instance: "987654321",
+          from: { id: OWNER_CHAT_ID, is_bot: false, first_name: "Rita" },
+          message: { message_id: 1, chat: { id: OWNER_CHAT_ID, type: "private", first_name: "Rita" }, date: 1712803046, text: "preview" },
+          data: `pv:save:${toggled.saveToken}`,
+        },
+      },
+      async (text) => {
+        replies.push(text);
+      },
+    );
+
+    const rows = await prisma.expense.findMany({ where: { ownerId } });
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.status).toBe("PENDING");
+    expect(rows[0]?.visibility).toBe("INDIVIDUAL");
+
+    // Retry: no second row, "ya procesado".
+    await service.handleCallback(
+      {
+        update_id: 9003,
+        callback_query: {
+          id: "cb_4",
+          chat_instance: "987654321",
+          from: { id: OWNER_CHAT_ID, is_bot: false, first_name: "Rita" },
+          message: { message_id: 1, chat: { id: OWNER_CHAT_ID, type: "private", first_name: "Rita" }, date: 1712803046, text: "preview" },
+          data: `pv:save:${toggled.saveToken}`,
+        },
+      },
+      async (text) => {
+        replies.push(text);
+      },
+    );
+    expect(await prisma.expense.count({ where: { ownerId } })).toBe(1);
+    expect(replies.at(-1)).toContain("ya fue procesada");
+  });
+
+  it("delete e2e: Cancelar keeps the row; a new message abandons the gate", async () => {
+    await seedCategories(["Cafe"]);
+    const expenseId = await seedExpense({ amount: 900, category: "Cafe", note: "cafe", status: "PAID" });
+    const replies: string[] = [];
+    const stubbed = buildService(
+      () => undefined,
+      stubBrain({
+        interpret: async (message: string) =>
+          message === "hola"
+            ? null
+            : ({ intent: "delete_expense", amount: null, category: "cafe", note: null } as ConversationEnvelope),
+        reply: async () => null,
+      }),
+    );
+
+    await stubbed.handleUpdate(textUpdate({ messageId: 1, text: "borra el de cafe" }), async (text) => {
+      replies.push(text);
+    });
+    const gate = await prisma.botState.findUnique({ where: { ownerId } });
+    expect(gate?.state).toBe("awaiting_delete_confirmation");
+
+    // ❌ Cancelar keeps the movement.
+    await stubbed.handleCallback(
+      {
+        update_id: 9010,
+        callback_query: {
+          id: "cb_10",
+          chat_instance: "987654321",
+          from: { id: OWNER_CHAT_ID, is_bot: false, first_name: "Rita" },
+          message: { message_id: 2, chat: { id: OWNER_CHAT_ID, type: "private", first_name: "Rita" }, date: 1712803046, text: "gate" },
+          data: `dc:no:${(JSON.parse(gate?.pendingNote ?? "{}") as { target: { id: string } }).target.id}`,
+        },
+      },
+      async (text) => {
+        replies.push(text);
+      },
+    );
+    expect(await prisma.expense.count({ where: { ownerId, id: expenseId } })).toBe(1);
+
+    // A new text message abandons the gate (nothing deleted) and reprocesses.
+    await stubbed.handleUpdate(textUpdate({ messageId: 3, text: "hola" }), async (text) => {
+      replies.push(text);
+    });
+    expect(await prisma.expense.count({ where: { ownerId, id: expenseId } })).toBe(1);
+    const after = await prisma.botState.findUnique({ where: { ownerId } });
+    expect(after?.state).toBe("idle");
+  });
+
+  it("dialog e2e: an unknown dialog answer creates NO new Category row (D9)", async () => {
+    await seedCategories(["Cafe"]);
+    const replies: string[] = [];
+
+    await service.handleUpdate(textUpdate({ messageId: 1, text: "$1000 panaderia" }), async (text) => {
+      replies.push(text);
+    });
+    await service.handleUpdate(textUpdate({ messageId: 2, text: "Mascotas" }), async (text) => {
+      replies.push(text);
+    });
+
+    const categories = await categoryService.listCategories(ownerId);
+    expect(categories.some((category) => category.name === "Mascotas")).toBe(false);
+    const state = await prisma.botState.findUnique({ where: { ownerId } });
+    expect(state?.state).toBe("awaiting_category");
   });
 });

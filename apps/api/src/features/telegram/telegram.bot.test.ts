@@ -14,6 +14,7 @@ import {
   recordApiCalls,
   redactToken,
   registerGracefulStop,
+  startTelegramBot,
   type RecordedApiCall,
 } from "./telegram.bot";
 import { TelegramService } from "./telegram.service";
@@ -32,6 +33,25 @@ function textUpdate(overrides?: { fromId?: number; chatId?: number; messageId?: 
       chat: { id: overrides?.chatId ?? fromId, type: "private", first_name: "Rita" },
       date: 1712803046,
       text: overrides?.text ?? "café 2500",
+    },
+  };
+}
+
+function callbackUpdate(overrides?: { fromId?: number; chatId?: number; data?: string }): Update {
+  const fromId = overrides?.fromId ?? OWNER_CHAT_ID;
+  return {
+    update_id: 9000,
+    callback_query: {
+      id: "cb_1",
+      chat_instance: "987654321",
+      from: { id: fromId, is_bot: false, first_name: "Rita" },
+      message: {
+        message_id: 77,
+        chat: { id: overrides?.chatId ?? fromId, type: "private", first_name: "Rita" },
+        date: 1712803046,
+        text: "preview",
+      },
+      data: overrides?.data ?? "m:new",
     },
   };
 }
@@ -98,6 +118,7 @@ function makeBotHarness(): BotHarness {
     listCategories: vi.fn(async () => [
       { id: "c1", ownerId, name: "otro", createdAt: new Date(), keywords: [] },
     ]),
+    listKeywordRules: vi.fn(async () => []),
     matchNote: vi.fn(async () => null),
     createCategory: vi.fn(async (_owner: string, name: string) => ({
       id: `cat-${name}`,
@@ -276,6 +297,128 @@ describe("createTelegramBot (offline reply recording)", () => {
     expect(logged).toContain("[REDACTED]");
     expect(logged).not.toContain(TOKEN);
     expect(logged).not.toContain(`api.telegram.org/bot${TOKEN}`);
+    errorSpy.mockRestore();
+  });
+});
+
+describe("createTelegramBot callback wiring (D4)", () => {
+  let h: BotHarness;
+
+  beforeEach(() => {
+    h = makeBotHarness();
+  });
+
+  it("routes a callback through handleCallback, sends the reply and answers the callback query", async () => {
+    await expect(h.bot.handleUpdate(callbackUpdate({ data: "zz:1" }))).resolves.toBeUndefined();
+
+    // The unknown action is answered honestly AND the callback is answered.
+    const sendMessage = h.recorded.find((call) => call.method === "sendMessage");
+    expect(sendMessage).toBeDefined();
+    expect(String(sendMessage?.payload?.text)).toContain("no está disponible");
+    expect(h.recorded.some((call) => call.method === "answerCallbackQuery")).toBe(true);
+  });
+
+  it("ignores a callback from an unknown chat with zero API calls", async () => {
+    await expect(h.bot.handleUpdate(callbackUpdate({ fromId: 999999999, chatId: 999999999 }))).resolves.toBeUndefined();
+
+    expect(h.recorded).toHaveLength(0);
+  });
+
+  it("maps a keyboard reply to reply_markup on the sendMessage (offline keyboard assertion)", async () => {
+    const recorded: RecordedApiCall[] = [];
+    const service = {
+      handleUpdate: async () => undefined,
+      handleCallback: async (
+        _update: unknown,
+        reply: (text: string, keyboard?: { text: string; callback_data: string }[][]) => Promise<void>,
+      ) => {
+        await reply("Elegí una opción", [[{ text: "Nuevo", callback_data: "m:new" }]]);
+        return true;
+      },
+    } as unknown as TelegramService;
+    const bot = buildOfflineBot(service, recorded);
+
+    await expect(bot.handleUpdate(callbackUpdate({ data: "m:new" }))).resolves.toBeUndefined();
+
+    const sendMessage = recorded.find((call) => call.method === "sendMessage");
+    expect(sendMessage).toBeDefined();
+    expect(String(sendMessage?.payload?.text)).toContain("Elegí una opción");
+    const markup = sendMessage?.payload?.reply_markup as { inline_keyboard: { text: string; callback_data: string }[][] };
+    expect(markup?.inline_keyboard).toEqual([[{ text: "Nuevo", callback_data: "m:new" }]]);
+    expect(recorded.some((call) => call.method === "answerCallbackQuery")).toBe(true);
+  });
+
+  it("falls back to a new message when editMessageText fails (spec: Edit failure falls back to a new message)", async () => {
+    const recorded: RecordedApiCall[] = [];
+    const service = {
+      handleUpdate: async () => undefined,
+      handleCallback: async (
+        _update: unknown,
+        reply: (text: string, keyboard?: { text: string; callback_data: string }[][], editMessageId?: number) => Promise<void>,
+      ) => {
+        await reply("Preview actualizado", [[{ text: "Guardar", callback_data: "pv:save:abc" }]], 77);
+        return true;
+      },
+    } as unknown as TelegramService;
+    const bot = buildOfflineBot(service, recorded);
+    // Make editMessageText fail (original message deleted) and record the rest.
+    bot.api.config.use(async (_prev, method, payload) => {
+      if (method === "editMessageText") {
+        throw new Error("message to edit not found");
+      }
+      recorded.push({ method, payload });
+      return { ok: true, result: { message_id: 1, date: 0, chat: { id: OWNER_CHAT_ID, type: "private", first_name: "Rita" }, text: "" } } as never;
+    });
+
+    await expect(bot.handleUpdate(callbackUpdate())).resolves.toBeUndefined();
+
+    // The fallback sends a NEW message with the same text and keyboard.
+    const sendMessage = recorded.find((call) => call.method === "sendMessage");
+    expect(sendMessage).toBeDefined();
+    expect(String(sendMessage?.payload?.text)).toContain("Preview actualizado");
+    const markup = sendMessage?.payload?.reply_markup as { inline_keyboard: unknown };
+    expect(markup?.inline_keyboard).toBeDefined();
+    expect(recorded.some((call) => call.method === "editMessageText")).toBe(false);
+  });
+});
+
+describe("startTelegramBot (D12)", () => {
+  it("calls setMyCommands with the command list before starting the polling loop", async () => {
+    const recorded: RecordedApiCall[] = [];
+    const service = {
+      handleUpdate: async () => undefined,
+      handleCallback: async () => false,
+    } as unknown as TelegramService;
+    const bot = buildOfflineBot(service, recorded);
+    const setMyCommandsSpy = vi.spyOn(bot.api, "setMyCommands").mockResolvedValue(true as never);
+    const startSpy = vi.spyOn(bot, "start").mockResolvedValue(undefined as never);
+
+    await startTelegramBot(bot);
+
+    expect(setMyCommandsSpy).toHaveBeenCalledWith(
+      expect.arrayContaining([
+        expect.objectContaining({ command: "menu" }),
+        expect.objectContaining({ command: "ayuda" }),
+      ]),
+    );
+    expect(startSpy).toHaveBeenCalled();
+  });
+
+  it("logs a setMyCommands failure and still starts the polling loop (spec: Registration failure tolerated)", async () => {
+    const recorded: RecordedApiCall[] = [];
+    const service = {
+      handleUpdate: async () => undefined,
+      handleCallback: async () => false,
+    } as unknown as TelegramService;
+    const bot = buildOfflineBot(service, recorded);
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.spyOn(bot.api, "setMyCommands").mockRejectedValue(new Error("Unauthorized: token invalid"));
+    const startSpy = vi.spyOn(bot, "start").mockResolvedValue(undefined as never);
+
+    await startTelegramBot(bot);
+
+    expect(errorSpy).toHaveBeenCalled();
+    expect(startSpy).toHaveBeenCalled();
     errorSpy.mockRestore();
   });
 });

@@ -8,16 +8,25 @@ import type { SavingsRuleService } from "../savings/savings.service";
 import type { HouseholdService } from "../household/household.service";
 import type { BotStateRepository, BotStateRecord } from "./bot-state.repository";
 import type { ConversationEnvelope, ExecutionResult } from "./bot-brain";
+import type { InlineKeyboard } from "./telegram.parser";
 import { ConflictError, NotFoundError, ValidationFailedError } from "../../infra/errors";
 import { ReservedCategoryError } from "../categories/reserved";
 import {
+  alreadyProcessedReply,
   askAmountReply,
   askCategoryReply,
   associateKeywordRedirectReply,
+  callbackUnavailableReply,
+  capturePromptReply,
+  categoryButtonsReply,
   collectAbandonedReply,
   correctionAbandonedReply,
+  correctionDoneReply,
   deletedMovementReply,
   deleteAskReply,
+  deleteCancelledReply,
+  deleteConfirmReply,
+  dialogClosedReply,
   formatARS,
   greetingReply,
   helpReply,
@@ -25,11 +34,15 @@ import {
   markPaidAlreadyReply,
   markPaidAskReply,
   markPaidReply,
+  menuReply,
+  ayudaReply,
   movementMissingReply,
   movementSelectionAbandonedReply,
   nothingPendingReply,
   nothingToDeleteReply,
   offTopicRedirectReply,
+  otroKeptReply,
+  pendingCapturePromptReply,
   plannedSharedRejectedReply,
   queryRedirectReply,
   questionDroppedReply,
@@ -38,7 +51,9 @@ import {
 } from "./reply-text";
 import {
   amountConfirmationPayloadSchema,
+  deleteConfirmPayloadSchema,
   lifecycleSelectionPayloadSchema,
+  quickCapturePreviewPayloadSchema,
   registrationCollectPayloadSchema,
   TelegramService,
 } from "./telegram.service";
@@ -68,6 +83,25 @@ function textUpdate(overrides?: { fromId?: number; chatId?: number; messageId?: 
   };
 }
 
+function callbackUpdate(overrides?: { fromId?: number; chatId?: number; messageId?: number; data?: string }): unknown {
+  const fromId = overrides?.fromId ?? OWNER_CHAT_ID;
+  return {
+    update_id: 9000,
+    callback_query: {
+      id: "cb_1",
+      chat_instance: "987654321",
+      from: { id: fromId, is_bot: false, first_name: "Rita" },
+      message: {
+        message_id: overrides?.messageId ?? 77,
+        chat: { id: overrides?.chatId ?? fromId, type: "private", first_name: "Rita" },
+        date: 1712803046,
+        text: "preview",
+      },
+      data: overrides?.data ?? "m:new",
+    },
+  };
+}
+
 type Harness = {
   service: TelegramService;
   messageRepository: ProcessedMessageRepository;
@@ -83,6 +117,7 @@ type Harness = {
   mockDeleteExpense: ReturnType<typeof vi.fn>;
   mockGetSummary: ReturnType<typeof vi.fn>;
   mockListCategories: ReturnType<typeof vi.fn>;
+  mockListKeywordRules: ReturnType<typeof vi.fn>;
   mockMatchNote: ReturnType<typeof vi.fn>;
   mockCreateCategory: ReturnType<typeof vi.fn>;
   mockDeleteCategory: ReturnType<typeof vi.fn>;
@@ -96,13 +131,19 @@ type Harness = {
   mockBrainReply: ReturnType<typeof vi.fn>;
   mockLogger: ReturnType<typeof vi.fn>;
   replies: string[];
-  reply: (text: string) => Promise<void>;
+  keyboards: (InlineKeyboard | undefined)[];
+  edits: (number | undefined)[];
+  reply: (text: string, keyboard?: InlineKeyboard, editMessageId?: number) => Promise<void>;
 };
 
 function makeHarness(options?: { noBrain?: boolean }): Harness {
   const replies: string[] = [];
-  const reply = async (text: string): Promise<void> => {
+  const keyboards: (InlineKeyboard | undefined)[] = [];
+  const edits: (number | undefined)[] = [];
+  const reply = async (text: string, keyboard?: InlineKeyboard, editMessageId?: number): Promise<void> => {
     replies.push(text);
+    keyboards.push(keyboard);
+    edits.push(editMessageId);
   };
 
   let storedState: BotStateRecord | null = null;
@@ -152,6 +193,7 @@ function makeHarness(options?: { noBrain?: boolean }): Harness {
   } as unknown as MovementService;
   const categoryService = {
     listCategories: vi.fn(async () => []),
+    listKeywordRules: vi.fn(async () => []),
     matchNote: vi.fn(async () => null),
     createCategory: vi.fn(async (owner: string, name: string) => ({
       id: `cat-${name}`,
@@ -236,6 +278,7 @@ function makeHarness(options?: { noBrain?: boolean }): Harness {
     mockDeleteExpense: vi.mocked(expenseService.deleteExpense),
     mockGetSummary: vi.mocked(movementService.getSummary),
     mockListCategories: vi.mocked(categoryService.listCategories),
+    mockListKeywordRules: vi.mocked(categoryService.listKeywordRules),
     mockMatchNote: vi.mocked(categoryService.matchNote),
     mockCreateCategory: vi.mocked(categoryService.createCategory),
     mockDeleteCategory: vi.mocked(categoryService.deleteCategory),
@@ -249,6 +292,8 @@ function makeHarness(options?: { noBrain?: boolean }): Harness {
     mockBrainReply: vi.mocked(brain.reply),
     mockLogger,
     replies,
+    keyboards,
+    edits,
     reply,
   };
 }
@@ -351,11 +396,707 @@ describe("registrationCollectPayloadSchema", () => {
   });
 });
 
+describe("quickCapturePreviewPayloadSchema (D4 preview state)", () => {
+  it("parses a full preview payload with type, saveToken, shared and override", () => {
+    const result = quickCapturePreviewPayloadSchema.safeParse({
+      body: "30000 gym",
+      amount: 30000,
+      note: "gym",
+      category: "Gimnasio",
+      type: "PENDING",
+      saveToken: "a1b2c3d4",
+      shared: true,
+      override: { kind: "percent", percent: 10 },
+    });
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.body).toBe("30000 gym");
+      expect(result.data.amount).toBe(30000);
+      expect(result.data.note).toBe("gym");
+      expect(result.data.category).toBe("Gimnasio");
+      expect(result.data.type).toBe("PENDING");
+      expect(result.data.saveToken).toBe("a1b2c3d4");
+      expect(result.data.shared).toBe(true);
+      expect(result.data.override).toEqual({ kind: "percent", percent: 10 });
+    }
+  });
+
+  it("defaults type REAL, shared false and override none when omitted", () => {
+    const result = quickCapturePreviewPayloadSchema.safeParse({
+      body: "30000 gym",
+      amount: 30000,
+      note: "gym",
+      category: "Gimnasio",
+      saveToken: "a1b2c3d4",
+    });
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.type).toBe("REAL");
+      expect(result.data.shared).toBe(false);
+      expect(result.data.override).toEqual({ kind: "none" });
+    }
+  });
+
+  it("rejects a non-8-hex saveToken", () => {
+    expect(
+      quickCapturePreviewPayloadSchema.safeParse({
+        body: "30000 gym",
+        amount: 30000,
+        note: "gym",
+        category: "Gimnasio",
+        saveToken: "not-hex",
+      }).success,
+    ).toBe(false);
+  });
+
+  it("rejects an unknown type value", () => {
+    expect(
+      quickCapturePreviewPayloadSchema.safeParse({
+        body: "30000 gym",
+        amount: 30000,
+        note: "gym",
+        category: "Gimnasio",
+        type: "SHARED",
+        saveToken: "a1b2c3d4",
+      }).success,
+    ).toBe(false);
+  });
+
+  it("rejects a non-positive amount", () => {
+    expect(
+      quickCapturePreviewPayloadSchema.safeParse({
+        body: "30000 gym",
+        amount: -1,
+        note: "gym",
+        category: "Gimnasio",
+        saveToken: "a1b2c3d4",
+      }).success,
+    ).toBe(false);
+  });
+});
+
+describe("deleteConfirmPayloadSchema (D6 delete gate)", () => {
+  it("parses a delete-confirm payload carrying the persisted target", () => {
+    const result = deleteConfirmPayloadSchema.safeParse({
+      target: {
+        id: "cuid-123",
+        amount: 2500,
+        note: "alquiler",
+        date: "2026-09-19",
+        category: "Alquiler",
+        occurredAtMs: 1726747200000,
+      },
+    });
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.target.id).toBe("cuid-123");
+      expect(result.data.target.amount).toBe(2500);
+      expect(result.data.target.note).toBe("alquiler");
+      expect(result.data.target.date).toBe("2026-09-19");
+      expect(result.data.target.category).toBe("Alquiler");
+      expect(result.data.target.occurredAtMs).toBe(1726747200000);
+    }
+  });
+
+  it("rejects a payload without a target id", () => {
+    expect(
+      deleteConfirmPayloadSchema.safeParse({
+        target: { amount: 2500, note: null, date: "2026-09-19", category: "", occurredAtMs: 1 },
+      }).success,
+    ).toBe(false);
+  });
+});
+
+describe("TelegramService.handleCallback (D4 callback channel)", () => {
+  let h: Harness;
+
+  beforeEach(() => {
+    h = makeHarness();
+  });
+
+  function callbackUpdate(overrides?: { fromId?: number; chatId?: number; messageId?: number; data?: unknown }): unknown {
+    const fromId = overrides?.fromId ?? OWNER_CHAT_ID;
+    return {
+      update_id: 9000,
+      callback_query: {
+        id: "cb_1",
+        from: { id: fromId, is_bot: false, first_name: "Rita" },
+        message: {
+          message_id: overrides?.messageId ?? 77,
+          chat: { id: overrides?.chatId ?? fromId, type: "private", first_name: "Rita" },
+          date: 1712803046,
+          text: "preview",
+        },
+        data: overrides?.data ?? "m:new",
+      },
+    };
+  }
+
+  it("replies honestly to an unknown action prefix and changes no state (spec: Unknown action replied honestly)", async () => {
+    const before = h.mockSetState.mock.calls.length;
+
+    const processed = await h.service.handleCallback(callbackUpdate({ data: "zz:1" }), h.reply);
+
+    expect(processed).toBe(true);
+    expect(h.replies.at(-1)).toBe(callbackUnavailableReply());
+    expect(h.mockSetState.mock.calls.length).toBe(before);
+  });
+
+  it("ignores a callback from an unknown chat: nothing executes, no reply (spec: Unknown chat ignored)", async () => {
+    const before = h.mockSetState.mock.calls.length;
+
+    const processed = await h.service.handleCallback(callbackUpdate({ fromId: 999999999, chatId: 999999999 }), h.reply);
+
+    expect(processed).toBe(false);
+    expect(h.replies).toHaveLength(0);
+    expect(h.mockSetState.mock.calls.length).toBe(before);
+  });
+
+  it("returns false for a non-callback update", async () => {
+    expect(await h.service.handleCallback(textUpdate(), h.reply)).toBe(false);
+    expect(h.replies).toHaveLength(0);
+  });
+
+  it("returns false for a callback with a non-string data", async () => {
+    expect(await h.service.handleCallback(callbackUpdate({ data: 42 }), h.reply)).toBe(false);
+    expect(h.replies).toHaveLength(0);
+  });
+});
+
+describe("TelegramService quick-capture preview (awaiting_preview, D4)", () => {
+  let h: Harness;
+
+  beforeEach(() => {
+    h = makeHarness();
+    seedHarnessCategories(h, ["Gimnasio", "otro"]);
+    h.mockListKeywordRules.mockResolvedValue([
+      { keyword: "gym", category: "Gimnasio", createdAt: new Date("2026-09-01T10:00:00Z") },
+    ]);
+  });
+
+  it("parses '30000 gym' into a preview and NEVER invokes the brain (spec: Captured message skips the LLM)", async () => {
+    await h.service.handleUpdate(textUpdate({ text: "30000 gym", messageId: 1 }), h.reply);
+
+    expect(h.mockBrainInterpret).not.toHaveBeenCalled();
+    expect(h.replies.at(-1)).toContain(formatARS(30000));
+    expect(h.replies.at(-1)).toContain("gym");
+    expect(h.replies.at(-1)).toContain("Gimnasio");
+    const lastCall = h.mockSetState.mock.calls.at(-1)?.[0] as BotStateRecord;
+    expect(lastCall.state).toBe("awaiting_preview");
+    const payload = quickCapturePreviewPayloadSchema.parse(JSON.parse(lastCall.pendingNote ?? "{}"));
+    expect(payload.amount).toBe(30000);
+    expect(payload.note).toBe("gym");
+    expect(payload.category).toBe("Gimnasio");
+    expect(payload.type).toBe("REAL");
+    expect(payload.saveToken).toMatch(/^[0-9a-f]{8}$/);
+    // The preview carries the Guardar/Corregir + type rows as an inline keyboard.
+    expect(h.keyboards.at(-1)).toBeDefined();
+    const kb = h.keyboards.at(-1) as InlineKeyboard;
+    expect(kb[0]?.[0]?.text).toBe("✅ Guardar");
+    expect(kb[0]?.[1]?.text).toBe("✏️ Corregir");
+  });
+
+  it("seeds type PENDING from the previsto: prefix (sanctioned producer)", async () => {
+    await h.service.handleUpdate(textUpdate({ text: "previsto: 30000 gym", messageId: 1 }), h.reply);
+
+    expect(h.mockBrainInterpret).not.toHaveBeenCalled();
+    const lastCall = h.mockSetState.mock.calls.at(-1)?.[0] as BotStateRecord;
+    const payload = quickCapturePreviewPayloadSchema.parse(JSON.parse(lastCall.pendingNote ?? "{}"));
+    expect(payload.type).toBe("PENDING");
+    expect(h.replies.at(-1)).toContain("previsto");
+  });
+
+  it("falls through to the brain on a parser miss (spec: Miss falls back to the brain)", async () => {
+    h.mockBrainInterpret.mockResolvedValue({ intent: "register_expense", amount: 30000, category: "otro", note: "alquiler" });
+    h.mockBrainReply.mockResolvedValue(null);
+
+    await h.service.handleUpdate(textUpdate({ text: "30000 alquiler", messageId: 1 }), h.reply);
+
+    expect(h.mockBrainInterpret).toHaveBeenCalledTimes(1);
+    expect(h.mockSetState).not.toHaveBeenCalledWith(expect.objectContaining({ state: "awaiting_preview" }));
+  });
+
+  it("toggles the type to PENDING via the Previsto button and edits the preview message", async () => {
+    await h.service.handleUpdate(textUpdate({ text: "30000 gym", messageId: 1 }), h.reply);
+    const stored = h.mockSetState.mock.calls.at(-1)?.[0] as BotStateRecord;
+    const token = quickCapturePreviewPayloadSchema.parse(JSON.parse(stored.pendingNote ?? "{}")).saveToken;
+
+    const processed = await h.service.handleCallback(
+      callbackUpdate({ messageId: 77, data: `pv:typ:p:${token}` }),
+      h.reply,
+    );
+
+    expect(processed).toBe(true);
+    const lastCall = h.mockSetState.mock.calls.at(-1)?.[0] as BotStateRecord;
+    const payload = quickCapturePreviewPayloadSchema.parse(JSON.parse(lastCall.pendingNote ?? "{}"));
+    expect(payload.type).toBe("PENDING");
+    // The re-render EDITS the preview's own message with the same keyboard.
+    expect(h.edits.at(-1)).toBe(77);
+    expect(h.keyboards.at(-1)).toBeDefined();
+  });
+
+  it("saves via Guardar: registers a REAL expense once and returns to idle", async () => {
+    await h.service.handleUpdate(textUpdate({ text: "30000 gym", messageId: 1 }), h.reply);
+    const stored = h.mockSetState.mock.calls.at(-1)?.[0] as BotStateRecord;
+    const token = quickCapturePreviewPayloadSchema.parse(JSON.parse(stored.pendingNote ?? "{}")).saveToken;
+
+    await h.service.handleCallback(callbackUpdate({ data: `pv:save:${token}` }), h.reply);
+
+    expect(h.mockCreateExpense).toHaveBeenCalledTimes(1);
+    expect(h.mockCreateExpense).toHaveBeenCalledWith(
+      expect.objectContaining({ amount: 30000, note: "gym", category: "Gimnasio", type: "EXPENSE" }),
+      ownerId,
+      { visibility: "INDIVIDUAL" },
+    );
+    expect(h.mockSetState).toHaveBeenLastCalledWith({ ownerId, state: "idle", pendingMovementId: null, pendingNote: null });
+    expect(h.replies.at(-1)).toContain("Registrado");
+  });
+
+  it("a retried Guardar replies 'ya procesado' and registers exactly once (spec: Repeated Guardar registers once)", async () => {
+    await h.service.handleUpdate(textUpdate({ text: "30000 gym", messageId: 1 }), h.reply);
+    const stored = h.mockSetState.mock.calls.at(-1)?.[0] as BotStateRecord;
+    const token = quickCapturePreviewPayloadSchema.parse(JSON.parse(stored.pendingNote ?? "{}")).saveToken;
+
+    await h.service.handleCallback(callbackUpdate({ data: `pv:save:${token}` }), h.reply);
+    h.mockCreateExpense.mockClear();
+    const processed = await h.service.handleCallback(callbackUpdate({ data: `pv:save:${token}` }), h.reply);
+
+    expect(processed).toBe(true);
+    expect(h.mockCreateExpense).not.toHaveBeenCalled();
+    expect(h.replies.at(-1)).toBe(alreadyProcessedReply());
+  });
+
+  it("saves with Previsto chosen registers a PENDING EXPENSE, never SHARED (spec: Save with Previsto registers PENDING)", async () => {
+    await h.service.handleUpdate(textUpdate({ text: "30000 gym", messageId: 1 }), h.reply);
+    const stored = h.mockSetState.mock.calls.at(-1)?.[0] as BotStateRecord;
+    const payload = quickCapturePreviewPayloadSchema.parse(JSON.parse(stored.pendingNote ?? "{}"));
+    await h.service.handleCallback(callbackUpdate({ data: `pv:typ:p:${payload.saveToken}` }), h.reply);
+    const afterToggle = h.mockSetState.mock.calls.at(-1)?.[0] as BotStateRecord;
+    const toggled = quickCapturePreviewPayloadSchema.parse(JSON.parse(afterToggle.pendingNote ?? "{}"));
+
+    await h.service.handleCallback(callbackUpdate({ data: `pv:save:${toggled.saveToken}` }), h.reply);
+
+    expect(h.mockCreateExpense).toHaveBeenCalledWith(
+      expect.objectContaining({ amount: 30000, type: "EXPENSE", status: "PENDING" }),
+      ownerId,
+      { visibility: "INDIVIDUAL" },
+    );
+    expect(h.replies.at(-1)).toContain("previsto");
+  });
+
+  it("Corregir abandons the preview, returns to idle and prompts a new capture (spec: Corregir reopens capture)", async () => {
+    await h.service.handleUpdate(textUpdate({ text: "30000 gym", messageId: 1 }), h.reply);
+    const stored = h.mockSetState.mock.calls.at(-1)?.[0] as BotStateRecord;
+    const token = quickCapturePreviewPayloadSchema.parse(JSON.parse(stored.pendingNote ?? "{}")).saveToken;
+
+    await h.service.handleCallback(callbackUpdate({ data: `pv:edit:${token}` }), h.reply);
+
+    expect(h.mockCreateExpense).not.toHaveBeenCalled();
+    expect(h.mockSetState).toHaveBeenLastCalledWith({ ownerId, state: "idle", pendingMovementId: null, pendingNote: null });
+    expect(h.replies.at(-1)).toBe(capturePromptReply());
+  });
+
+  it("recovers from a corrupt preview payload to idle without registering (spec: Corrupt preview payload recovers)", async () => {
+    await h.botStateRepository.set({
+      ownerId,
+      state: "awaiting_preview",
+      pendingMovementId: null,
+      pendingNote: "{not-json",
+    });
+
+    await h.service.handleUpdate(textUpdate({ text: "hola", messageId: 2 }), h.reply);
+
+    expect(h.mockCreateExpense).not.toHaveBeenCalled();
+    expect(h.mockSetState).toHaveBeenLastCalledWith({ ownerId, state: "idle", pendingMovementId: null, pendingNote: null });
+  });
+
+  it("a new text message during awaiting_preview abandons the preview and reprocesses normally (D11)", async () => {
+    await h.service.handleUpdate(textUpdate({ text: "30000 gym", messageId: 1 }), h.reply);
+    h.mockListKeywordRules.mockResolvedValue([]);
+    h.mockBrainInterpret.mockResolvedValue(null);
+    h.mockCreateExpense.mockClear();
+
+    await h.service.handleUpdate(textUpdate({ text: "5000 cafe", messageId: 2 }), h.reply);
+
+    // The preview is abandoned: the new text is reprocessed and registers as a
+    // fresh movement (otro + correction), never from the preview facts.
+    expect(h.mockCreateExpense).toHaveBeenCalledTimes(1);
+    expect(h.mockCreateExpense).toHaveBeenCalledWith(
+      expect.objectContaining({ amount: 5000, note: "cafe" }),
+      ownerId,
+      expect.anything(),
+    );
+    const lastState = h.mockSetState.mock.calls.at(-1)?.[0] as BotStateRecord;
+    expect(lastState.state).not.toBe("awaiting_preview");
+  });
+});
+
+describe("TelegramService delete confirmation gate (awaiting_delete_confirmation, D6)", () => {
+  let h: Harness;
+
+  beforeEach(() => {
+    h = makeHarness();
+    seedHarnessCategories(h, ["otro"]);
+  });
+
+  async function seedDeleteGate(target: { id: string; amount: number; note: string | null; date: string; category: string; occurredAtMs: number }): Promise<void> {
+    await h.botStateRepository.set({
+      ownerId,
+      state: "awaiting_delete_confirmation",
+      pendingMovementId: null,
+      pendingNote: JSON.stringify({ target }),
+    });
+  }
+
+  it("dc:ok deletes the persisted target via deleteExpense and returns to idle (spec: Confirmation deletes)", async () => {
+    await seedDeleteGate({ id: "m1", amount: 2500, note: "alquiler", date: "2026-09-19", category: "Alquiler", occurredAtMs: 1726747200000 });
+
+    const processed = await h.service.handleCallback(callbackUpdate({ data: "dc:ok:m1" }), h.reply);
+
+    expect(processed).toBe(true);
+    expect(h.mockDeleteExpense).toHaveBeenCalledWith("m1", ownerId);
+    expect(h.replies.at(-1)).toBe(deletedMovementReply(2500, "alquiler", "Alquiler"));
+    expect(h.mockSetState).toHaveBeenLastCalledWith({ ownerId, state: "idle", pendingMovementId: null, pendingNote: null });
+  });
+
+  it("a retried dc:ok after consumption replies 'ya procesado' and deletes once (spec: Retried delete confirms once)", async () => {
+    await seedDeleteGate({ id: "m1", amount: 2500, note: "alquiler", date: "2026-09-19", category: "Alquiler", occurredAtMs: 1726747200000 });
+
+    await h.service.handleCallback(callbackUpdate({ data: "dc:ok:m1" }), h.reply);
+    h.mockDeleteExpense.mockClear();
+    const processed = await h.service.handleCallback(callbackUpdate({ data: "dc:ok:m1" }), h.reply);
+
+    expect(processed).toBe(true);
+    expect(h.mockDeleteExpense).not.toHaveBeenCalled();
+    expect(h.replies.at(-1)).toBe(alreadyProcessedReply());
+  });
+
+  it("dc:no cancels: nothing is deleted and the owner returns to idle (spec: Cancel keeps the movement)", async () => {
+    await seedDeleteGate({ id: "m1", amount: 2500, note: "alquiler", date: "2026-09-19", category: "Alquiler", occurredAtMs: 1726747200000 });
+
+    const processed = await h.service.handleCallback(callbackUpdate({ data: "dc:no:m1" }), h.reply);
+
+    expect(processed).toBe(true);
+    expect(h.mockDeleteExpense).not.toHaveBeenCalled();
+    expect(h.replies.at(-1)).toBe(deleteCancelledReply());
+    expect(h.mockSetState).toHaveBeenLastCalledWith({ ownerId, state: "idle", pendingMovementId: null, pendingNote: null });
+  });
+
+  it("dc:ok on a target deleted elsewhere replies movement missing (spec: Deleted target replies missing)", async () => {
+    await seedDeleteGate({ id: "m1", amount: 2500, note: "alquiler", date: "2026-09-19", category: "Alquiler", occurredAtMs: 1726747200000 });
+    h.mockDeleteExpense.mockRejectedValue(new NotFoundError("Expense m1 not found"));
+
+    await h.service.handleCallback(callbackUpdate({ data: "dc:ok:m1" }), h.reply);
+
+    expect(h.replies.at(-1)).toBe(movementMissingReply());
+    expect(h.mockSetState).toHaveBeenLastCalledWith({ ownerId, state: "idle", pendingMovementId: null, pendingNote: null });
+  });
+
+  it("a gate callback with a corrupt payload recovers to idle without deleting (spec: retried or corrupt gate payload recovers)", async () => {
+    await h.botStateRepository.set({
+      ownerId,
+      state: "awaiting_delete_confirmation",
+      pendingMovementId: null,
+      pendingNote: "{broken",
+    });
+
+    const processed = await h.service.handleCallback(callbackUpdate({ data: "dc:ok:m1" }), h.reply);
+
+    expect(processed).toBe(true);
+    expect(h.mockDeleteExpense).not.toHaveBeenCalled();
+    expect(h.mockSetState).toHaveBeenLastCalledWith({ ownerId, state: "idle", pendingMovementId: null, pendingNote: null });
+  });
+
+  it("a delete gate callback for a DIFFERENT target than persisted replies already-processed (target id gate)", async () => {
+    await seedDeleteGate({ id: "m1", amount: 2500, note: "alquiler", date: "2026-09-19", category: "Alquiler", occurredAtMs: 1726747200000 });
+
+    await h.service.handleCallback(callbackUpdate({ data: "dc:ok:m-other" }), h.reply);
+
+    expect(h.mockDeleteExpense).not.toHaveBeenCalled();
+    expect(h.replies.at(-1)).toBe(alreadyProcessedReply());
+  });
+});
+
+describe("TelegramService main menu (m:* callbacks, D8/D10)", () => {
+  let h: Harness;
+
+  beforeEach(() => {
+    h = makeHarness();
+    seedHarnessCategories(h, ["otro"]);
+  });
+
+  it("renders the menu command with exactly five buttons (spec: Menu shows five actions)", async () => {
+    await h.service.handleUpdate(textUpdate({ text: "/menu", messageId: 1 }), h.reply);
+
+    expect(h.replies.at(-1)).toBe(menuReply());
+    const kb = h.keyboards.at(-1) as InlineKeyboard;
+    expect(kb).toHaveLength(5);
+    expect(kb.map((row) => row[0]?.text)).toEqual([
+      "Nuevo gasto",
+      "Gasto previsto",
+      "Borrar",
+      "Reporte",
+      "Ayuda",
+    ]);
+    expect(kb.map((row) => row[0]?.callback_data)).toEqual(["m:new", "m:prev", "m:del", "m:rep", "m:help"]);
+    // Reopening the menu never changes state (spec: Menu reopens without side effects).
+    expect(h.mockSetState).not.toHaveBeenCalled();
+  });
+
+  it("m:new replies the capture prompt and stays idle (no state change)", async () => {
+    const processed = await h.service.handleCallback(callbackUpdate({ data: "m:new" }), h.reply);
+
+    expect(processed).toBe(true);
+    expect(h.replies.at(-1)).toBe(capturePromptReply());
+    expect(h.mockSetState).not.toHaveBeenCalled();
+  });
+
+  it("m:prev replies the educational pending-capture prompt and does NOT remember the intent (D8)", async () => {
+    const processed = await h.service.handleCallback(callbackUpdate({ data: "m:prev" }), h.reply);
+
+    expect(processed).toBe(true);
+    expect(h.replies.at(-1)).toBe(pendingCapturePromptReply());
+    expect(h.mockSetState).not.toHaveBeenCalled();
+  });
+
+  it("m:del lists the delete window as dk buttons and persists the selection payload (spec: Borrar starts the delete flow)", async () => {
+    h.mockListMovements.mockResolvedValue([
+      lifecycleMovement("m1", 2500, "alquiler", new Date("2026-09-19T12:00:00.000Z"), "Alquiler", "PAID"),
+      lifecycleMovement("m2", 900, "gimnasio", new Date("2026-09-17T12:00:00.000Z"), "Gimnasio", "PAID"),
+    ]);
+
+    await h.service.handleCallback(callbackUpdate({ data: "m:del" }), h.reply);
+
+    expect(h.replies.at(-1)).toContain("¿Cuál querés borrar?");
+    const kb = h.keyboards.at(-1) as InlineKeyboard;
+    const dkButtons = kb.flat().filter((button) => button.callback_data.startsWith("dk:"));
+    expect(dkButtons.map((button) => button.callback_data)).toEqual(["dk:m1", "dk:m2"]);
+    const lastCall = h.mockSetState.mock.calls.at(-1)?.[0] as BotStateRecord;
+    expect(lastCall.state).toBe("awaiting_movement_selection");
+    const payload = lifecycleSelectionPayloadSchema.parse(JSON.parse(lastCall.pendingNote ?? "{}"));
+    expect(payload.action).toBe("delete_expense");
+  });
+
+  it("m:rep answers from the real recent-movements query (spec: Reporte answers from real data)", async () => {
+    h.mockListMovements.mockResolvedValue([
+      lifecycleMovement("m1", 2500, "alquiler", new Date("2026-09-19T12:00:00.000Z"), "Alquiler", "PAID"),
+    ]);
+    h.mockBrainReply.mockResolvedValue(null);
+
+    await h.service.handleCallback(callbackUpdate({ data: "m:rep" }), h.reply);
+
+    expect(h.mockListMovements).toHaveBeenCalledWith(
+      { viewerId: ownerId, partnerId: null, visibility: "all" },
+      {},
+    );
+    expect(h.replies.at(-1)).toContain("alquiler");
+  });
+
+  it("m:help replies the static help with zero LLM calls (spec: Ayuda replies offline)", async () => {
+    const processed = await h.service.handleCallback(callbackUpdate({ data: "m:help" }), h.reply);
+
+    expect(processed).toBe(true);
+    expect(h.replies.at(-1)).toBe(ayudaReply());
+    expect(h.mockBrainReply).not.toHaveBeenCalled();
+  });
+
+  it("a dk pick opens the delete GATE with the picked target (D10)", async () => {
+    await h.botStateRepository.set({
+      ownerId,
+      state: "awaiting_movement_selection",
+      pendingMovementId: null,
+      pendingNote: JSON.stringify({
+        action: "delete_expense",
+        candidates: [
+          { id: "m1", amount: 2500, note: "alquiler", date: "2026-09-19" },
+          { id: "m2", amount: 900, note: "gimnasio", date: "2026-09-17" },
+        ],
+      }),
+    });
+
+    await h.service.handleCallback(callbackUpdate({ data: "dk:m1" }), h.reply);
+
+    expect(h.mockDeleteExpense).not.toHaveBeenCalled();
+    expect(h.replies.at(-1)).toBe(deleteConfirmReply(2500, "alquiler", null));
+    const lastCall = h.mockSetState.mock.calls.at(-1)?.[0] as BotStateRecord;
+    expect(lastCall.state).toBe("awaiting_delete_confirmation");
+  });
+});
+
+describe("TelegramService dialog category buttons (D9 closed set)", () => {
+  let h: Harness;
+
+  beforeEach(() => {
+    h = makeHarness();
+  });
+
+  async function seedAwaitingCategory(movementId: string, note: string | null): Promise<void> {
+    await h.botStateRepository.set({
+      ownerId,
+      state: "awaiting_category",
+      pendingMovementId: movementId,
+      pendingNote: note,
+    });
+  }
+
+  it("an unknown single-token answer renders the category buttons and NEVER auto-creates (spec: Unknown single-token answer shows buttons)", async () => {
+    await seedAwaitingCategory("mov-9", "uber viaje");
+    seedHarnessCategories(h, ["otro", "Transporte", "Cafe"]);
+    h.mockCreateCategory.mockClear();
+
+    await h.service.handleUpdate(textUpdate({ text: "Mascotas", messageId: 2 }), h.reply);
+
+    expect(h.mockCreateCategory).not.toHaveBeenCalled();
+    expect(h.replies.at(-1)).toBe(categoryButtonsReply());
+    const kb = h.keyboards.at(-1) as InlineKeyboard;
+    const catButtons = kb.flat().filter((button) => button.callback_data.startsWith("cat:"));
+    expect(catButtons.length).toBeGreaterThan(0);
+    // The buttons encode category IDs, never names (spec: Callback data encodes ids).
+    for (const button of catButtons) {
+      expect(button.callback_data).toMatch(/^cat:[a-zA-Z0-9-]+$/);
+      expect(button.callback_data.length).toBeLessThanOrEqual(64);
+    }
+    // The state stays open (spec: the state stays open).
+    const state = h.mockSetState.mock.calls.at(-1)?.[0] as BotStateRecord;
+    expect(state.state).toBe("awaiting_category");
+  });
+
+  it("a multi-word non-category answer lists the categories as buttons and stays open (spec: Multi-word non-category answer)", async () => {
+    await seedAwaitingCategory("mov-9", "uber viaje");
+    seedHarnessCategories(h, ["otro", "Transporte"]);
+
+    await h.service.handleUpdate(textUpdate({ text: "alguna otra cosa", messageId: 2 }), h.reply);
+
+    expect(h.mockCreateCategory).not.toHaveBeenCalled();
+    expect(h.replies.at(-1)).toBe(categoryButtonsReply());
+    const state = h.mockSetState.mock.calls.at(-1)?.[0] as BotStateRecord;
+    expect(state.state).toBe("awaiting_category");
+  });
+
+  it("an exact text answer still resolves and reassigns (no buttons)", async () => {
+    await seedAwaitingCategory("mov-9", "uber viaje");
+    seedHarnessCategories(h, ["otro", "Transporte"]);
+
+    await h.service.handleUpdate(textUpdate({ text: "Transporte", messageId: 2 }), h.reply);
+
+    expect(h.mockUpdateMovement).toHaveBeenCalledWith(ownerId, "mov-9", { category: "Transporte" });
+    expect(h.replies.at(-1)).toBe(correctionDoneReply("Transporte"));
+  });
+
+  it("a punctuated guard word still routes to the abandon handling and never auto-creates (spec: Punctuated guard never auto-creates)", async () => {
+    await seedAwaitingCategory("mov-9", "uber viaje");
+    seedHarnessCategories(h, ["otro", "Transporte"]);
+    h.mockCreateCategory.mockClear();
+
+    await h.service.handleUpdate(textUpdate({ text: "no.", messageId: 2 }), h.reply);
+
+    expect(h.mockCreateCategory).not.toHaveBeenCalled();
+    expect(h.replies.at(-1)).toBe(otroKeptReply());
+  });
+
+  it("a cat: callback applies the correction with the SAME tail as the text answer (D9)", async () => {
+    await seedAwaitingCategory("mov-9", "uber viaje");
+    seedHarnessCategories(h, ["otro", "Transporte", "Cafe"]);
+
+    const processed = await h.service.handleCallback(callbackUpdate({ data: "cat:c-Transporte" }), h.reply);
+
+    expect(processed).toBe(true);
+    expect(h.mockUpdateMovement).toHaveBeenCalledWith(ownerId, "mov-9", { category: "Transporte" });
+    expect(h.replies.at(-1)).toBe(correctionDoneReply("Transporte"));
+  });
+
+  it("a cat: callback for a deleted category replies honestly and re-renders the buttons (spec: Deleted target replies missing)", async () => {
+    await seedAwaitingCategory("mov-9", "uber viaje");
+    seedHarnessCategories(h, ["otro", "Transporte"]);
+
+    const processed = await h.service.handleCallback(callbackUpdate({ data: "cat:deleted-cat" }), h.reply);
+
+    expect(processed).toBe(true);
+    expect(h.mockUpdateMovement).not.toHaveBeenCalled();
+    expect(h.replies.at(-1)).toBe(categoryButtonsReply());
+    // The state stays open (honest re-render).
+    const state = h.mockSetState.mock.calls.at(-1)?.[0] as BotStateRecord;
+    expect(state.state).toBe("awaiting_category");
+  });
+
+  it("a cat: callback on a closed dialog replies dialog-closed (spec: cat: on a closed dialog → dialogClosedReply)", async () => {
+    seedHarnessCategories(h, ["otro", "Transporte"]);
+
+    const processed = await h.service.handleCallback(callbackUpdate({ data: "cat:c-Transporte" }), h.reply);
+
+    expect(processed).toBe(true);
+    expect(h.replies.at(-1)).toBe(dialogClosedReply());
+    expect(h.mockUpdateMovement).not.toHaveBeenCalled();
+  });
+});
+
+describe("TelegramService registration-collection category buttons (D9)", () => {
+  let h: Harness;
+
+  beforeEach(() => {
+    h = makeHarness();
+    seedHarnessCategories(h, ["otro", "Transporte", "Cafe"]);
+  });
+
+  async function seedCollect(payload: { amount: number | null; category: string | null; note: string | null }): Promise<void> {
+    await h.botStateRepository.set({
+      ownerId,
+      state: "awaiting_registration",
+      pendingMovementId: null,
+      pendingNote: JSON.stringify({
+        body: "gym",
+        note: payload.note,
+        amount: payload.amount,
+        category: payload.category,
+        shared: false,
+        planned: false,
+        override: { kind: "none" },
+      }),
+    });
+  }
+
+  it("a single-token non-match in the collect shows buttons and never auto-creates (spec: Single-token non-match shows buttons)", async () => {
+    await seedCollect({ amount: 5000, category: null, note: "gym" });
+    h.mockCreateCategory.mockClear();
+
+    await h.service.handleUpdate(textUpdate({ text: "Mascotas", messageId: 2 }), h.reply);
+
+    expect(h.mockCreateCategory).not.toHaveBeenCalled();
+    expect(h.replies.at(-1)).toBe(categoryButtonsReply());
+    const state = h.mockSetState.mock.calls.at(-1)?.[0] as BotStateRecord;
+    expect(state.state).toBe("awaiting_registration");
+  });
+
+  it("a cat: callback during the collect completes the registration with the picked category (shared tail)", async () => {
+    await seedCollect({ amount: 5000, category: null, note: "gym" });
+
+    await h.service.handleCallback(callbackUpdate({ data: "cat:c-Cafe" }), h.reply);
+
+    expect(h.mockCreateExpense).toHaveBeenCalledWith(
+      expect.objectContaining({ amount: 5000, note: "gym", category: "Cafe" }),
+      ownerId,
+      expect.anything(),
+    );
+  });
+});
+
 describe("TelegramService state machine", () => {
   let h: Harness;
 
   beforeEach(() => {
     h = makeHarness();
+  });
+
+  it("records the 3-arg reply stub into parallel arrays (D13 harness migration)", async () => {
+    const kb: InlineKeyboard = [[{ text: "A", callback_data: "m:new" }]];
+    await h.reply("texto", kb, 77);
+
+    expect(h.replies).toEqual(["texto"]);
+    expect(h.keyboards).toEqual([kb]);
+    expect(h.edits).toEqual([77]);
   });
 
   it("enters awaiting_setup for a valid registration when the owner has no categories, without persisting (D7)", async () => {
@@ -566,7 +1307,7 @@ describe("TelegramService state machine", () => {
     });
   });
 
-  it("auto-creates an unknown single-word answer category and applies it (D6 rule 3)", async () => {
+  it("an unknown single-word answer renders the category buttons and never auto-creates (D9)", async () => {
     h.mockListCategories.mockResolvedValue([
       { id: "c1", ownerId, name: "otro", createdAt: new Date(), keywords: [] },
     ]);
@@ -580,15 +1321,14 @@ describe("TelegramService state machine", () => {
     await h.service.handleUpdate(textUpdate({ text: "$8000 veterinaria", messageId: 9 }), h.reply);
     await h.service.handleUpdate(textUpdate({ text: "Mascotas", messageId: 10 }), h.reply);
 
-    expect(h.mockCreateCategory).toHaveBeenCalledWith(ownerId, "Mascotas");
-    expect(h.mockUpdateMovement).toHaveBeenCalledWith(ownerId, "mov-1", { category: "Mascotas" });
+    // The single-token auto-create is REMOVED (D9): no category is created,
+    // the closed-set buttons render and the correction stays open.
+    expect(h.mockCreateCategory).not.toHaveBeenCalled();
+    expect(h.mockUpdateMovement).not.toHaveBeenCalled();
     expect(h.mockAssociateKeyword).not.toHaveBeenCalled();
-    expect(h.mockSetState).toHaveBeenLastCalledWith({
-      ownerId,
-      state: "idle",
-      pendingMovementId: null,
-      pendingNote: null,
-    });
+    expect(h.replies.at(-1)).toBe(categoryButtonsReply());
+    const state = h.mockSetState.mock.calls.at(-1)?.[0] as BotStateRecord;
+    expect(state.state).toBe("awaiting_category");
   });
 
   it("resolves a correction after a restart by reading the persisted state (restart survival)", async () => {
@@ -874,7 +1614,7 @@ describe("TelegramService ambiguity rules (awaiting_category, D6)", () => {
     expect(state?.pendingMovementId).toBe("mov-1");
   });
 
-  it("a multi-word non-category answer lists the existing categories and keeps the state open", async () => {
+  it("a multi-word non-category answer presents the category buttons and keeps the state open (D9)", async () => {
     await h.service.handleUpdate(textUpdate({ text: "$1000 anterior", messageId: 1 }), h.reply);
     h.mockSetState.mockClear();
     h.mockCreateExpense.mockClear();
@@ -884,8 +1624,9 @@ describe("TelegramService ambiguity rules (awaiting_category, D6)", () => {
     expect(h.mockUpdateMovement).not.toHaveBeenCalled();
     expect(h.mockCreateExpense).not.toHaveBeenCalled();
     expect(h.mockSetState).not.toHaveBeenCalled();
-    expect(h.replies.at(-1)).toContain('No encontré la categoría');
-    expect(h.replies.at(-1)).toContain('"otro"');
+    expect(h.replies.at(-1)).toBe(categoryButtonsReply());
+    const kb = h.keyboards.at(-1) as InlineKeyboard;
+    expect(kb.flat().some((button) => button.callback_data.startsWith("cat:"))).toBe(true);
   });
 
   it("resolves a folded plural answer to the existing category without creating (cafes → Cafe)", async () => {
@@ -910,7 +1651,7 @@ describe("TelegramService ambiguity rules (awaiting_category, D6)", () => {
     expect(h.replies.at(-1)).toBe('Listo, el movimiento quedó en "Cafe".');
   });
 
-  it("rejects a reserved single-token answer with a redirect and keeps the correction open", async () => {
+  it("a reserved single-token answer renders the buttons and keeps the correction open (D9)", async () => {
     h.mockListCategories.mockResolvedValue([
       { id: "c1", ownerId, name: "otro", createdAt: new Date(), keywords: [] },
     ]);
@@ -923,11 +1664,12 @@ describe("TelegramService ambiguity rules (awaiting_category, D6)", () => {
 
     await h.service.handleUpdate(textUpdate({ text: "previsto", messageId: 2 }), h.reply);
 
-    expect(h.mockCreateCategory).toHaveBeenCalledWith(ownerId, "previsto");
+    // No creation attempt at all (the single-token path never reaches the
+    // guarded service): the closed-set buttons render and the correction stays open.
+    expect(h.mockCreateCategory).not.toHaveBeenCalled();
     expect(h.mockUpdateMovement).not.toHaveBeenCalled();
-    // The pending correction stays open: the state is untouched (movement in "otro").
     expect(h.mockSetState).not.toHaveBeenCalled();
-    expect(h.replies.at(-1)).toBe(reservedCategoryReply("previsto", "previsto"));
+    expect(h.replies.at(-1)).toBe(categoryButtonsReply());
   });
 
   it.each(["no.", "no,"])('keeps the movement as "otro" for the punctuated guard answer "%s" (no category created)', async (answer) => {
@@ -1035,16 +1777,15 @@ describe("TelegramService registration collection (awaiting_registration)", () =
     expect(h.replies.at(-1)).not.toContain("No entendí");
   });
 
-  it("T1: a planned amount-null registration persists the planned bit and asks the amount", async () => {
+  it("T1: the previsto: prefix persists the planned bit on an amount-null collect and asks the amount", async () => {
     h.mockBrainInterpret.mockResolvedValue({
       intent: "register_expense",
       amount: null,
       category: null,
       note: "gym",
-      planned: true,
     });
 
-    await h.service.handleUpdate(textUpdate({ text: "quiero cargar un gasto previsto", messageId: 1 }), h.reply);
+    await h.service.handleUpdate(textUpdate({ text: "previsto: gym", messageId: 1 }), h.reply);
 
     const lastCall = h.mockSetState.mock.calls.at(-1)?.[0] as BotStateRecord;
     const payload = registrationCollectPayloadSchema.parse(JSON.parse(lastCall.pendingNote ?? "{}"));
@@ -1276,7 +2017,7 @@ expect(h.mockCreateExpense).not.toHaveBeenCalled();
     );
   });
 
-  it("T5: a single-token non-match auto-creates the category through the guarded path and completes", async () => {
+  it("T5: a single-token non-match shows the buttons and never auto-creates (D9)", async () => {
     seedHarnessCategories(h, ["otro"]);
     await seedAwaitingRegistration({ amount: 5000, category: null });
     h.mockBrainInterpret.mockResolvedValue({
@@ -1289,15 +2030,14 @@ expect(h.mockCreateExpense).not.toHaveBeenCalled();
 
     await h.service.handleUpdate(textUpdate({ text: "Mascotas", messageId: 2 }), h.reply);
 
-    expect(h.mockCreateCategory).toHaveBeenCalledWith(ownerId, "Mascotas");
-    expect(h.mockCreateExpense).toHaveBeenCalledWith(
-      expect.objectContaining({ amount: 5000, category: "Mascotas" }),
-      ownerId,
-      { visibility: "INDIVIDUAL" },
-    );
+    // The single-token auto-create is REMOVED from the collect cascade: no
+    // category is created, the buttons render and the collect stays open.
+    expect(h.mockCreateCategory).not.toHaveBeenCalled();
+    expect(h.mockCreateExpense).not.toHaveBeenCalled();
+    expect(h.replies.at(-1)).toBe(categoryButtonsReply());
   });
 
-  it("T5: a reserved single-token answer redirects and keeps the dialog open", async () => {
+  it("T5: a reserved single-token answer shows the buttons and keeps the dialog open", async () => {
     seedHarnessCategories(h, ["otro"]);
     await seedAwaitingRegistration({ amount: 5000, category: null });
     h.mockCreateCategory.mockRejectedValue(
@@ -1315,11 +2055,12 @@ expect(h.mockCreateExpense).not.toHaveBeenCalled();
     await h.service.handleUpdate(textUpdate({ text: "previsto", messageId: 2 }), h.reply);
 
     expect(h.mockCreateExpense).not.toHaveBeenCalled();
+    expect(h.mockCreateCategory).not.toHaveBeenCalled();
     expect(h.mockSetState).not.toHaveBeenCalled();
-    expect(h.replies.at(-1)).toBe(reservedCategoryReply("previsto", "previsto"));
+    expect(h.replies.at(-1)).toBe(categoryButtonsReply());
   });
 
-  it("T5: a multi-word non-match lists the categories and stays open (never dead-ends)", async () => {
+  it("T5: a multi-word non-match shows the buttons and stays open (never dead-ends)", async () => {
     seedHarnessCategories(h, ["otro", "Cafe"]);
     await seedAwaitingRegistration({ amount: 5000, category: null });
     h.mockBrainInterpret.mockResolvedValue({
@@ -1333,11 +2074,10 @@ expect(h.mockCreateExpense).not.toHaveBeenCalled();
 
     await h.service.handleUpdate(textUpdate({ text: "no se que categoria", messageId: 2 }), h.reply);
 
-expect(h.mockCreateExpense).not.toHaveBeenCalled();
+    expect(h.mockCreateExpense).not.toHaveBeenCalled();
     expect(h.mockCreateCategory).not.toHaveBeenCalled();
     expect(h.mockSetState).not.toHaveBeenCalled();
-    expect(h.replies.at(-1)).toContain("No encontré la categoría");
-    expect(h.replies.at(-1)).toContain('"otro"');
+    expect(h.replies.at(-1)).toBe(categoryButtonsReply());
   });
 
   it("T6: an explicit abandon clears the collect payload and registers nothing", async () => {
@@ -1481,7 +2221,7 @@ expect(h.mockCreateExpense).not.toHaveBeenCalled();
   it("T11: the collect payload survives a restart and the dialog continues", async () => {
     // The process "restarts": a fresh service reads the persisted state.
     const restarted = makeHarness();
-    seedHarnessCategories(restarted, ["otro"]);
+    seedHarnessCategories(restarted, ["otro", "Gimnasio"]);
     // The payload survives in the store (Postgres in production; here we seed
     // the fresh harness's repository with the same row).
     const payload = registrationCollectPayloadSchema.parse({
@@ -1883,14 +2623,13 @@ describe("TelegramService brain orchestration (llm-conversational-bot)", () => {
     });
   });
 
-  it("materializes a brain planned:true flag as a PENDING EXPENSE without any prefix", async () => {
+  it("never materializes PENDING from the brain without the prefix (D7: brain never decides the type)", async () => {
     seedHarnessCategories(h, ["Vivienda", "otro"]);
     h.mockBrainInterpret.mockResolvedValue({
       intent: "register_expense",
       amount: 2500,
       category: "Vivienda",
       note: "alquiler",
-      planned: true,
     });
 
     await h.service.handleUpdate(
@@ -1898,12 +2637,19 @@ describe("TelegramService brain orchestration (llm-conversational-bot)", () => {
       h.reply,
     );
 
+    // A future-expense phrasing WITHOUT the previsto: prefix registers as a
+    // REAL expense — PENDING results only from the prefix or the Previsto
+    // button (spec telegram-bot "Brain never decides the planned type").
     expect(h.mockCreateExpense).toHaveBeenCalledWith(
-      expect.objectContaining({ amount: 2500, category: "Vivienda", type: "EXPENSE", status: "PENDING" }),
+      expect.objectContaining({ amount: 2500, category: "Vivienda", type: "EXPENSE" }),
       ownerId,
       { visibility: "INDIVIDUAL" },
     );
-    expect(h.replies.at(-1)).toContain("previsto");
+    expect(h.mockCreateExpense).not.toHaveBeenCalledWith(
+      expect.objectContaining({ status: "PENDING" }),
+      ownerId,
+      expect.anything(),
+    );
   });
 
   it("lets the previsto: prefix beat a brain planned:false flag", async () => {
@@ -3040,7 +3786,7 @@ describe("TelegramService dialog controller (brain-routed)", () => {
 
     expect(h.mockCreateExpense).not.toHaveBeenCalled();
     expect(h.mockSetState).not.toHaveBeenCalled();
-    expect(h.replies.at(-1)).toContain("No encontré la categoría");
+    expect(h.replies.at(-1)).toBe(categoryButtonsReply());
     const state = await h.botStateRepository.get(ownerId);
     expect(state?.state).toBe("awaiting_registration");
   });
@@ -3542,7 +4288,7 @@ describe("TelegramService dialog controller (brain-routed)", () => {
     );
     expect(h.mockUpdateMovement).not.toHaveBeenCalled();
     expect(h.mockSetState).not.toHaveBeenCalled();
-    expect(h.replies.at(-1)).toContain("No encontré la categoría");
+    expect(h.replies.at(-1)).toBe(categoryButtonsReply());
   });
 });
 
@@ -3726,7 +4472,7 @@ describe("TelegramService movement lifecycle (mark_paid / delete_expense)", () =
     );
   });
 
-  it("routes delete_expense with no cues to the most-recent movement through deleteExpense", async () => {
+  it("routes delete_expense with no cues to the most-recent movement and OPENS THE GATE without deleting (D6)", async () => {
     h.mockListMovements.mockResolvedValue([
       lifecycleMovement("m1", 900, "pan", new Date("2026-09-19T12:00:00.000Z"), "Panaderia", "PAID"),
       lifecycleMovement("m2", 2500, "alquiler", new Date("2026-09-10T12:00:00.000Z"), "Alquiler", "PAID"),
@@ -3736,8 +4482,19 @@ describe("TelegramService movement lifecycle (mark_paid / delete_expense)", () =
 
     await h.service.handleUpdate(textUpdate({ text: "borra ese gasto", messageId: 1 }), h.reply);
 
-    expect(h.mockDeleteExpense).toHaveBeenCalledWith("m1", ownerId);
-    expect(h.replies.at(-1)).toBe(deletedMovementReply(900, "pan", "Panaderia"));
+    // Nothing is deleted yet: the confirmation gate opens with the target
+    // persisted and the [❌ Cancelar] [🗑 Borrar] keyboard (spec
+    // bot-expense-lifecycle "Delete by recency asks for confirmation first").
+    expect(h.mockDeleteExpense).not.toHaveBeenCalled();
+    expect(h.replies.at(-1)).toBe(deleteConfirmReply(900, "pan", "Panaderia"));
+    const kb = h.keyboards.at(-1) as InlineKeyboard;
+    expect(kb[0]?.[0]?.text).toBe("❌ Cancelar");
+    expect(kb[0]?.[1]?.text).toBe("🗑 Borrar");
+    const lastCall = h.mockSetState.mock.calls.at(-1)?.[0] as BotStateRecord;
+    expect(lastCall.state).toBe("awaiting_delete_confirmation");
+    const payload = deleteConfirmPayloadSchema.parse(JSON.parse(lastCall.pendingNote ?? "{}"));
+    expect(payload.target.id).toBe("m1");
+    expect(payload.target.amount).toBe(900);
   });
 
   it("replies already_paid when markMovementPaid 409s, changing nothing", async () => {
@@ -3886,7 +4643,7 @@ describe("TelegramService movement lifecycle selection pick (awaiting_movement_s
     expect(h.replies[0]).toBe(markPaidReply(900, "gimnasio", null));
   });
 
-  it("picks a delete candidate by number and deletes it via deleteExpense, replying once", async () => {
+  it("picks a delete candidate by number and OPENS THE GATE with that target (D6/D10)", async () => {
     await seedLifecycleSelection("delete_expense", [
       { id: "m1", amount: 2500, note: "alquiler", date: "2026-09-19" },
       { id: "m2", amount: 900, note: "gimnasio", date: "2026-09-17" },
@@ -3894,15 +4651,14 @@ describe("TelegramService movement lifecycle selection pick (awaiting_movement_s
 
     await h.service.handleUpdate(textUpdate({ text: "1", messageId: 2 }), h.reply);
 
-    expect(h.mockDeleteExpense).toHaveBeenCalledWith("m1", ownerId);
+    // The pick transitions to the confirmation gate: nothing is deleted yet.
+    expect(h.mockDeleteExpense).not.toHaveBeenCalled();
     expect(h.replies).toHaveLength(1);
-    expect(h.replies[0]).toBe(deletedMovementReply(2500, "alquiler", null));
-    expect(h.mockSetState).toHaveBeenLastCalledWith({
-      ownerId,
-      state: "idle",
-      pendingMovementId: null,
-      pendingNote: null,
-    });
+    expect(h.replies[0]).toBe(deleteConfirmReply(2500, "alquiler", null));
+    const lastCall = h.mockSetState.mock.calls.at(-1)?.[0] as BotStateRecord;
+    expect(lastCall.state).toBe("awaiting_delete_confirmation");
+    const payload = deleteConfirmPayloadSchema.parse(JSON.parse(lastCall.pendingNote ?? "{}"));
+    expect(payload.target.id).toBe("m1");
   });
 
   it("maps a 409 from a lifecycle pick to the already-paid reply", async () => {
@@ -3917,12 +4673,12 @@ describe("TelegramService movement lifecycle selection pick (awaiting_movement_s
   });
 
   it("maps a 404 from a lifecycle pick to the missing-movement reply", async () => {
-    await seedLifecycleSelection("delete_expense", [{ id: "m1", amount: 2500, note: "alquiler", date: "2026-09-19" }]);
-    h.mockDeleteExpense.mockRejectedValue(new NotFoundError("Movement m1 not found"));
+    await seedLifecycleSelection("mark_paid", [{ id: "m1", amount: 2500, note: "alquiler", date: "2026-09-19" }]);
+    h.mockMarkMovementPaid.mockRejectedValue(new NotFoundError("Movement m1 not found"));
 
     await h.service.handleUpdate(textUpdate({ text: "1", messageId: 2 }), h.reply);
 
-    expect(h.mockDeleteExpense).toHaveBeenCalledWith("m1", ownerId);
+    expect(h.mockMarkMovementPaid).toHaveBeenCalledWith(ownerId, "m1");
     expect(h.replies).toHaveLength(1);
     expect(h.replies[0]).toBe(movementMissingReply());
   });
@@ -4278,7 +5034,7 @@ describe("TelegramService planned registration (previsto:)", () => {
     expect(h.replies.at(-1)).not.toBe(plannedSharedRejectedReply());
   });
 
-  it("forces INDIVIDUAL when the brain sets both shared and planned flags (safety net)", async () => {
+  it("forces INDIVIDUAL when a previsto: prefix leaks a shared signal (safety net)", async () => {
     seedHarnessCategories(h, ["Vivienda", "otro"]);
     h.mockBrainInterpret.mockResolvedValue({
       intent: "register_expense",
@@ -4286,11 +5042,10 @@ describe("TelegramService planned registration (previsto:)", () => {
       category: "Vivienda",
       note: "alquiler",
       shared: true,
-      planned: true,
     });
 
     await h.service.handleUpdate(
-      textUpdate({ text: "dejalo compartido para el mes que viene: 2500 alquiler", messageId: 1 }),
+      textUpdate({ text: "previsto: dejalo compartido 2500 alquiler", messageId: 1 }),
       h.reply,
     );
 

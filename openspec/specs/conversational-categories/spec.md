@@ -81,29 +81,6 @@ The system MUST reject creating or renaming a category whose folded name (`norma
 - WHEN the owner renames another category TO "cafes"
 - THEN the rename is rejected
 
-### Requirement: Gated Dialog Auto-Create
-
-The system MUST keep the single-token dialog auto-create convenience, routing it through the reserved and duplicate-variant guards. Before auto-create, the single token MUST be checked through `normalizeForMatchGuard`: a token that normalizes to a guard word ("no", "si", with or without punctuation) MUST route to the abandon/affirmation handling and MUST NOT create a category. A rejected auto-create MUST reply with the redirect, MUST NOT create a category, and MUST keep the pending correction open.
-(Previously: the single-token cascade did not strip punctuation, so "no." and "si." fell through the guard sets and auto-created phantom categories.)
-
-#### Scenario: Passing token auto-creates
-
-- GIVEN an owner in `awaiting_category` replies "Mascotas"
-- WHEN processed
-- THEN "Mascotas" is created and the pending movement is assigned to it
-
-#### Scenario: Reserved token rejected
-
-- GIVEN an owner in `awaiting_category` replies "previsto"
-- WHEN processed
-- THEN no category is created, a redirect replies, and the correction stays open
-
-#### Scenario: Punctuated guard word rejected
-
-- GIVEN an owner in `awaiting_category` replies "si."
-- WHEN processed
-- THEN no category is created and the reply routes to the affirmation handling
-
 ### Requirement: Suggester Ceiling
 
 The LLM MUST NOT create categories or planned status; it MAY only suggest them. Materialization MUST be deterministic and guarded.
@@ -135,3 +112,24 @@ The system MUST provide `normalizeForMatchGuard` — `normalizeForMatch` plus pu
 - GIVEN the punctuation-stripping normalization exists
 - WHEN `normalizeForMatch` is invoked
 - THEN its length-preserving contract is unchanged
+### Requirement: Dialog Category Answers (Closed Set)
+
+The system MUST resolve dialog category answers (`awaiting_category`, `awaiting_registration`) ONLY against the owner's closed category set: exact normalized match first, then folded-plural match. An answer that matches no category MUST NOT create one: the system MUST present the existing categories as inline buttons (with "otro" included) and MUST keep the state open. Guard-word replies ("no", "si", with or without punctuation, via `normalizeForMatchGuard`) MUST still route to the abandon/affirmation handling and MUST NOT create a category.
+
+#### Scenario: Exact answer resolves
+
+- GIVEN an owner in `awaiting_category` replies "Transporte" matching an existing category
+- WHEN it is processed
+- THEN the pending movement is reassigned and no category is created
+
+#### Scenario: Unknown answer shows buttons
+
+- GIVEN an owner in `awaiting_category` replies "Mascotas" matching no category
+- WHEN it is processed
+- THEN no category is created, the category buttons render, and the state stays open
+
+#### Scenario: Guard word never creates
+
+- GIVEN an owner in `awaiting_category` replies "si."
+- WHEN it is processed
+- THEN no category is created and the reply routes to the affirmation handling

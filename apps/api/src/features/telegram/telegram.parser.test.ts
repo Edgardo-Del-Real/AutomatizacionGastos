@@ -1,9 +1,13 @@
 import { describe, expect, it } from "vitest";
+import type { KeywordRule } from "../categories/matcher";
 import {
+  buildCallbackData,
+  normalizeTelegramCallback,
   normalizeTelegramMessage,
   parseArrivalPrefixes,
   parseSavingsOverride,
   parseSharedPrefix,
+  quickCaptureParse,
 } from "./telegram.parser";
 import type { TelegramMessage } from "./telegram.types";
 
@@ -267,5 +271,141 @@ describe("parseSavingsOverride", () => {
       override: { kind: "none" },
       text: "cobro sueldo de entrenuts 1000",
     });
+  });
+});
+
+describe("quickCaptureParse (D4 fast path)", () => {
+  const gymRule: KeywordRule = { keyword: "gym", category: "Gimnasio", createdAt: new Date("2026-09-01T10:00:00Z") };
+  const cafeRule: KeywordRule = { keyword: "cafe", category: "Cafe", createdAt: new Date("2026-09-01T10:00:01Z") };
+
+  it("parses amount plus a closed-set keyword into {amount, note, category}", () => {
+    expect(quickCaptureParse("30000 gym", [gymRule])).toEqual({
+      amount: 30000,
+      note: "gym",
+      category: "Gimnasio",
+    });
+  });
+
+  it("parses a keyword embedded in a longer note and keeps the note", () => {
+    expect(quickCaptureParse("1500 cafe con leche", [cafeRule])).toEqual({
+      amount: 1500,
+      note: "cafe con leche",
+      category: "Cafe",
+    });
+  });
+
+  it("matches the note against the keyword rules when no note was extracted", () => {
+    // "2500 gym" → note "gym"; the category resolution uses the note text.
+    expect(quickCaptureParse("2500 gym", [gymRule, cafeRule])).toEqual({
+      amount: 2500,
+      note: "gym",
+      category: "Gimnasio",
+    });
+  });
+
+  it("misses when there is no amount", () => {
+    expect(quickCaptureParse("gym", [gymRule])).toBeNull();
+  });
+
+  it("misses when no keyword in the closed set matches the note", () => {
+    expect(quickCaptureParse("30000 alquiler", [gymRule])).toBeNull();
+  });
+
+  it("misses on empty or whitespace text", () => {
+    expect(quickCaptureParse("", [gymRule])).toBeNull();
+    expect(quickCaptureParse("   ", [gymRule])).toBeNull();
+  });
+});
+
+describe("normalizeTelegramCallback (D4 callback channel)", () => {
+  function callbackUpdate(overrides?: {
+    fromId?: number;
+    chatId?: number;
+    chatType?: string;
+    messageId?: number;
+    data?: unknown;
+  }): unknown {
+    const fromId = overrides?.fromId ?? OWNER_ID;
+    return {
+      update_id: 9000,
+      callback_query: {
+        id: "cb_1",
+        from: { id: fromId, is_bot: false, first_name: "Rita" },
+        message: {
+          message_id: overrides?.messageId ?? 77,
+          chat: { id: overrides?.chatId ?? fromId, type: overrides?.chatType ?? "private", first_name: "Rita" },
+          date: 1712803046,
+          text: "preview",
+        },
+        data: overrides?.data ?? "m:new",
+      },
+    };
+  }
+
+  it("normalizes a private-chat callback with a string data payload", () => {
+    expect(normalizeTelegramCallback(callbackUpdate())).toEqual({
+      fromId: OWNER_ID,
+      chatId: String(OWNER_ID),
+      messageId: 77,
+      data: "m:new",
+    });
+  });
+
+  it("returns null for a message update (no callback_query)", () => {
+    expect(normalizeTelegramCallback(textUpdate())).toBeNull();
+  });
+
+  it("returns null for an edited_message update", () => {
+    expect(
+      normalizeTelegramCallback({
+        update_id: 2,
+        edited_message: { message_id: 42, from: { id: OWNER_ID }, chat: { id: OWNER_ID, type: "private" }, text: "x" },
+      }),
+    ).toBeNull();
+  });
+
+  it("returns null for a callback from a group chat", () => {
+    expect(normalizeTelegramCallback(callbackUpdate({ chatType: "group", chatId: -100123456789 }))).toBeNull();
+  });
+
+  it("returns null when the callback data is missing", () => {
+    const update = callbackUpdate() as { callback_query: Record<string, unknown> };
+    delete update.callback_query.data;
+    expect(normalizeTelegramCallback(update)).toBeNull();
+  });
+
+  it("returns null when the callback data is not a string", () => {
+    expect(normalizeTelegramCallback(callbackUpdate({ data: 42 }))).toBeNull();
+  });
+
+  it("returns null when the callback has no from", () => {
+    const update = callbackUpdate() as { callback_query: Record<string, unknown> };
+    delete update.callback_query.from;
+    expect(normalizeTelegramCallback(update)).toBeNull();
+  });
+
+  it("returns null for a non-object update", () => {
+    expect(normalizeTelegramCallback(null)).toBeNull();
+    expect(normalizeTelegramCallback("nope")).toBeNull();
+  });
+});
+
+describe("buildCallbackData (D4 byte budget)", () => {
+  it("joins the action parts with colons", () => {
+    expect(buildCallbackData(["pv", "save", "a1b2c3d4"])).toBe("pv:save:a1b2c3d4");
+  });
+
+  it("keeps a 64-byte ASCII payload under the Telegram limit", () => {
+    const data = buildCallbackData(["dc", "ok", "c".repeat(25)]); // 3 + 2 + 25 + 2 separators = 32
+    expect(data.length).toBeLessThanOrEqual(64);
+    expect(Buffer.byteLength(data, "utf8")).toBeLessThanOrEqual(64);
+  });
+
+  it("throws when the payload exceeds 64 bytes", () => {
+    expect(() => buildCallbackData(["cat", "c".repeat(70)])).toThrow(/64/);
+  });
+
+  it("throws on non-ASCII callback data", () => {
+    expect(() => buildCallbackData(["cat", "café"])).toThrow(/ASCII/);
   });
 });

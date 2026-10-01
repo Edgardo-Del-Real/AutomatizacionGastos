@@ -1,6 +1,31 @@
 import { describe, expect, it } from "vitest";
 import { parseCommand, parseSetupBatchCommand } from "./telegram.commands";
 
+describe("parseCommand (D12 normalization)", () => {
+  it("normalizes a leading slash on the menu command", () => {
+    expect(parseCommand("/menu")).toEqual({ type: "menu" });
+  });
+
+  it("normalizes underscores to spaces in slash commands", () => {
+    expect(parseCommand("/listar_categorias")).toEqual({ type: "list" });
+    expect(parseCommand("/configurar_categorias")).toEqual({ type: "configurar" });
+  });
+
+  it("normalizes a slash with underscores on the ayuda command", () => {
+    expect(parseCommand("/ayuda")).toEqual({ type: "ayuda" });
+  });
+
+  it("keeps the bare text forms working after the normalization", () => {
+    expect(parseCommand("menu")).toEqual({ type: "menu" });
+    expect(parseCommand("ayuda")).toEqual({ type: "ayuda" });
+    expect(parseCommand("listar categorias")).toEqual({ type: "list" });
+  });
+
+  it("falls through to null for an unrecognized slash command", () => {
+    expect(parseCommand("/navegar")).toBeNull();
+  });
+});
+
 describe("parseCommand", () => {
   it("parses 'registrar categoria: X' preserving the original spelling", () => {
     expect(parseCommand("registrar categoria: Salud")).toEqual({

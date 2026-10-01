@@ -276,23 +276,23 @@ describe("MovementLifecycleExecutor.markPaid", () => {
   });
 });
 
-describe("MovementLifecycleExecutor.delete", () => {
-  it("deletes the unique most-recent movement when no cues are given ('borra ese gasto')", async () => {
+describe("MovementLifecycleExecutor.delete (D6 resolve-only)", () => {
+  it("resolves the unique most-recent movement to a gated candidate without deleting (spec: Single candidate becomes the gated target)", async () => {
     const { executor, deleteExpense } = makeExecutor({
       movements: [movement("m1", 8000, "super", RECENT, "super")],
     });
 
     const result = await executor.delete(ownerId, { category: null, amount: null });
 
-    expect(deleteExpense).toHaveBeenCalledWith("m1", ownerId);
-    expect(result).toMatchObject({ status: "executed", action: "deleted_movement" });
-    if (result.status === "executed") {
-      expect(result.movement.id).toBe("m1");
-      expect(result.movement.amount).toBe(8000);
+    expect(deleteExpense).not.toHaveBeenCalled();
+    expect(result).toMatchObject({ status: "gated" });
+    if (result.status === "gated") {
+      expect(result.candidate.id).toBe("m1");
+      expect(result.candidate.amount).toBe(8000);
     }
   });
 
-  it("deletes the movement matching a category cue ('borra el de cafe')", async () => {
+  it("resolves the movement matching a category cue to a gated candidate ('borra el de cafe')", async () => {
     const { executor, deleteExpense } = makeExecutor({
       movements: [
         movement("m1", 1500, "cafe", RECENT, "Cafe"),
@@ -302,11 +302,14 @@ describe("MovementLifecycleExecutor.delete", () => {
 
     const result = await executor.delete(ownerId, { category: "cafe", amount: null });
 
-    expect(deleteExpense).toHaveBeenCalledWith("m1", ownerId);
-    expect(result).toMatchObject({ status: "executed", action: "deleted_movement" });
+    expect(deleteExpense).not.toHaveBeenCalled();
+    expect(result).toMatchObject({ status: "gated" });
+    if (result.status === "gated") {
+      expect(result.candidate.id).toBe("m1");
+    }
   });
 
-  it("asks which movement to delete when two match the amount cue", async () => {
+  it("still asks which movement when two match the amount cue", async () => {
     const { executor, deleteExpense } = makeExecutor({
       movements: [
         movement("m1", 8000, "super", RECENT, "super"),
@@ -333,33 +336,32 @@ describe("MovementLifecycleExecutor.delete", () => {
     expect(deleteExpense).not.toHaveBeenCalled();
     expect(result.status).toBe("no_match");
   });
+});
 
-  it("reports missing when the picked movement was deleted concurrently (404)", async () => {
-    const { executor } = makeExecutor({
-      movements: [movement("m1", 8000, "super", RECENT, "super")],
-      deleteExpense: async () => {
-        throw new NotFoundError("Expense m1 not found");
-      },
-    });
+describe("MovementLifecycleExecutor.deleteWindow (D10)", () => {
+  it("returns the 10-row all-movements window for the menu delete picker", async () => {
+    const rows = Array.from({ length: 12 }, (_, index) =>
+      movement(`m${index}`, 100 + index, `nota-${index}`, new Date(RECENT.getTime() - index * 60_000), "cat"),
+    );
+    const { executor, listMovements } = makeExecutor({ movements: rows });
 
-    const result = await executor.delete(ownerId, { category: null, amount: null });
+    const window = await executor.deleteWindow(ownerId);
 
-    expect(result.status).toBe("missing");
+    expect(window).toHaveLength(10);
+    expect(window[0]?.id).toBe("m0");
+    expect(window.some((candidate) => candidate.id === "m11")).toBe(false);
+    expect(listMovements).toHaveBeenCalledWith(
+      { viewerId: ownerId, partnerId: null, visibility: "mine" },
+      {},
+    );
   });
 
-  it("considers all owner movements in the 10-row window, including PAID and PENDING", async () => {
-    const { executor, deleteExpense } = makeExecutor({
-      movements: [
-        movement("m1", 2500, "alquiler", RECENT, "alquiler", "PENDING"),
-        movement("m2", 8000, "super", OLDER, "super", "PAID"),
-      ],
-    });
+  it("returns an empty window when the owner has no movements", async () => {
+    const { executor } = makeExecutor({ movements: [] });
 
-    // No cues → the most recent movement (the PENDING one) is deleted.
-    const result = await executor.delete(ownerId, { category: null, amount: null });
+    const window = await executor.deleteWindow(ownerId);
 
-    expect(deleteExpense).toHaveBeenCalledWith("m1", ownerId);
-    expect(result).toMatchObject({ status: "executed", action: "deleted_movement" });
+    expect(window).toHaveLength(0);
   });
 });
 

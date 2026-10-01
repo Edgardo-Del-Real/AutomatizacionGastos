@@ -201,22 +201,31 @@ describe("conversationEnvelopeSchema", () => {
     expect(result.success).toBe(false);
   });
 
-  it("carries planned: true on a register_expense envelope", () => {
+  it("rejects a response carrying planned: true (spec: Planned field rejected)", () => {
     const result = conversationEnvelopeSchema.safeParse({
       intent: "register_expense",
       amount: 2500,
       category: null,
-      note: "alquiler",
+      note: null,
       planned: true,
     });
 
-    expect(result.success).toBe(true);
-    if (result.success) {
-      expect(result.data.planned).toBe(true);
-    }
+    expect(result.success).toBe(false);
   });
 
-  it("defaults an absent planned flag to false", () => {
+  it("rejects a response carrying planned: false (presence fails the schema, D7)", () => {
+    const result = conversationEnvelopeSchema.safeParse({
+      intent: "register_expense",
+      amount: 2500,
+      category: null,
+      note: null,
+      planned: false,
+    });
+
+    expect(result.success).toBe(false);
+  });
+
+  it("decodes an envelope without the planned key and exposes no planned field", () => {
     const result = conversationEnvelopeSchema.safeParse({
       intent: "register_expense",
       amount: 2500,
@@ -226,7 +235,7 @@ describe("conversationEnvelopeSchema", () => {
 
     expect(result.success).toBe(true);
     if (result.success) {
-      expect(result.data.planned).toBe(false);
+      expect("planned" in result.data).toBe(false);
     }
   });
 
@@ -621,7 +630,6 @@ describe("GroqBotBrain.interpret", () => {
       dialog_action: null,
       then_reassign: false,
       shared: false,
-      planned: false,
     });
     expect(calls).toHaveLength(1);
   });
@@ -644,7 +652,6 @@ describe("GroqBotBrain.interpret", () => {
       dialog_action: null,
       then_reassign: false,
       shared: false,
-      planned: false,
     });
   });
 
@@ -673,7 +680,6 @@ describe("GroqBotBrain.interpret", () => {
       dialog_action: null,
       then_reassign: false,
       shared: false,
-      planned: false,
     });
   });
 
@@ -701,7 +707,6 @@ describe("GroqBotBrain.interpret", () => {
       dialog_action: null,
       then_reassign: false,
       shared: false,
-      planned: false,
     });
   });
 
@@ -814,7 +819,6 @@ describe("GroqBotBrain.interpret", () => {
       dialog_action: null,
       then_reassign: false,
       shared: false,
-      planned: false,
     });
   });
 
@@ -843,7 +847,6 @@ describe("GroqBotBrain.interpret", () => {
       dialog_action: null,
       then_reassign: false,
       shared: false,
-      planned: false,
     });
   });
 
@@ -950,7 +953,6 @@ describe("GroqBotBrain.interpret with dialog context", () => {
       dialog_action: "resolve",
       then_reassign: false,
       shared: false,
-      planned: false,
     });
   });
 
@@ -1277,14 +1279,22 @@ describe("prompt contracts", () => {
     expect(INTERPRET_SYSTEM_PROMPT).toContain("register_expense");
   });
 
-  it("documents the planned flag in the interpret JSON key list", () => {
-    expect(INTERPRET_SYSTEM_PROMPT).toContain('"planned": boolean');
+  it("removes the planned flag from the interpret JSON key list (D7)", () => {
+    expect(INTERPRET_SYSTEM_PROMPT).not.toContain('"planned": boolean');
+    expect(INTERPRET_SYSTEM_PROMPT).toContain('"shared": boolean');
   });
 
-  it("teaches conversational planned phrasings to set planned: true on register_expense", () => {
-    expect(INTERPRET_SYSTEM_PROMPT).toContain("planned");
-    expect(INTERPRET_SYSTEM_PROMPT).toContain("mes que viene");
-    expect(INTERPRET_SYSTEM_PROMPT).toContain("register_expense");
+  it("teaches that the brain never infers the planned type (button or prefix decide)", () => {
+    expect(INTERPRET_SYSTEM_PROMPT).toContain("Nunca infieras");
+    expect(INTERPRET_SYSTEM_PROMPT).toContain("botón de la vista previa");
+    expect(INTERPRET_SYSTEM_PROMPT).toContain("previsto:");
+  });
+
+  it("teaches the fallback-first role and the delete-confirmation gate (D7)", () => {
+    expect(INTERPRET_SYSTEM_PROMPT).toContain("Sos el respaldo");
+    expect(INTERPRET_SYSTEM_PROMPT).toContain("captura determinística corre primero");
+    expect(INTERPRET_SYSTEM_PROMPT).toContain("solo abre la confirmación");
+    expect(INTERPRET_SYSTEM_PROMPT).toContain("botón 🗑");
   });
 
   it("teaches the previsto: prefix as authoritative and never duplicated", () => {
@@ -1292,23 +1302,15 @@ describe("prompt contracts", () => {
     expect(INTERPRET_SYSTEM_PROMPT).toContain("no lo dupliques");
   });
 
-  it("teaches explicit previsto signals for planned: true and keeps the future-signal brake", () => {
-    expect(INTERPRET_SYSTEM_PROMPT).toContain("agendalo");
-    expect(INTERPRET_SYSTEM_PROMPT).toContain("gasto fijo previsto");
-    expect(INTERPRET_SYSTEM_PROMPT).toContain("sin señal de futuro");
-    expect(INTERPRET_SYSTEM_PROMPT).toContain("gasto normal ya pagado");
-  });
-
-  it("models a planned phrasing in the interpret few-shots", () => {
-    const shot = FEW_SHOTS.find(
-      (message) => message.role === "assistant" && message.content.includes('"planned":true'),
-    );
-    expect(shot).toBeDefined();
-  });
-
-  it("models the explicit previsto keyword in the interpret few-shots", () => {
+  it("models planned phrasings in the interpret few-shots without the planned flag (D7)", () => {
     const previstoShot = FEW_SHOTS.find((message) => message.role === "user" && message.content.includes("previsto"));
     expect(previstoShot).toBeDefined();
+    // The prefix-carrier shots stay, but the assistant answer never carries the
+    // planned key — the type is decided by the prefix/button, not the brain.
+    const plannedFlagShots = FEW_SHOTS.filter(
+      (message) => message.role === "assistant" && message.content.includes('"planned"'),
+    );
+    expect(plannedFlagShots).toHaveLength(0);
   });
 
   it("documents correct_category reference extraction in the interpret prompt", () => {

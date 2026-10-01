@@ -2,7 +2,7 @@ import { NotFoundError, SavingsForbiddenError, ValidationFailedError } from "../
 import { isUniqueConstraintViolation } from "../messages/message.repository";
 import type { CategoryRepository } from "./categories.repository";
 import type { CategoryEntity, CategoryType, CategoryWithKeywords } from "./categories.types";
-import { matchCategory, normalizeForMatch, normalizeForMatchTolerant } from "./matcher";
+import { matchCategory, normalizeForMatch, normalizeForMatchTolerant, type KeywordRule } from "./matcher";
 import { ReservedCategoryError, resolveReservedConcept } from "./reserved";
 
 const AHORRO = "ahorro";
@@ -44,6 +44,11 @@ export class CategoryService {
 
   async listCategories(ownerId: string): Promise<CategoryWithKeywords[]> {
     return this.repository.listByOwner(ownerId);
+  }
+
+  /** D4 — the owner's keyword rules for the deterministic quick-capture parser (closed set). */
+  async listKeywordRules(ownerId: string): Promise<KeywordRule[]> {
+    return this.repository.listKeywordRules(ownerId);
   }
 
   async renameCategory(

@@ -51,6 +51,33 @@ export function plannedSharedRejectedReply(): string {
   return "Los gastos previstos son individuales: no se pueden marcar como compartidos. Usá 'previsto: monto nota' para un gasto previsto, o 'compartido: monto nota' para un gasto normal compartido.";
 }
 
+/**
+ * Quick-capture preview (D4): shows the parsed facts — amount, note and
+ * category — plus the chosen type, which the buttons can toggle. The
+ * keyboard carries `[✅ Guardar] [✏️ Corregir]` and the Real/Previsto type
+ * row; the type is a button decision, never a brain inference.
+ */
+export function previewReply(amount: number, note: string | null, category: string, type: "REAL" | "PENDING"): string {
+  const notePart = note === null ? "" : ` (${truncateNote(note)})`;
+  const typeLabel = type === "PENDING" ? "previsto" : "real";
+  return `¿Confirmás? ${formatARS(amount)}${notePart} — Categoría: ${category} · Tipo: ${typeLabel}`;
+}
+
+/** Capture prompt after Corregir (D4): reopens text capture with the short format. */
+export function capturePromptReply(): string {
+  return "Dale, mandame de nuevo el monto con la nota, por ejemplo: 30000 gym.";
+}
+
+/** Educational prompt for the `m:prev` menu button (D8): teaches the prefix AND the Previsto button. */
+export function pendingCapturePromptReply(): string {
+  return "Para un gasto previsto mandá el monto con la nota usando el prefijo 'previsto:' (ej: previsto: 30000 alquiler), o registralo y tocá el botón Previsto de la vista previa.";
+}
+
+/** Idempotency reply for a retried callback whose token/state was consumed (D5). */
+export function alreadyProcessedReply(): string {
+  return "Esa acción ya fue procesada: no la vuelvo a ejecutar.";
+}
+
 export function savingsRuleRedirectReply(): string {
   return "Para definir un ahorro automático usá el comando: registrar ahorro: <palabra> al <X>% (por ejemplo: registrar ahorro: entrenuts al 10%).";
 }
@@ -181,6 +208,22 @@ export function categoryNotFoundReply(name: string, categories: string[]): strin
   return `No encontré la categoría "${name}". Elegí una de estas: ${quoted}.`;
 }
 
+/**
+ * D9 — the closed-set category picker prompt: renders when a dialog answer
+ * matches no category (single-token or multi-word). The existing categories
+ * render as inline buttons (cat:<id>, "otro" included) and the state stays
+ * open — never an auto-create (spec conversational-categories / registration-
+ * collection "Dialog Category Answers (Closed Set)").
+ */
+export function categoryButtonsReply(): string {
+  return "Elegí una de estas categorías (o tocá una de abajo): incluye 'otro' para dejarlo sin categoría.";
+}
+
+/** D9 — a `cat:` callback on an already-closed dialog: honest, nothing executes. */
+export function dialogClosedReply(): string {
+  return "Ese diálogo ya está cerrado: no cambié nada.";
+}
+
 export function correctionAbandonedReply(): string {
   return `Ojo: dejé sin asignar la corrección anterior (el movimiento queda en "otro"). Ahora registro el nuevo.`;
 }
@@ -285,6 +328,44 @@ export function associateKeywordRedirectReply(): string {
 
 export function offTopicRedirectReply(): string {
   return "Solo registro gastos e ingresos: mandá el monto con una nota (ej: $2500 supermercado) y lo cargo al toque.";
+}
+
+/**
+ * Main-menu text (D8): the five actions render as one-per-row buttons
+ * (m:new/m:prev/m:del/m:rep/m:help) — Nuevo gasto, Gasto previsto, Borrar,
+ * Reporte, Ayuda (spec bot-main-menu "Main Menu Actions").
+ */
+export function menuReply(): string {
+  return "Elegí una opción del menú:";
+}
+
+/**
+ * Static help (D12): works with GROQ_API_KEY unset — capture examples, the
+ * `previsto:` prefix, the category commands and the delete-always-confirms
+ * note (spec bot-main-menu "Static Help").
+ */
+export function ayudaReply(): string {
+  return (
+    "Bot de gastos. Mandá el monto con una nota, por ejemplo: 30000 gym.\n" +
+    "Gastos previstos: usá el prefijo 'previsto:' (ej: previsto: 2500 alquiler) o el botón Previsto de la vista previa.\n" +
+    "Comandos:\n" +
+    "- menu\n" +
+    "- listar categorias\n" +
+    "- configurar categorias\n" +
+    "- registrar categoria: X\n" +
+    "- renombrar categoria: X a: Y\n" +
+    "- asociar palabra: P a categoria: X\n" +
+    "Borrar un gasto siempre pide confirmación antes de ejecutarse."
+  );
+}
+
+/**
+ * Honest reply for an unrecognized callback action prefix (spec
+ * bot-inline-interactions "Unknown action replied honestly"): the action does
+ * not exist, nothing ran and no state changed.
+ */
+export function callbackUnavailableReply(): string {
+  return "Esa acción ya no está disponible.";
 }
 
 /**
@@ -448,6 +529,26 @@ export function markPaidAskReply(candidates: LifecycleAskCandidate[]): string {
 /** Ambiguity ask for delete: which expense to delete (fixed-only). */
 export function deleteAskReply(candidates: LifecycleAskCandidate[]): string {
   return `¿Cuál de estos gastos querés borrar?\n${movementCandidatesList(candidates)}`;
+}
+
+/**
+ * Delete-confirmation gate (D6): names the resolved target and asks for the
+ * explicit 🗑 confirmation. Nothing is deleted until the owner taps it.
+ */
+export function deleteConfirmReply(amount: number, note: string | null, category: string | null): string {
+  const notePart = note === null ? "" : ` (${truncateNote(note)})`;
+  const categoryPart = category !== null && category.length > 0 ? ` — Categoría: ${category}` : "";
+  return `¿Borrar este gasto? ${formatARS(amount)}${notePart}${categoryPart} Confirmá abajo.`;
+}
+
+/** Cancel reply for `dc:no`: the gate closes and nothing was deleted (D6). */
+export function deleteCancelledReply(): string {
+  return "Dale, cancelé el borrado: no se borró nada.";
+}
+
+/** Pick list for the menu `Borrar` entry (D10): numbered candidates to choose from. */
+export function deletePickListReply(candidates: LifecycleAskCandidate[]): string {
+  return `¿Cuál querés borrar?\n${movementCandidatesList(candidates)}`;
 }
 
 export function movementSelectionAbandonedReply(): string {

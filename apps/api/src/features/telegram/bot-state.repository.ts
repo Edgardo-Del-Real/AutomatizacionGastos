@@ -7,6 +7,8 @@ export const BOT_STATES = [
   "awaiting_amount_confirmation",
   "awaiting_movement_selection",
   "awaiting_registration",
+  "awaiting_preview",
+  "awaiting_delete_confirmation",
 ] as const;
 
 export type BotStateName = (typeof BOT_STATES)[number];

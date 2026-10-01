@@ -53,14 +53,6 @@ export type ConversationEnvelope = {
    * when both are present (AD6). Schema default false.
    */
   shared?: boolean;
-  /**
-   * Planned-registration signal, only meaningful with `register_expense` (spec
-   * "Planned Flag Contract"): true registers as a PENDING EXPENSE. A SIGNAL
-   * only — the deterministic `previsto:` prefix is authoritative and wins over
-   * this flag when both are present; materialization happens only through the
-   * deterministic guarded registration path. Schema default false.
-   */
-  planned?: boolean;
 };
 
 export type BotAction =
@@ -222,7 +214,12 @@ export const conversationEnvelopeSchema = z
     dialog_action: z.enum(["resolve", "abandon"]).nullable().default(null),
     then_reassign: z.boolean().default(false),
     shared: z.boolean().default(false),
-    planned: z.boolean().default(false),
+    // D7 — the planned type is a deterministic button decision (quick-capture
+    // preview) or the `previsto:` prefix, NEVER a brain inference. Presence of
+    // the key fails the schema (zod strips unknown keys silently, so a merely
+    // removed field could never produce the mandated degradation): a response
+    // carrying `planned` MUST degrade to null.
+    planned: z.never().optional(),
   })
   .refine(
     (data) =>
@@ -235,8 +232,8 @@ export const replyEnvelopeSchema = z.object({ reply: z.string().trim().min(1).ma
 export type ChatMessage = { role: "user" | "assistant"; content: string };
 
 export const INTERPRET_SYSTEM_PROMPT = [
-  'Respondé SOLO con un objeto JSON con exactamente estas claves: {"intent": string, "amount": number|null, "category": string|null, "note": string|null, "query_type": string|null, "new_name": string|null, "dialog_action": string|null, "then_reassign": boolean, "shared": boolean, "planned": boolean}.',
-  "No agregues texto ni campos extra.",
+  'Respondé SOLO con un objeto JSON con exactamente estas claves: {"intent": string, "amount": number|null, "category": string|null, "note": string|null, "query_type": string|null, "new_name": string|null, "dialog_action": string|null, "then_reassign": boolean, "shared": boolean}.',
+  "No agregues texto ni campos extra. El campo \"planned\" NO existe: nunca lo incluyas.",
   '"intent" es exactamente UNA de: "register_expense" (cualquier movimiento de dinero, gasto o ingreso), "correct_amount", "correct_category", "query", "query_recent", "query_balance", "query_month", "query_planned", "associate_keyword", "create_category", "delete_category", "rename_category", "create_savings_rule", "capabilities", "help", "off_topic", "greeting".',
   "Si el mensaje tiene señal de gasto (verbo de gasto, $ o un monto) usá register_expense, aunque no tenga monto.",
   "NUNCA inventes un monto: usá null cuando el mensaje no tiene monto.",
@@ -260,7 +257,9 @@ export const INTERPRET_SYSTEM_PROMPT = [
   'Para marcar pagado un gasto previsto ya registrado usá "mark_paid": "ya lo pagué", "pásalo a pagado", "el previsto de alquiler lo pagué". Para borrar un gasto ya registrado usá "delete_expense": "borra ese gasto", "borralo", "borrá el de cafe". Nunca son "register_expense": no crean movimientos ni categorías. En "mark_paid" y "delete_expense", "category" y/o "amount" identifican el movimiento ya registrado (ej: "Alquiler" en category, 2500 en amount); si el mensaje no trae referencia usá null en ambos y el bot usa el más reciente. Nunca inventes ids.',
   '"then_reassign" es true SOLO cuando "create_category" pide guardar el movimiento pendiente en la categoría nueva (ej: "creá X y guardalo ahí"); en cualquier otro caso false.',
   '"shared" es true SOLO en "register_expense" cuando el dueño pide que el gasto sea compartido con su pareja ("ponelo compartido", "es compartido"); en cualquier otro caso false. Si el mensaje ya trae el prefijo "compartido:" el bot lo maneja solo: no lo dupliques.',
-  '"planned" es true SOLO en "register_expense" cuando el dueño expresa intención explícita de agendar el gasto: escribe "previsto", "gasto previsto" o "gasto fijo previsto", o frases como "dejalo para el mes que viene", "lo pago el mes que viene", "agendalo", "quiero dejar un gasto previsto para el mes que viene". En cualquier otro caso false: un "gasto fijo" sin señal de futuro es un gasto normal ya pagado, NUNCA previsto. Si el mensaje ya trae el prefijo "previsto:" el bot lo maneja solo: no lo dupliques.',
+  'Sos el respaldo: la captura determinística corre primero; las sugerencias de categoría se resuelven contra las categorías existentes, "otro" es el respaldo.',
+  "Nunca infieras \"previsto\": el tipo lo decide el botón de la vista previa o el prefijo \"previsto:\".",
+  "\"delete_expense\" solo abre la confirmación: el borrado lo decide el botón 🗑 del dueño.",
 ].join(" ");
 
 export const FEW_SHOTS: readonly ChatMessage[] = [
@@ -282,12 +281,12 @@ export const FEW_SHOTS: readonly ChatMessage[] = [
   { role: "user", content: "dejalo para el mes que viene: 2500 alquiler" },
   {
     role: "assistant",
-    content: '{"intent":"register_expense","amount":2500,"category":null,"note":"alquiler","planned":true}',
+    content: '{"intent":"register_expense","amount":2500,"category":null,"note":"alquiler"}',
   },
   { role: "user", content: "dejá previsto el alquiler de 2500" },
   {
     role: "assistant",
-    content: '{"intent":"register_expense","amount":2500,"category":null,"note":"alquiler","planned":true}',
+    content: '{"intent":"register_expense","amount":2500,"category":null,"note":"alquiler"}',
   },
   { role: "user", content: "cuánto gasté este mes?" },
   {

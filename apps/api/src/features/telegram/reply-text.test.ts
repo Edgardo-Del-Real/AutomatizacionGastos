@@ -4,10 +4,12 @@ import type { MovementCandidate } from "./movement-corrector";
 import {
   amountConfirmationAbandonedReply,
   amountConflictReply,
+  alreadyProcessedReply,
   askAmountReply,
   askCategoryReply,
   balanceQueryReply,
   capabilitiesSummaryReply,
+  capturePromptReply,
   categoriesQueryReply,
   categoryCommandReplyTemplate,
   categoryCreatedReassignedReply,
@@ -24,6 +26,9 @@ import {
   correctionOfferReply,
   deletedMovementReply,
   deleteAskReply,
+  deleteCancelledReply,
+  deleteConfirmReply,
+  deletePickListReply,
   duplicateCategoryReply,
   formatARS,
   greetingReply,
@@ -33,6 +38,10 @@ import {
   markPaidAlreadyReply,
   markPaidAskReply,
   markPaidReply,
+  menuReply,
+  ayudaReply,
+  categoryButtonsReply,
+  dialogClosedReply,
   missingCategoryReply,
   monthQueryReply,
   movementAmbiguousReply,
@@ -45,9 +54,11 @@ import {
   nothingToDeleteReply,
   otroDeleteForbiddenReply,
   otroKeptReply,
+  pendingCapturePromptReply,
   plannedQueryReply,
   plannedReply,
   plannedSharedRejectedReply,
+  previewReply,
   queryReplyTemplate,
   questionDroppedReply,
   recentQueryReply,
@@ -655,5 +666,100 @@ it("lists mark-paid and delete in the capabilities summary", () => {
 
     expect(summary).toContain("marcar como pagado");
     expect(summary).toContain("borrar un gasto");
+  });
+});
+
+describe("dialog category buttons (D9)", () => {
+  it("builds the category-buttons prompt asking the owner to pick", () => {
+    const text = categoryButtonsReply();
+
+    expect(text).toContain("Elegí una de estas");
+    expect(text).toContain("otro");
+  });
+
+  it("builds the closed-dialog reply for a stale category callback", () => {
+    expect(dialogClosedReply()).toContain("cerrado");
+    expect(dialogClosedReply()).toContain("no");
+  });
+});
+
+describe("main menu and help templates (D8/D12)", () => {
+  it("builds the menu text inviting the owner to choose", () => {
+    const text = menuReply();
+
+    expect(text).toContain("menú");
+    expect(text.length).toBeGreaterThan(0);
+  });
+
+  it("builds the static help with capture examples, the previsto prefix and the delete confirmation note (spec: Static Help)", () => {
+    const text = ayudaReply();
+
+    expect(text).toContain("30000 gym");
+    expect(text).toContain("previsto:");
+    expect(text).toContain("listar categorias");
+    expect(text).toContain("confirmación");
+  });
+});
+
+describe("delete confirmation gate templates (D6)", () => {
+  it("builds the delete confirmation naming the candidate facts", () => {
+    const text = deleteConfirmReply(2500, "alquiler", "Alquiler");
+
+    expect(text).toContain(formatARS(2500));
+    expect(text).toContain("alquiler");
+    expect(text).toContain("Alquiler");
+    expect(text).toContain("Borrar");
+  });
+
+  it("builds the cancelled reply stating nothing was deleted", () => {
+    expect(deleteCancelledReply()).toContain("cancelé");
+    expect(deleteCancelledReply()).toContain("nada");
+  });
+
+  it("builds the pick-list reply listing the delete candidates", () => {
+    const text = deletePickListReply([{ amount: 2500, note: "alquiler", date: "2026-09-19" }]);
+
+    expect(text).toContain("¿Cuál");
+    expect(text).toContain("borrar");
+    expect(text).toContain(formatARS(2500));
+    expect(text).toContain("alquiler");
+  });
+});
+
+describe("quick-capture preview templates (D4)", () => {
+  it("builds the preview with amount, note, category and the chosen type", () => {
+    const text = previewReply(30000, "gym", "Gimnasio", "REAL");
+
+    expect(text).toContain(formatARS(30000));
+    expect(text).toContain("gym");
+    expect(text).toContain("Gimnasio");
+    expect(text).toContain("real");
+  });
+
+  it("marks a PENDING preview as previsto", () => {
+    const text = previewReply(2500, "alquiler", "Vivienda", "PENDING");
+
+    expect(text).toContain(formatARS(2500));
+    expect(text).toContain("alquiler");
+    expect(text).toContain("Vivienda");
+    expect(text).toContain("previsto");
+  });
+
+  it("builds the capture prompt asking for a short amount+note text", () => {
+    const text = capturePromptReply();
+
+    expect(text).toContain("monto");
+    expect(text).toContain("nota");
+  });
+
+  it("builds the pending-capture prompt teaching the previsto: prefix and the Previsto button", () => {
+    const text = pendingCapturePromptReply();
+
+    expect(text).toContain("previsto:");
+    expect(text).toContain("Previsto");
+  });
+
+  it("builds the already-processed reply for a retried callback", () => {
+    expect(alreadyProcessedReply()).toContain("ya fue procesada");
   });
 });

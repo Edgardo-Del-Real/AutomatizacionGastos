@@ -49,7 +49,8 @@ describe("createIncomeWithSavings atomicity", () => {
       percent: 10,
       note: "sueldo",
       occurredAt: new Date("2026-09-15T12:00:00.000Z"),
-      category: "ahorro",
+      netCategory: "Sueldo",
+      savingsCategory: "ahorro",
       visibility: "INDIVIDUAL",
     });
 
@@ -57,6 +58,7 @@ describe("createIncomeWithSavings atomicity", () => {
     expect(tx.expense.create).toHaveBeenCalledTimes(2);
     expect(created.map((row) => row.type)).toEqual(["INCOME", "SAVINGS"]);
     expect(created[0]?.amount?.toString()).toBe("900");
+    expect(created[0]?.category).toBe("Sueldo");
     expect(created[1]?.amount?.toString()).toBe("100");
     expect(created[1]?.category).toBe("ahorro");
     expect(result.net?.amount).toBe(900);
@@ -74,7 +76,8 @@ describe("createIncomeWithSavings atomicity", () => {
         percent: 10,
         note: "sueldo",
         occurredAt: new Date("2026-09-15T12:00:00.000Z"),
-        category: "ahorro",
+        netCategory: "Sueldo",
+        savingsCategory: "ahorro",
         visibility: "INDIVIDUAL",
       }),
     ).rejects.toThrow("simulated savings create failure");
@@ -90,11 +93,13 @@ describe("createIncomeWithSavings atomicity", () => {
       percent: 100,
       note: "todo a ahorro",
       occurredAt: new Date("2026-09-15T12:00:00.000Z"),
-      category: "ahorro",
+      netCategory: "Sueldo",
+      savingsCategory: "ahorro",
       visibility: "INDIVIDUAL",
     });
 
     expect(created.map((row) => row.type)).toEqual(["SAVINGS"]);
+    expect(created[0]?.category).toBe("ahorro");
     expect(result.net).toBeNull();
     expect(result.savings?.amount).toBe(1000);
   });
@@ -109,11 +114,13 @@ describe("createIncomeWithSavings atomicity", () => {
       percent: 1,
       note: "minimo",
       occurredAt: new Date("2026-09-15T12:00:00.000Z"),
-      category: "ahorro",
+      netCategory: "Sueldo",
+      savingsCategory: "ahorro",
       visibility: "INDIVIDUAL",
     });
 
     expect(created.map((row) => row.type)).toEqual(["INCOME"]);
+    expect(created[0]?.category).toBe("Sueldo");
     expect(result.net?.amount).toBe(0.01);
     expect(result.savings).toBeNull();
   });

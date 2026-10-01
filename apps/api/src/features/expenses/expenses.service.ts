@@ -57,14 +57,15 @@ export class ExpenseService {
     return { months };
   }
 
-  /** D7: delegates the atomic net-INCOME + SAVINGS split to the repository. */
+  /** D7/D8: delegates the atomic net-INCOME + SAVINGS split to the repository. */
   async createIncomeWithSavings(data: {
     ownerId: string;
     gross: number;
     percent: number;
     note: string | null;
     occurredAt: Date;
-    category: string;
+    netCategory: string;
+    savingsCategory: string;
     visibility: "INDIVIDUAL" | "SHARED";
   }): Promise<{ net: Expense | null; savings: Expense | null }> {
     return this.repository.createIncomeWithSavings(data);

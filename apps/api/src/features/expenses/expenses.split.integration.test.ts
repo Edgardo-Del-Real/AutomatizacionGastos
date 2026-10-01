@@ -42,18 +42,20 @@ describe("PrismaExpenseRepository.createIncomeWithSavings (integration)", () => 
     await prisma.savingsRule.deleteMany();
   });
 
-  it("persists the net INCOME and the SAVINGS in ahorro with the rounding invariant", async () => {
+  it("persists the net INCOME keeping netCategory and the SAVINGS in savingsCategory with the rounding invariant", async () => {
     const result = await repository.createIncomeWithSavings({
       ownerId: "owner-1",
       gross: 10,
       percent: 33,
       note: "sueldo",
       occurredAt: new Date("2026-09-15T12:00:00.000Z"),
-      category: "ahorro",
+      netCategory: "Sueldo",
+      savingsCategory: "ahorro",
       visibility: "INDIVIDUAL",
     });
 
     expect(result.net?.amount).toBe(6.7);
+    expect(result.net?.category).toBe("Sueldo");
     expect(result.savings?.amount).toBe(3.3);
     expect(result.savings?.category).toBe("ahorro");
 
@@ -70,12 +72,14 @@ describe("PrismaExpenseRepository.createIncomeWithSavings (integration)", () => 
       percent: 100,
       note: "todo",
       occurredAt: new Date("2026-09-15T12:00:00.000Z"),
-      category: "ahorro",
+      netCategory: "Sueldo",
+      savingsCategory: "ahorro",
       visibility: "INDIVIDUAL",
     });
 
     expect(result.net).toBeNull();
     expect(result.savings?.amount).toBe(1000);
+    expect(result.savings?.category).toBe("ahorro");
     const rows = await prisma.expense.findMany({ where: { ownerId: "owner-1" } });
     expect(rows).toHaveLength(1);
     expect(rows[0]?.type).toBe("SAVINGS");
@@ -88,11 +92,13 @@ describe("PrismaExpenseRepository.createIncomeWithSavings (integration)", () => 
       percent: 1,
       note: "minimo",
       occurredAt: new Date("2026-09-15T12:00:00.000Z"),
-      category: "ahorro",
+      netCategory: "Sueldo",
+      savingsCategory: "ahorro",
       visibility: "INDIVIDUAL",
     });
 
     expect(result.net?.amount).toBe(0.01);
+    expect(result.net?.category).toBe("Sueldo");
     expect(result.savings).toBeNull();
     const rows = await prisma.expense.findMany({ where: { ownerId: "owner-1" } });
     expect(rows).toHaveLength(1);

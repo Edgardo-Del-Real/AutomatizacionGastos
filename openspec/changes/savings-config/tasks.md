@@ -38,10 +38,10 @@ Chain strategy: pending
 
 ## Phase 2: Repository + Split Categories
 
-- [ ] 2.1 RED `savings.repository.integration.test.ts`: delete scoped/P2025
-- [ ] 2.2 GREEN `savings.repository.ts`: `delete` P2025→null
-- [ ] 2.3 RED `expenses.split.integration.test.ts`: categories + atomicity
-- [ ] 2.4 GREEN `expenses.repository.ts`/`expenses.service.ts`: call-shape
+- [x] 2.1 RED `savings.repository.integration.test.ts`: delete scoped/P2025
+- [x] 2.2 GREEN `savings.repository.ts`: `delete` P2025→null
+- [x] 2.3 RED `expenses.split.integration.test.ts`: categories + atomicity
+- [x] 2.4 GREEN `expenses.repository.ts`/`expenses.service.ts`: call-shape
 
 ## Phase 3: Payload Schema
 

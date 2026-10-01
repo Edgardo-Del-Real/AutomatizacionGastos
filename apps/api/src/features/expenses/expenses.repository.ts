@@ -33,10 +33,12 @@ export interface ExpenseRepository {
   deleteById(id: string, ownerId: string): Promise<boolean>;
   summarizeByMonth(ownerId: string, from: Date): Promise<ExpenseMonthlySummary[]>;
   /**
-   * D7: splits a gross INCOME into a NET INCOME plus a SAVINGS movement in the
-   * ahorro category, both inside ONE transaction (a failing SAVINGS create
-   * rolls the net back too). Edge cases: pct=100 (net 0) → only the SAVINGS
-   * movement; savings rounds to 0 → only the whole INCOME.
+   * D7/D8: splits a gross INCOME into a NET INCOME plus a SAVINGS movement,
+   * both inside ONE transaction (a failing SAVINGS create rolls the net back
+   * too). The net INCOME keeps `netCategory` (the preview-picked category);
+   * ONLY the SAVINGS movement lands in `savingsCategory` ("ahorro"). Edge
+   * cases: pct=100 (net 0) → only the SAVINGS movement; savings rounds to 0 →
+   * only the whole INCOME.
    */
   createIncomeWithSavings(data: {
     ownerId: string;
@@ -44,7 +46,8 @@ export interface ExpenseRepository {
     percent: number;
     note: string | null;
     occurredAt: Date;
-    category: string;
+    netCategory: string;
+    savingsCategory: string;
     visibility: "INDIVIDUAL" | "SHARED";
   }): Promise<{ net: Expense | null; savings: Expense | null }>;
 }
@@ -122,7 +125,8 @@ export class PrismaExpenseRepository implements ExpenseRepository {
     percent: number;
     note: string | null;
     occurredAt: Date;
-    category: string;
+    netCategory: string;
+    savingsCategory: string;
     visibility: "INDIVIDUAL" | "SHARED";
   }): Promise<{ net: Expense | null; savings: Expense | null }> {
     // Decimal arithmetic keeps the invariant exact: savings = round2(gross*pct/100),
@@ -141,7 +145,7 @@ export class PrismaExpenseRepository implements ExpenseRepository {
               ownerId: data.ownerId,
               amount: netAmount,
               currency: "ARS",
-              category: data.category,
+              category: data.netCategory,
               note: data.note,
               occurredAt: data.occurredAt,
               type: "INCOME",
@@ -157,7 +161,7 @@ export class PrismaExpenseRepository implements ExpenseRepository {
               ownerId: data.ownerId,
               amount: savingsAmount,
               currency: "ARS",
-              category: data.category,
+              category: data.savingsCategory,
               note: data.note,
               occurredAt: data.occurredAt,
               type: "SAVINGS",

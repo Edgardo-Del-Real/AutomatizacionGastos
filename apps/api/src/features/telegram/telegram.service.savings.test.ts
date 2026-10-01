@@ -181,12 +181,13 @@ describe("TelegramService savings split on INGRESO (v2)", () => {
       gross: 1000,
       percent: 10,
       note: "cobro sueldo de entrenuts",
-      category: "ahorro",
+      netCategory: "Cafe",
+      savingsCategory: "ahorro",
       visibility: "INDIVIDUAL",
       occurredAt: expect.any(Date),
     });
     expect(h.mockCreateExpense).not.toHaveBeenCalled();
-    expect(h.replies.at(-2)).toBe(successSplitReply(1000, 900, 100, "ahorro"));
+    expect(h.replies.at(-2)).toBe(successSplitReply(1000, 900, 100, "Cafe"));
     expect(h.replies.at(-1)).toBe(menuReply());
   });
 

@@ -68,4 +68,35 @@ describe("PrismaSavingsRuleRepository (integration)", () => {
     expect(rules).toHaveLength(2);
     expect(rules.map((rule) => rule.keyword)).toEqual(["sueldo", "entrenuts"]);
   });
+
+  it("delete removes the owner's rule on the [ownerId, keyword] unique and returns it", async () => {
+    await repository.upsert("owner-1", "entrenuts", 10);
+
+    const deleted = await repository.delete("owner-1", "entrenuts");
+
+    expect(deleted?.keyword).toBe("entrenuts");
+    expect(deleted?.percent).toBe(10);
+    const rows = await prisma.savingsRule.findMany({ where: { ownerId: "owner-1" } });
+    expect(rows).toHaveLength(0);
+  });
+
+  it("delete returns null (P2025 → null) when the owner has no rule for the keyword", async () => {
+    await repository.upsert("owner-1", "entrenuts", 10);
+
+    await expect(repository.delete("owner-1", "gym")).resolves.toBeNull();
+
+    const rows = await prisma.savingsRule.findMany({ where: { ownerId: "owner-1" } });
+    expect(rows).toHaveLength(1);
+  });
+
+  it("delete is owner-scoped: removing one owner's rule leaves the other owner's rule", async () => {
+    await repository.upsert("owner-1", "sueldo", 10);
+    await repository.upsert("owner-2", "sueldo", 20);
+
+    await repository.delete("owner-1", "sueldo");
+
+    const rows = await prisma.savingsRule.findMany({ where: { keyword: "sueldo" } });
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ ownerId: "owner-2", keyword: "sueldo" });
+  });
 });

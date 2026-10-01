@@ -1175,7 +1175,7 @@ export class TelegramService {
       // The rule always applies: no per-message override exists in v2.
       const split = await this.deps.savingsService.resolveSplit(ownerId, note ?? "", { kind: "none" });
       if (split.kind === "split") {
-        return this.registerIncomeSplit(amount, note, ownerId, split.percent, reply);
+        return this.registerIncomeSplit(amount, note, ownerId, split.percent, category, reply);
       }
     }
     const movementType = type === "INGRESO" ? "INCOME" : "EXPENSE";
@@ -1204,6 +1204,7 @@ export class TelegramService {
     note: string | null,
     ownerId: string,
     percent: number,
+    netCategory: string,
     reply?: ReplyPort,
   ): Promise<boolean> {
     await this.deps.categoryService.ensureAhorro(ownerId);
@@ -1213,7 +1214,8 @@ export class TelegramService {
       percent,
       note,
       occurredAt: new Date(),
-      category: "ahorro",
+      netCategory,
+      savingsCategory: "ahorro",
       visibility: "INDIVIDUAL",
     });
     if (result.net === null && result.savings === null) {
@@ -1221,7 +1223,7 @@ export class TelegramService {
     }
     const net = result.net?.amount ?? null;
     const savings = result.savings?.amount ?? null;
-    await this.safeReply(reply, successSplitReply(gross, net ?? 0, savings ?? 0, "ahorro"));
+    await this.safeReply(reply, successSplitReply(gross, net ?? 0, savings ?? 0, netCategory));
     await this.sendMenu(reply);
     return true;
   }

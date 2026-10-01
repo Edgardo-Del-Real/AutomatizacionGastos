@@ -282,8 +282,8 @@ When an owner with no categories sends a capture-shaped message, the system MUST
 
 ### Requirement: Per-Owner State Machine
 
-The system MUST persist, per owner, a state machine with values `idle`, `awaiting_setup`, `awaiting_capture` (payload `{type}`), `awaiting_preview` (payload `{amount, note, type, category, saveToken}`), `awaiting_category_name` (preview create-category name input), `awaiting_movement_selection` (sub-menu pick), `awaiting_category_selection` (correction reassign pick), and `awaiting_delete_confirmation` (delete gate). The states `awaiting_category`, `awaiting_registration`, and `awaiting_amount_confirmation` MUST NOT exist; a persisted payload in any of those removed states (e.g. from a rollback) MUST recover to `idle` without registering or deleting anything. Transitions MUST be explicit and testable: a type menu tap in any flow state → abandon the pending flow and enter `awaiting_capture` with the tapped type; `awaiting_capture` + parsed `monto+nota` → `awaiting_preview`; preview `➕ Crear categoría` → `awaiting_category_name`, and a created name → back to `awaiting_preview` with the category selected; preview `✅ Guardar` → registers and `idle` + menu, `✏️ Corregir` → `awaiting_capture` with a capture prompt; a delete pick in the expense admin → `awaiting_delete_confirmation` with the resolved target id persisted; `🗑 Borrar` → deletes and `idle` + menu, `❌ Cancelar` or any new message → `idle` with nothing deleted; completed setup → `idle`. Every persisted payload MUST survive a restart, and a corrupt payload MUST recover without registering or deleting anything.
-(Previously: the state machine had `awaiting_category`, `awaiting_registration`, and `awaiting_amount_confirmation`; capture entered `awaiting_preview` directly from idle free text; reopening the menu never changed state.)
+The system MUST persist, per owner, a state machine with values `idle`, `awaiting_setup`, `awaiting_capture` (payload `{type}`), `awaiting_preview` (payload `{amount, note, type, category, saveToken, savings?}`), `awaiting_category_name` (preview create-category name input), `awaiting_movement_selection` (sub-menu pick), `awaiting_category_selection` (correction reassign pick), `awaiting_delete_confirmation` (delete gate), `awaiting_savings_rule` (savings sub-menu rule text input), `awaiting_savings_percent` ("Otro" percent input), and `awaiting_savings_delete` (savings rule delete gate). The states `awaiting_category`, `awaiting_registration`, and `awaiting_amount_confirmation` MUST NOT exist; a persisted payload in any of those removed states (e.g. from a rollback) MUST recover to `idle` without registering or deleting anything. Transitions MUST be explicit and testable: a type menu tap in any flow state → abandon the pending flow and enter `awaiting_capture` with the tapped type; `awaiting_capture` + parsed `monto+nota` → `awaiting_preview`; preview `➕ Crear categoría` → `awaiting_category_name`, and a created name → back to `awaiting_preview` with the category selected; preview `✅ Guardar` → registers and `idle` + menu, `✏️ Corregir` → `awaiting_capture` with a capture prompt; the INGRESO confirmation `[Otro]` → `awaiting_savings_percent`, and a valid percent → back to `awaiting_preview` with the override persisted; a delete pick in the expense admin → `awaiting_delete_confirmation` with the resolved target id persisted; `🗑 Borrar` → deletes and `idle` + menu, `❌ Cancelar` or any new message → `idle` with nothing deleted; the savings sub-menu create → `awaiting_savings_rule`, and a parsed rule text → rule defined and `idle` + menu; a savings rule delete pick → `awaiting_savings_delete` with the rule id persisted, and confirm → rule deleted and `idle` + menu, cancel → `idle` with nothing deleted; completed setup → `idle`. Every persisted payload MUST survive a restart, and a corrupt payload MUST recover without registering or deleting anything.
+(Previously: the state machine had no savings states, the `awaiting_preview` payload carried no `savings` field, and the removed-state recovery list was unchanged.)
 
 #### Scenario: Menu tap enters awaiting_capture
 
@@ -334,10 +334,22 @@ The system MUST persist, per owner, a state machine with values `idle`, `awaitin
 - WHEN the process restarts
 - THEN the target id and the state are still present
 
+#### Scenario: Otro percent input returns to the confirmation
+
+- GIVEN an INGRESO preview owner taps `[Otro]`
+- WHEN they reply "15"
+- THEN the confirmation re-renders with savings at 15% and the override is persisted
+
+#### Scenario: Rule delete gate confirms
+
+- GIVEN an owner in `awaiting_savings_delete` after picking a rule
+- WHEN they confirm the delete
+- THEN the rule is deleted, the owner returns to `idle`, and the menu replies
+
 ### Requirement: Bot Commands
 
-The system MUST recognize and handle these owner commands: `menu`, `ayuda`, `listar categorias`, `configurar categorias`, and `registrar ahorro: <palabra> al <X>%` (see savings). The text category CRUD commands `registrar categoria:`, `renombrar categoria:`, and `asociar palabra:` MUST NOT be recognized as commands — a message carrying them MUST reply with an educational redirect to the `🗂 Administrar categorías` button and MUST NOT create or rename anything. The `menu` command MUST render the eight-button main menu and `ayuda` MUST render the static help (see bot-main-menu). The system MUST register the owner-visible command list via `setMyCommands` at startup. Unrecognized commands MUST fall through to idle free-text routing (see bot-free-text-routing), never to capture.
-(Previously: `registrar categoria:`, `renombrar categoria:`, and `asociar palabra:` were recognized commands, and unrecognized commands fell through to registration parsing.)
+The system MUST recognize and handle these owner commands: `menu`, `ayuda`, `listar categorias`, `configurar categorias`, `registrar ahorro: <palabra> al <X>%`, `listar ahorros`, and `borrar ahorro: <palabra>` (see savings). The text category CRUD commands `registrar categoria:`, `renombrar categoria:`, and `asociar palabra:` MUST NOT be recognized as commands — a message carrying them MUST reply with an educational redirect to the `🗂 Administrar categorías` button and MUST NOT create or rename anything. The `menu` command MUST render the eight-button main menu and `ayuda` MUST render the static help (see bot-main-menu). The system MUST register the owner-visible command list via `setMyCommands` at startup. Unrecognized commands MUST fall through to idle free-text routing (see bot-free-text-routing), never to capture.
+(Previously: the recognized list covered only `menu`, `ayuda`, `listar categorias`, `configurar categorias`, and `registrar ahorro:`.)
 
 #### Scenario: List categories
 
@@ -455,9 +467,10 @@ The LLM reply surface MUST be limited to query answers and greeting replies: the
 - WHEN it is processed
 - THEN the brain's `reply` is not invoked
 
-### Requirement: Savings Rule Command
+### Requirement: Savings Rule Commands
 
-The system MUST recognize `registrar ahorro: <palabra> al <X>%` as an owner command that creates or upserts the savings rule (semantics per the savings capability) and MUST reply with a confirmation. A malformed percent MUST be rejected with a validation error and MUST NOT store a rule. Unrecognized commands MUST still fall through to normal registration parsing.
+The system MUST recognize `registrar ahorro: <palabra> al <X>%`, `listar ahorros`, and `borrar ahorro: <palabra>` as owner commands (semantics per the savings capability): the first MUST create or upsert the rule with a confirmation reply, the second MUST list the owner's rules, and the third MUST delete the rule with a confirmation reply. A malformed or out-of-range percent MUST be rejected with a validation error and MUST NOT store a rule. Deleting a keyword with no stored rule MUST reply gracefully. Unrecognized commands MUST still fall through to normal registration parsing.
+(Previously: only `registrar ahorro: <palabra> al <X>%` was recognized as the single savings command.)
 
 #### Scenario: Define a savings rule
 
@@ -471,6 +484,24 @@ The system MUST recognize `registrar ahorro: <palabra> al <X>%` as an owner comm
 - WHEN it is processed
 - THEN a validation error replies and no rule is stored
 
+#### Scenario: List savings rules
+
+- GIVEN owner sends "listar ahorros"
+- WHEN it is processed
+- THEN a reply lists the owner's rules (or a clear empty reply)
+
+#### Scenario: Delete a savings rule
+
+- GIVEN owner sends "borrar ahorro: entrenuts"
+- WHEN it is processed
+- THEN the rule is deleted and a confirmation replies
+
+#### Scenario: Delete of an unknown keyword replies gracefully
+
+- GIVEN owner sends "borrar ahorro: gym" with no stored rule
+- WHEN it is processed
+- THEN a graceful "no existe" reply is sent and nothing changes
+
 #### Scenario: Unrecognized command falls through
 
 - GIVEN owner text that is not a recognized command
@@ -479,15 +510,21 @@ The system MUST recognize `registrar ahorro: <palabra> al <X>%` as an owner comm
 
 ### Requirement: Savings Split on Income Registration
 
-When an INGRESO-type movement registers (from the ➕ Ingreso menu button) and its note matches a savings-rule keyword, the system MUST register the INCOME with the NET amount and a SAVINGS movement in the "ahorro" category in a single transaction (semantics per the savings capability), and the confirmation reply MUST report the gross, net, and savings amounts. A COMPARTIDO-typed capture MUST NOT trigger a split. An INGRESO matching no rule MUST register whole. Shared incomes are legacy-only after the redesign; a pre-existing shared income keeps the SHARED inheritance behavior (see savings). The `sin ahorro`/`con X%` overrides are REMOVED — such text in `idle` gets an educational redirect and never alters a split.
-(Previously: the split triggered on keyword-matched income free text, overrides applied per message, and shared incomes came from the `compartido:` prefix.)
+When an INGRESO-type movement registers (from the ➕ Ingreso menu button), the system MUST decide the split by precedence (semantics per the savings capability): a manual choice persisted in the preview payload wins for that income (percent or disabled), otherwise a matching savings-rule keyword applies, otherwise whole. A split MUST register the net INCOME keeping the preview-picked category and a SAVINGS movement in the "ahorro" category in a single transaction, and the confirmation reply MUST report the gross, net, and savings amounts. A COMPARTIDO-typed capture MUST NOT trigger a split. An INGRESO matching no rule with no manual choice MUST register whole. Shared incomes are legacy-only after the redesign; a pre-existing shared income keeps the SHARED inheritance behavior (see savings). The `sin ahorro`/`con X%` text overrides are REMOVED — such text in `idle` gets an educational redirect and never alters a split.
+(Previously: the split followed only the automatic rule, both movements landed in "ahorro", and the confirmation reported gross, net, and saved.)
 
 #### Scenario: Ingreso split applied on registration
 
-- GIVEN rule "entrenuts" at 10% and an owner taps ➕ Ingreso then sends "cobro sueldo de entrenuts 1000"
+- GIVEN rule "entrenuts" at 10% and an owner taps ➕ Ingreso then sends "cobro sueldo de entrenuts 1000" with category "Sueldo" picked and no manual choice
 - WHEN the preview saves with a chosen category
-- THEN INCOME 900 and SAVINGS 100 in "ahorro" are created in one transaction
+- THEN INCOME 900 keeps category "Sueldo" and SAVINGS 100 in "ahorro" are created in one transaction
 - AND the confirmation reports 1000 gross, 900 net, and 100 saved
+
+#### Scenario: Manual percent wins on registration
+
+- GIVEN rule "entrenuts" at 10% and a manual 15% choice on gross 1000
+- WHEN the preview saves
+- THEN INCOME 850 and SAVINGS 150 are created in one transaction
 
 #### Scenario: Compartido never splits
 
@@ -497,7 +534,7 @@ When an INGRESO-type movement registers (from the ➕ Ingreso menu button) and i
 
 #### Scenario: No rule registers whole
 
-- GIVEN an INGRESO matching no savings rule
+- GIVEN an INGRESO matching no savings rule with no manual choice
 - WHEN the preview saves
 - THEN a single whole INCOME movement is created and the reply is the standard confirmation
 

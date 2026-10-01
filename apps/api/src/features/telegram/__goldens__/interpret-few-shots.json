@@ -1,51 +1,11 @@
 [
   {
     "role": "user",
-    "content": "gaste 5 mil en el super"
-  },
-  {
-    "role": "assistant",
-    "content": "{\"intent\":\"register_expense\",\"amount\":5000,\"category\":\"Supermercado\",\"note\":\"super\"}"
-  },
-  {
-    "role": "user",
-    "content": "compre mercaderia"
-  },
-  {
-    "role": "assistant",
-    "content": "{\"intent\":\"register_expense\",\"amount\":null,\"category\":\"Supermercado\",\"note\":\"mercaderia\"}"
-  },
-  {
-    "role": "user",
-    "content": "poné el alquiler como compartido"
-  },
-  {
-    "role": "assistant",
-    "content": "{\"intent\":\"register_expense\",\"amount\":null,\"category\":null,\"note\":\"alquiler\",\"shared\":true}"
-  },
-  {
-    "role": "user",
-    "content": "dejalo para el mes que viene: 2500 alquiler"
-  },
-  {
-    "role": "assistant",
-    "content": "{\"intent\":\"register_expense\",\"amount\":2500,\"category\":null,\"note\":\"alquiler\"}"
-  },
-  {
-    "role": "user",
-    "content": "dejá previsto el alquiler de 2500"
-  },
-  {
-    "role": "assistant",
-    "content": "{\"intent\":\"register_expense\",\"amount\":2500,\"category\":null,\"note\":\"alquiler\"}"
-  },
-  {
-    "role": "user",
     "content": "cuánto gasté este mes?"
   },
   {
     "role": "assistant",
-    "content": "{\"intent\":\"query\",\"amount\":null,\"category\":null,\"note\":null,\"query_type\":\"month\"}"
+    "content": "{\"intent\":\"query\",\"amount\":null,\"note\":null,\"query_type\":\"month\"}"
   },
   {
     "role": "user",
@@ -53,15 +13,7 @@
   },
   {
     "role": "assistant",
-    "content": "{\"intent\":\"query\",\"amount\":null,\"category\":null,\"note\":null,\"query_type\":\"categories\"}"
-  },
-  {
-    "role": "user",
-    "content": "que categorias tengo"
-  },
-  {
-    "role": "assistant",
-    "content": "{\"intent\":\"query\",\"amount\":null,\"category\":null,\"note\":null,\"query_type\":\"categories\"}"
+    "content": "{\"intent\":\"query\",\"amount\":null,\"note\":null,\"query_type\":\"categories\"}"
   },
   {
     "role": "user",
@@ -69,7 +21,7 @@
   },
   {
     "role": "assistant",
-    "content": "{\"intent\":\"query\",\"amount\":null,\"category\":null,\"note\":null,\"query_type\":\"recent\"}"
+    "content": "{\"intent\":\"query\",\"amount\":null,\"note\":null,\"query_type\":\"recent\"}"
   },
   {
     "role": "user",
@@ -77,7 +29,7 @@
   },
   {
     "role": "assistant",
-    "content": "{\"intent\":\"query\",\"amount\":null,\"category\":null,\"note\":null,\"query_type\":\"balance\"}"
+    "content": "{\"intent\":\"query\",\"amount\":null,\"note\":null,\"query_type\":\"balance\"}"
   },
   {
     "role": "user",
@@ -85,7 +37,7 @@
   },
   {
     "role": "assistant",
-    "content": "{\"intent\":\"query\",\"amount\":null,\"category\":null,\"note\":null,\"query_type\":\"savings\"}"
+    "content": "{\"intent\":\"query\",\"amount\":null,\"note\":null,\"query_type\":\"savings\"}"
   },
   {
     "role": "user",
@@ -93,15 +45,7 @@
   },
   {
     "role": "assistant",
-    "content": "{\"intent\":\"query_planned\",\"amount\":null,\"category\":null,\"note\":null}"
-  },
-  {
-    "role": "user",
-    "content": "guarda un ahorro del 10% para entrenuts"
-  },
-  {
-    "role": "assistant",
-    "content": "{\"intent\":\"create_savings_rule\",\"amount\":null,\"category\":\"entrenuts\",\"note\":\"al 10%\"}"
+    "content": "{\"intent\":\"query_planned\",\"amount\":null,\"note\":null}"
   },
   {
     "role": "user",
@@ -109,102 +53,22 @@
   },
   {
     "role": "assistant",
-    "content": "{\"intent\":\"greeting\",\"amount\":null,\"category\":null,\"note\":null}"
+    "content": "{\"intent\":\"greeting\",\"amount\":null,\"note\":null}"
   },
   {
     "role": "user",
-    "content": "de ahora en más uber va a transporte"
+    "content": "que lindo día"
   },
   {
     "role": "assistant",
-    "content": "{\"intent\":\"associate_keyword\",\"amount\":null,\"category\":null,\"note\":null}"
+    "content": "{\"intent\":\"off_topic\",\"amount\":null,\"note\":null}"
   },
   {
     "role": "user",
-    "content": "creá una categoria llamada mascotas"
+    "content": "quiero registrar un gasto"
   },
   {
     "role": "assistant",
-    "content": "{\"intent\":\"create_category\",\"amount\":null,\"category\":\"mascotas\",\"note\":null,\"query_type\":null,\"new_name\":null}"
-  },
-  {
-    "role": "user",
-    "content": "borra la categoria viajes"
-  },
-  {
-    "role": "assistant",
-    "content": "{\"intent\":\"delete_category\",\"amount\":null,\"category\":\"viajes\",\"note\":null,\"query_type\":null,\"new_name\":null}"
-  },
-  {
-    "role": "user",
-    "content": "renombra super a supermercado"
-  },
-  {
-    "role": "assistant",
-    "content": "{\"intent\":\"rename_category\",\"amount\":null,\"category\":\"super\",\"note\":null,\"query_type\":null,\"new_name\":\"supermercado\"}"
-  },
-  {
-    "role": "user",
-    "content": "podes borrar categorias?"
-  },
-  {
-    "role": "assistant",
-    "content": "{\"intent\":\"capabilities\",\"amount\":null,\"category\":null,\"note\":null,\"query_type\":null,\"new_name\":null}"
-  },
-  {
-    "role": "user",
-    "content": "5000"
-  },
-  {
-    "role": "assistant",
-    "content": "{\"intent\":\"correct_amount\",\"amount\":5000,\"category\":null,\"note\":null}"
-  },
-  {
-    "role": "user",
-    "content": "ya lo pagué"
-  },
-  {
-    "role": "assistant",
-    "content": "{\"intent\":\"mark_paid\",\"amount\":null,\"category\":null,\"note\":null}"
-  },
-  {
-    "role": "user",
-    "content": "el previsto de alquiler lo pagué"
-  },
-  {
-    "role": "assistant",
-    "content": "{\"intent\":\"mark_paid\",\"amount\":null,\"category\":\"alquiler\",\"note\":null}"
-  },
-  {
-    "role": "user",
-    "content": "ya lo pagué, los 2500"
-  },
-  {
-    "role": "assistant",
-    "content": "{\"intent\":\"mark_paid\",\"amount\":2500,\"category\":null,\"note\":null}"
-  },
-  {
-    "role": "user",
-    "content": "borra ese gasto"
-  },
-  {
-    "role": "assistant",
-    "content": "{\"intent\":\"delete_expense\",\"amount\":null,\"category\":null,\"note\":null}"
-  },
-  {
-    "role": "user",
-    "content": "borra el de cafe"
-  },
-  {
-    "role": "assistant",
-    "content": "{\"intent\":\"delete_expense\",\"amount\":null,\"category\":\"cafe\",\"note\":null}"
-  },
-  {
-    "role": "user",
-    "content": "marcá pagado el gasto de 2500"
-  },
-  {
-    "role": "assistant",
-    "content": "{\"intent\":\"mark_paid\",\"amount\":2500,\"category\":null,\"note\":null}"
+    "content": "{\"intent\":\"off_topic\",\"amount\":null,\"note\":null}"
   }
 ]

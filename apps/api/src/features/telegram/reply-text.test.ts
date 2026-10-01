@@ -14,6 +14,7 @@ import {
   categoryCommandReplyTemplate,
   categoryCreatedReassignedReply,
   categoryCreatedReply,
+  categoryCrudRedirectReply,
   categoryDeletedReply,
   categoryErrorReply,
   categoryFollowUpReply,
@@ -125,6 +126,13 @@ describe("reply builders", () => {
     expect(text).toContain("asociar palabra");
     expect(text).toContain("listar categorias");
     expect(text).toContain("configurar categorias");
+  });
+
+  it("redirects legacy text category CRUD to the 🗂 button flow", () => {
+    const text = categoryCrudRedirectReply();
+
+    expect(text).toContain("Administrar categorías");
+    expect(text).toContain("🗂");
   });
 
 it("builds the setup question", () => {

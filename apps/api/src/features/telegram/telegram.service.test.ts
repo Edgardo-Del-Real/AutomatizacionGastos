@@ -19,6 +19,7 @@ import {
   callbackUnavailableReply,
   capturePromptReply,
   categoryButtonsReply,
+  categoryCrudRedirectReply,
   collectAbandonedReply,
   correctionAbandonedReply,
   correctionDoneReply,
@@ -2411,87 +2412,45 @@ describe("TelegramService commands", () => {
     h = makeHarness();
   });
 
-  it("creates a category via 'registrar categoria: X'", async () => {
+  it("redirects legacy 'registrar categoria: X' to the 🗂 flow and creates nothing", async () => {
     await h.service.handleUpdate(textUpdate({ text: "registrar categoria: Salud", messageId: 1 }), h.reply);
 
-    expect(h.mockCreateCategory).toHaveBeenCalledWith(ownerId, "Salud");
-    expect(h.replies.at(-1)).toContain("Salud");
+    expect(h.mockCreateCategory).not.toHaveBeenCalled();
+    expect(h.replies.at(-1)).toBe(categoryCrudRedirectReply());
   });
 
-  it("redirects a reserved 'registrar categoria: previsto' with the previsto teaching and creates nothing", async () => {
-    h.mockCreateCategory.mockRejectedValue(
-      new ReservedCategoryError('Category "previsto" is the reserved concept "previsto"', "previsto"),
-    );
-
+  it("redirects a reserved-name 'registrar categoria: previsto' without touching the category service", async () => {
     await h.service.handleUpdate(textUpdate({ text: "registrar categoria: previsto", messageId: 1 }), h.reply);
 
-    expect(h.mockCreateCategory).toHaveBeenCalledWith(ownerId, "previsto");
-    expect(h.replies.at(-1)).toBe(reservedCategoryReply("previsto", "previsto"));
-    expect(h.replies.at(-1)).toContain("previsto: <monto> <nota>");
+    expect(h.mockCreateCategory).not.toHaveBeenCalled();
+    expect(h.replies.at(-1)).toBe(categoryCrudRedirectReply());
   });
 
-  it.each([
-    ["gasto provisorio", "previsto"],
-    ["provisorios", "previsto"],
-  ])("redirects the provisorio alias 'registrar categoria: %s' with the previsto teaching and creates nothing", async (name, concept) => {
-    h.mockCreateCategory.mockRejectedValue(
-      new ReservedCategoryError(`Category "${name}" is the reserved concept "${concept}"`, concept as "previsto"),
-    );
-
-    await h.service.handleUpdate(textUpdate({ text: `registrar categoria: ${name}`, messageId: 1 }), h.reply);
-
-    expect(h.mockCreateCategory).toHaveBeenCalledWith(ownerId, name);
-    expect(h.replies.at(-1)).toBe(reservedCategoryReply(name, concept as "previsto"));
-    expect(h.replies.at(-1)).toContain("previsto: <monto> <nota>");
-  });
-
-  it("creates 'un otro gasto' through the command path (real concept words inside names stay creatable)", async () => {
+  it("redirects 'registrar categoria: un otro gasto' and never creates", async () => {
     await h.service.handleUpdate(textUpdate({ text: "registrar categoria: un otro gasto", messageId: 1 }), h.reply);
 
-    expect(h.mockCreateCategory).toHaveBeenCalledWith(ownerId, "un otro gasto");
-    expect(h.replies.at(-1)).toContain("un otro gasto");
+    expect(h.mockCreateCategory).not.toHaveBeenCalled();
+    expect(h.replies.at(-1)).toBe(categoryCrudRedirectReply());
   });
 
-  it("redirects a reserved 'renombrar categoria: X a: ahorros' with the ahorro teaching", async () => {
-    h.mockRenameCategory.mockRejectedValue(
-      new ReservedCategoryError('Category "ahorros" is the reserved concept "ahorro"', "ahorro"),
-    );
-
+  it("redirects legacy 'renombrar categoria: X a: Y' and never renames", async () => {
     await h.service.handleUpdate(
       textUpdate({ text: "renombrar categoria: Guardado a: ahorros", messageId: 1 }),
       h.reply,
     );
 
-    expect(h.mockRenameCategory).toHaveBeenCalledWith(ownerId, "Guardado", "ahorros");
-    expect(h.replies.at(-1)).toBe(reservedCategoryReply("ahorros", "ahorro"));
-    expect(h.replies.at(-1)).toContain("registrar ahorro");
+    expect(h.mockRenameCategory).not.toHaveBeenCalled();
+    expect(h.replies.at(-1)).toBe(categoryCrudRedirectReply());
   });
 
-  it("renames a category via 'renombrar categoria: X a: Y'", async () => {
-    h.mockRenameCategory.mockResolvedValue({
-      id: "c1",
-      ownerId,
-      name: "Cafeteria",
-      createdAt: new Date(),
-    });
-
-    await h.service.handleUpdate(
-      textUpdate({ text: "renombrar categoria: Cafe a: Cafeteria", messageId: 1 }),
-      h.reply,
-    );
-
-    expect(h.mockRenameCategory).toHaveBeenCalledWith(ownerId, "Cafe", "Cafeteria");
-    expect(h.replies.at(-1)).toContain("Cafeteria");
-  });
-
-  it("associates a keyword via 'asociar palabra: P a categoria: X'", async () => {
+  it("redirects legacy 'asociar palabra: P a categoria: X' and never associates", async () => {
     await h.service.handleUpdate(
       textUpdate({ text: "asociar palabra: uber a categoria: Transporte", messageId: 1 }),
       h.reply,
     );
 
-    expect(h.mockAssociateKeyword).toHaveBeenCalledWith(ownerId, "uber", "Transporte");
-    expect(h.replies.at(-1)).toContain("uber");
+    expect(h.mockAssociateKeyword).not.toHaveBeenCalled();
+    expect(h.replies.at(-1)).toBe(categoryCrudRedirectReply());
   });
 
   it("lists categories via 'listar categorias'", async () => {

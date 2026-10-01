@@ -36,7 +36,7 @@ import {
 } from "./movement-lifecycle-executor";
 import { QueryExecutor } from "./query-executor";
 import { deriveQueryType, type PlannedQueryResult, type QueryExecutionResult } from "./query.types";
-import { parseCommand, parseSetupBatchCommand, type TelegramCommand } from "./telegram.commands";
+import { parseCommand, parseLegacyCategoryCrud, parseSetupBatchCommand, type TelegramCommand } from "./telegram.commands";
 import { normalizeTelegramMessage, normalizeTelegramCallback, parseArrivalPrefixes, parseSavingsOverride, quickCaptureParse, buildCallbackData, type InlineButton, type InlineKeyboard, type QuickCapture, type TelegramCallback } from "./telegram.parser";
 import {
   amountConfirmationAbandonedReply,
@@ -52,6 +52,7 @@ import {
   categoryCommandReplyTemplate,
   categoryCreatedReassignedReply,
   categoryCreatedReply,
+  categoryCrudRedirectReply,
   categoryErrorReply,
   categoryFollowUpReply,
   categoryListReply,
@@ -364,6 +365,16 @@ export class TelegramService {
     const command = parseCommand(body);
     if (command !== null) {
       await this.handleCommand(command, ownerId, reply);
+      return;
+    }
+
+    // v2 — legacy text category-CRUD (`registrar categoria:`, `renombrar
+    // categoria:`, `asociar palabra:`) is NOT commands anymore: an educational
+    // redirect teaches the 🗂 Administrar categorías button and nothing is
+    // created, renamed or associated (spec telegram-bot "Bot Commands"). Zero
+    // LLM, zero state change.
+    if (parseLegacyCategoryCrud(body) !== null) {
+      await this.safeReply(reply, categoryCrudRedirectReply());
       return;
     }
 
@@ -2841,60 +2852,6 @@ private async handleDialogMessage(
 
   private async handleCommand(command: TelegramCommand, ownerId: string, reply?: ReplyPort): Promise<void> {
     switch (command.type) {
-      case "register": {
-        try {
-          await this.deps.categoryService.createCategory(ownerId, command.name);
-        } catch (error) {
-          if (error instanceof ReservedCategoryError) {
-            await this.safeReply(reply, reservedCategoryReply(command.name, error.concept));
-            return;
-          }
-          if (error instanceof ValidationFailedError) {
-            await this.safeReply(reply, duplicateCategoryReply(command.name));
-            return;
-          }
-          throw error;
-        }
-        await this.safeReply(reply, categoryCreatedReply(command.name));
-        return;
-      }
-
-      case "rename": {
-        try {
-          const renamed = await this.deps.categoryService.renameCategory(ownerId, command.from, command.to);
-          if (renamed === null) {
-            await this.safeReply(reply, missingCategoryReply(command.from));
-            return;
-          }
-        } catch (error) {
-          if (error instanceof ReservedCategoryError) {
-            await this.safeReply(reply, reservedCategoryReply(command.to, error.concept));
-            return;
-          }
-          if (error instanceof ValidationFailedError) {
-            await this.safeReply(reply, duplicateCategoryReply(command.to));
-            return;
-          }
-          throw error;
-        }
-        await this.safeReply(reply, categoryRenamedReply(command.from, command.to));
-        return;
-      }
-
-      case "associate": {
-        try {
-          await this.deps.categoryService.associateKeyword(ownerId, command.keyword, command.category);
-        } catch (error) {
-          if (error instanceof NotFoundError) {
-            await this.safeReply(reply, missingCategoryReply(command.category));
-            return;
-          }
-          throw error;
-        }
-        await this.safeReply(reply, keywordAssociatedReply(command.keyword, command.category));
-        return;
-      }
-
       case "list": {
         const categories = await this.deps.categoryService.listCategories(ownerId);
         await this.safeReply(reply, categoryListReply(categories));

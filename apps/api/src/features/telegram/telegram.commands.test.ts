@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseCommand, parseSetupBatchCommand } from "./telegram.commands";
+import { parseCommand, parseLegacyCategoryCrud, parseSetupBatchCommand } from "./telegram.commands";
 
 describe("parseCommand (D12 normalization)", () => {
   it("normalizes a leading slash on the menu command", () => {
@@ -28,41 +28,8 @@ describe("parseCommand (D12 normalization)", () => {
 });
 
 describe("parseCommand", () => {
-  it("parses 'registrar categoria: X' preserving the original spelling", () => {
-    expect(parseCommand("registrar categoria: Salud")).toEqual({
-      type: "register",
-      name: "Salud",
-    });
-  });
-
-  it("recognizes accented command keywords ('categoría')", () => {
-    expect(parseCommand("registrar categoría: Café")).toEqual({
-      type: "register",
-      name: "Café",
-    });
-  });
-
   it("is case-insensitive", () => {
-    expect(parseCommand("REGISTRAR CATEGORIA: Salud")).toEqual({
-      type: "register",
-      name: "Salud",
-    });
-  });
-
-  it("parses 'renombrar categoria: X a: Y'", () => {
-    expect(parseCommand("renombrar categoria: Cafe a: Cafeteria")).toEqual({
-      type: "rename",
-      from: "Cafe",
-      to: "Cafeteria",
-    });
-  });
-
-  it("parses 'asociar palabra: P a categoria: X'", () => {
-    expect(parseCommand("asociar palabra: uber a categoria: Transporte")).toEqual({
-      type: "associate",
-      keyword: "uber",
-      category: "Transporte",
-    });
+    expect(parseCommand("listar categorias")).toEqual({ type: "list" });
   });
 
   it("parses 'listar categorias'", () => {
@@ -104,12 +71,48 @@ describe("parseCommand", () => {
     expect(parseCommand("registrar")).toBeNull();
   });
 
-  it("falls through to null for an empty name value", () => {
+  it("falls through to null for empty name values", () => {
     expect(parseCommand("registrar categoria:")).toBeNull();
   });
 
   it("falls through to null for arbitrary text", () => {
     expect(parseCommand("hola que tal")).toBeNull();
+  });
+});
+
+describe("parseLegacyCategoryCrud (v2 detection-only)", () => {
+  it("detects 'registrar categoria: X' as legacy CRUD", () => {
+    expect(parseLegacyCategoryCrud("registrar categoria: Salud")).toEqual({ kind: "register" });
+  });
+
+  it("recognizes accented and case-insensitive create keywords", () => {
+    expect(parseLegacyCategoryCrud("REGISTRAR CATEGORÍA: Café")).toEqual({ kind: "register" });
+  });
+
+  it("detects 'renombrar categoria: X a: Y' as legacy CRUD", () => {
+    expect(parseLegacyCategoryCrud("renombrar categoria: Cafe a: Cafeteria")).toEqual({ kind: "rename" });
+  });
+
+  it("detects 'asociar palabra: P a categoria: X' as legacy CRUD", () => {
+    expect(parseLegacyCategoryCrud("asociar palabra: uber a categoria: Transporte")).toEqual({ kind: "associate" });
+  });
+
+  it("returns null for the v2 savings-rule command", () => {
+    expect(parseLegacyCategoryCrud("registrar ahorro: entrenuts al 10%")).toBeNull();
+  });
+
+  it("returns null for a v2 command", () => {
+    expect(parseLegacyCategoryCrud("listar categorias")).toBeNull();
+    expect(parseLegacyCategoryCrud("menu")).toBeNull();
+  });
+
+  it("returns null for an empty name value", () => {
+    expect(parseLegacyCategoryCrud("registrar categoria:")).toBeNull();
+  });
+
+  it("returns null for plain text", () => {
+    expect(parseLegacyCategoryCrud("$2000 supermercado")).toBeNull();
+    expect(parseLegacyCategoryCrud("hola que tal")).toBeNull();
   });
 });
 

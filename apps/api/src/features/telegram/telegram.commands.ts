@@ -1,9 +1,6 @@
 import { normalizeForMatch } from "../categories/matcher";
 
 export type TelegramCommand =
-  | { type: "register"; name: string }
-  | { type: "rename"; from: string; to: string }
-  | { type: "associate"; keyword: string; category: string }
   | { type: "list" }
   | { type: "configurar" }
   | { type: "menu" }
@@ -22,6 +19,39 @@ const MENU_RE = /^\s*menu\s*$/;
 const START_RE = /^\s*start\s*$/;
 const AYUDA_RE = /^\s*ayuda\s*$/;
 const SAVINGS_RULE_RE = /^\s*registrar\s+ahorro\s*:\s*(.+?)\s+al\s+(-?\d+(?:[.,]\d+)?)%\s*$/;
+
+/**
+ * v2 — detection-only classifier for the legacy text category-CRUD commands
+ * (design D8, spec telegram-bot "Bot Commands"): `registrar categoria:`,
+ * `renombrar categoria:` and `asociar palabra:` MUST NOT be recognized as
+ * commands anymore — a message carrying one gets the educational redirect to
+ * the 🗂 Administrar categorías button and never creates or renames anything.
+ * Returns the kind (never the values: detection-only, nothing is stripped or
+ * executed). Same regexes and non-empty guards as the former command branches.
+ */
+export type LegacyCategoryCrud = { kind: "register" | "rename" | "associate" };
+
+export function parseLegacyCategoryCrud(text: string): LegacyCategoryCrud | null {
+  const syntaxNormalized = normalizeCommandSyntax(text);
+  const normalized = normalizeForMatch(syntaxNormalized);
+
+  const register = REGISTER_RE.exec(normalized);
+  if (register !== null && register[1] !== undefined && register[1].length > 0) {
+    return { kind: "register" };
+  }
+
+  const rename = RENAME_RE.exec(normalized);
+  if (rename !== null) {
+    return { kind: "rename" };
+  }
+
+  const associate = ASSOCIATE_RE.exec(normalized);
+  if (associate !== null) {
+    return { kind: "associate" };
+  }
+
+  return null;
+}
 
 /**
  * D12 — normalizes a leading `/` (bot-command syntax) and `_`→space before
@@ -61,29 +91,6 @@ export function parseCommand(text: string): TelegramCommand | null {
   }
   if (AYUDA_RE.test(normalized)) {
     return { type: "ayuda" };
-  }
-
-  const register = REGISTER_RE.exec(normalized);
-  if (register !== null && register[1] !== undefined && register[1].length > 0) {
-    return { type: "register", name: sliceFromOriginal(syntaxNormalized, normalized, register[1]) };
-  }
-
-  const rename = RENAME_RE.exec(normalized);
-  if (rename !== null) {
-    return {
-      type: "rename",
-      from: sliceFromOriginal(syntaxNormalized, normalized, rename[1]!),
-      to: sliceFromOriginal(syntaxNormalized, normalized, rename[2]!),
-    };
-  }
-
-  const associate = ASSOCIATE_RE.exec(normalized);
-  if (associate !== null) {
-    return {
-      type: "associate",
-      keyword: sliceFromOriginal(syntaxNormalized, normalized, associate[1]!),
-      category: sliceFromOriginal(syntaxNormalized, normalized, associate[2]!),
-    };
   }
 
   const savingsRule = SAVINGS_RULE_RE.exec(normalized);

@@ -326,6 +326,17 @@ export function associateKeywordRedirectReply(): string {
   return "Para asociar una palabra a una categoría usá el comando: asociar palabra: P a categoria: X.";
 }
 
+/**
+ * v2 — educational redirect for legacy text category-CRUD commands (spec
+ * telegram-bot "Bot Commands"): `registrar categoria:`, `renombrar
+ * categoria:` and `asociar palabra:` are NOT commands anymore; a message
+ * carrying one teaches the 🗂 Administrar categorías button and never creates
+ * or renames anything.
+ */
+export function categoryCrudRedirectReply(): string {
+  return "Para crear, renombrar o asociar categorías usá el botón 🗂 Administrar categorías del menú.";
+}
+
 export function offTopicRedirectReply(): string {
   return "Solo registro gastos e ingresos: mandá el monto con una nota (ej: $2500 supermercado) y lo cargo al toque.";
 }

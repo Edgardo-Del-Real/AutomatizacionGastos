@@ -220,6 +220,23 @@ describe("createTelegramBot (offline reply recording)", () => {
     expect(String(sendMessage?.payload?.text)).toContain("supermercado");
   });
 
+  it("attaches the five-button inline keyboard to /start (D2 message reply port)", async () => {
+    await expect(h.bot.handleUpdate(textUpdate({ text: "/start" }))).resolves.toBeUndefined();
+
+    const sendMessage = h.recorded.find((call) => call.method === "sendMessage");
+    expect(sendMessage).toBeDefined();
+    const markup = sendMessage?.payload?.reply_markup as { inline_keyboard: { text: string; callback_data: string }[][] };
+    expect(markup?.inline_keyboard).toHaveLength(5);
+    expect(markup?.inline_keyboard.map((row) => row[0]?.text)).toEqual([
+      "Nuevo gasto",
+      "Gasto previsto",
+      "Borrar",
+      "Reporte",
+      "Ayuda",
+    ]);
+    expect(markup?.inline_keyboard.map((row) => row[0]?.callback_data)).toEqual(["m:new", "m:prev", "m:del", "m:rep", "m:help"]);
+  });
+
   it("processes an owner text update with zero network calls", async () => {
     await expect(h.bot.handleUpdate(textUpdate())).resolves.toBeUndefined();
 

@@ -68,9 +68,7 @@ export function createTelegramBot(token: string, service: TelegramService): Bot 
   const bot = new Bot(token);
 
   bot.on("message", (ctx) =>
-    service.handleUpdate(ctx.update, async (text) => {
-      await ctx.reply(text);
-    }),
+    service.handleUpdate(ctx.update, buildReplyPort(ctx)),
   );
 
   // D4 — the callback channel: parse the callback through the service's

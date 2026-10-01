@@ -47,7 +47,17 @@ import {
   questionDroppedReply,
   reportsMenuReply,
   reservedCategoryReply,
+  savingsAdminReply,
   savingsOverrideRedirectReply,
+  savingsRuleDeletedReply,
+  savingsRuleDeleteConfirmReply,
+  savingsRuleDeletePickReply,
+  savingsRuleDefinedReply,
+  savingsRuleGoneReply,
+  savingsRuleInvalidReply,
+  savingsRuleMissingReply,
+  savingsRulePromptReply,
+  savingsRulesListReply,
   selectionAbandonedReply,
   setupQuestionReply,
   successReply,
@@ -57,6 +67,7 @@ import {
   capturePayloadSchema,
   categoryNamePayloadSchema,
   previewPayloadSchema,
+  savingsRuleDeletePayloadSchema,
   TelegramService,
 } from "./telegram.service";
 import { BOT_STATES } from "./bot-state.repository";
@@ -115,6 +126,8 @@ type Harness = {
   mockEnsureAhorro: ReturnType<typeof vi.fn>;
   mockResolveSplit: ReturnType<typeof vi.fn>;
   mockDefineRule: ReturnType<typeof vi.fn>;
+  mockListRules: ReturnType<typeof vi.fn>;
+  mockDeleteRule: ReturnType<typeof vi.fn>;
   mockCreateIncomeWithSavings: ReturnType<typeof vi.fn>;
   mockSetState: ReturnType<typeof vi.fn>;
   mockBrainInterpret: ReturnType<typeof vi.fn>;
@@ -232,6 +245,8 @@ function makeHarness(options?: { noBrain?: boolean }): Harness {
       net: gross - (gross * percent) / 100,
       savings: (gross * percent) / 100,
     })),
+    listRules: vi.fn(async () => []),
+    deleteRule: vi.fn(async () => null),
   } as unknown as SavingsRuleService;
   const botStateRepository = {
     get: vi.fn(async () => storedState),
@@ -284,6 +299,8 @@ function makeHarness(options?: { noBrain?: boolean }): Harness {
     mockEnsureAhorro: vi.mocked(categoryService.ensureAhorro),
     mockResolveSplit: vi.mocked(savingsService.resolveSplit),
     mockDefineRule: vi.mocked(savingsService.defineRule),
+    mockListRules: vi.mocked(savingsService.listRules),
+    mockDeleteRule: vi.mocked(savingsService.deleteRule),
     mockCreateIncomeWithSavings: vi.mocked(expenseService.createIncomeWithSavings),
     mockSetState: vi.mocked(botStateRepository.set),
     mockBrainInterpret: vi.mocked(brain?.interpret ?? vi.fn()),
@@ -1370,6 +1387,214 @@ describe("TelegramService commands (v2 surface)", () => {
 
     expect(h.mockDefineRule).not.toHaveBeenCalled();
     expect(h.replies.at(-1)).toContain("0");
+  });
+});
+
+describe("TelegramService savings admin sub-menu (sa:*) and delete gate (svdel:*)", () => {
+  let h: Harness;
+
+  beforeEach(() => {
+    h = makeHarness();
+    seedHarnessCategories(h, ["Cafe"]);
+  });
+
+  it("sa:menu supersedes any pending flow and opens the three-action sub-menu", async () => {
+    await h.service.handleCallback(callbackUpdate({ data: "m:inc" }), h.reply);
+
+    await h.service.handleCallback(callbackUpdate({ data: "sa:menu" }), h.reply);
+
+    const state = await h.botStateRepository.get(ownerId);
+    expect(state?.state).toBe("idle");
+    expect(h.replies.at(-1)).toBe(savingsAdminReply());
+    const kb = h.keyboards.at(-1) as InlineKeyboard;
+    expect(kb.map((row) => row[0]?.callback_data)).toEqual(["sa:new", "sa:list", "sa:del"]);
+  });
+
+  it("sa:new enters awaiting_savings_rule with the syntax prompt", async () => {
+    await h.service.handleCallback(callbackUpdate({ data: "sa:new" }), h.reply);
+
+    const state = await h.botStateRepository.get(ownerId);
+    expect(state?.state).toBe("awaiting_savings_rule");
+    expect(h.replies.at(-1)).toBe(savingsRulePromptReply());
+  });
+
+  it("sa:list replies the owner's rules and returns to the menu", async () => {
+    h.mockListRules.mockResolvedValue([
+      { id: "r1", ownerId, keyword: "entrenuts", percent: 10, createdAt: new Date() },
+      { id: "r2", ownerId, keyword: "sueldo", percent: 5, createdAt: new Date() },
+    ]);
+
+    await h.service.handleCallback(callbackUpdate({ data: "sa:list" }), h.reply);
+
+    expect(h.mockListRules).toHaveBeenCalledWith(ownerId);
+    expect(h.replies.at(-2)).toBe(savingsRulesListReply([
+      { keyword: "entrenuts", percent: 10 },
+      { keyword: "sueldo", percent: 5 },
+    ]));
+    expect(h.replies.at(-1)).toBe(menuReply());
+  });
+
+  it("sa:del with no rules replies the empty list and returns to the menu", async () => {
+    h.mockListRules.mockResolvedValue([]);
+
+    await h.service.handleCallback(callbackUpdate({ data: "sa:del" }), h.reply);
+
+    expect(h.replies.at(-2)).toBe(savingsRulesListReply([]));
+    expect(h.replies.at(-1)).toBe(menuReply());
+  });
+
+  it("sa:del renders the rules as pick buttons sa:dl:<id>", async () => {
+    h.mockListRules.mockResolvedValue([
+      { id: "rule-abc", ownerId, keyword: "entrenuts", percent: 10, createdAt: new Date() },
+    ]);
+
+    await h.service.handleCallback(callbackUpdate({ data: "sa:del" }), h.reply);
+
+    expect(h.replies.at(-1)).toBe(savingsRuleDeletePickReply([{ keyword: "entrenuts", percent: 10 }]));
+    const kb = h.keyboards.at(-1) as InlineKeyboard;
+    expect(kb[0]?.[0]?.callback_data).toBe("sa:dl:rule-abc");
+  });
+
+  it("sa:dl:<id> enters awaiting_savings_delete with the rule persisted and shows the confirm gate", async () => {
+    h.mockListRules.mockResolvedValue([
+      { id: "rule-abc", ownerId, keyword: "entrenuts", percent: 10, createdAt: new Date() },
+    ]);
+
+    await h.service.handleCallback(callbackUpdate({ data: "sa:dl:rule-abc" }), h.reply);
+
+    const state = await h.botStateRepository.get(ownerId);
+    expect(state?.state).toBe("awaiting_savings_delete");
+    const payload = savingsRuleDeletePayloadSchema.parse(JSON.parse(state?.pendingNote ?? "{}"));
+    expect(payload.rule).toMatchObject({ id: "rule-abc", keyword: "entrenuts", percent: 10 });
+    expect(h.replies.at(-1)).toBe(savingsRuleDeleteConfirmReply("entrenuts", 10));
+    const kb = h.keyboards.at(-1) as InlineKeyboard;
+    expect(kb[0]?.map((button) => button.callback_data)).toEqual(["svdel:no:rule-abc", "svdel:ok:rule-abc"]);
+  });
+
+  it("a stale sa:dl pick of a deleted rule replies gone (stateless pick)", async () => {
+    h.mockListRules.mockResolvedValue([]);
+
+    await h.service.handleCallback(callbackUpdate({ data: "sa:dl:rule-gone" }), h.reply);
+
+    expect(h.replies.at(-1)).toBe(savingsRuleGoneReply());
+    expect(h.replies.at(-1)).not.toBe(menuReply());
+  });
+
+  it("svdel:ok deletes the persisted rule (idle first), confirms and returns to the menu", async () => {
+    h.mockListRules.mockResolvedValue([
+      { id: "rule-abc", ownerId, keyword: "entrenuts", percent: 10, createdAt: new Date() },
+    ]);
+    h.mockDeleteRule.mockResolvedValue({ id: "rule-abc", ownerId, keyword: "entrenuts", percent: 10, createdAt: new Date() });
+    await h.service.handleCallback(callbackUpdate({ data: "sa:dl:rule-abc" }), h.reply);
+
+    await h.service.handleCallback(callbackUpdate({ data: "svdel:ok:rule-abc" }), h.reply);
+
+    expect(h.mockDeleteRule).toHaveBeenCalledWith(ownerId, "entrenuts");
+    const state = await h.botStateRepository.get(ownerId);
+    expect(state?.state).toBe("idle");
+    expect(h.replies.at(-2)).toBe(savingsRuleDeletedReply("entrenuts"));
+    expect(h.replies.at(-1)).toBe(menuReply());
+  });
+
+  it("svdel:ok on a rule deleted meanwhile replies missing and returns to the menu", async () => {
+    h.mockListRules.mockResolvedValue([
+      { id: "rule-abc", ownerId, keyword: "entrenuts", percent: 10, createdAt: new Date() },
+    ]);
+    h.mockDeleteRule.mockResolvedValue(null);
+    await h.service.handleCallback(callbackUpdate({ data: "sa:dl:rule-abc" }), h.reply);
+
+    await h.service.handleCallback(callbackUpdate({ data: "svdel:ok:rule-abc" }), h.reply);
+
+    expect(h.mockDeleteRule).toHaveBeenCalledWith(ownerId, "entrenuts");
+    expect(h.replies.at(-2)).toBe(savingsRuleMissingReply("entrenuts"));
+    expect(h.replies.at(-1)).toBe(menuReply());
+  });
+
+  it("svdel:no cancels (idle, nothing deleted) and returns to the menu", async () => {
+    h.mockListRules.mockResolvedValue([
+      { id: "rule-abc", ownerId, keyword: "entrenuts", percent: 10, createdAt: new Date() },
+    ]);
+    await h.service.handleCallback(callbackUpdate({ data: "sa:dl:rule-abc" }), h.reply);
+
+    await h.service.handleCallback(callbackUpdate({ data: "svdel:no:rule-abc" }), h.reply);
+
+    expect(h.mockDeleteRule).not.toHaveBeenCalled();
+    const state = await h.botStateRepository.get(ownerId);
+    expect(state?.state).toBe("idle");
+    expect(h.replies.at(-2)).toBe(deleteCancelledReply());
+    expect(h.replies.at(-1)).toBe(menuReply());
+  });
+
+  it("gates svdel by state+rule id: a mismatched confirm replies already processed", async () => {
+    h.mockListRules.mockResolvedValue([
+      { id: "rule-abc", ownerId, keyword: "entrenuts", percent: 10, createdAt: new Date() },
+    ]);
+    await h.service.handleCallback(callbackUpdate({ data: "sa:dl:rule-abc" }), h.reply);
+
+    await h.service.handleCallback(callbackUpdate({ data: "svdel:ok:rule-other" }), h.reply);
+
+    expect(h.mockDeleteRule).not.toHaveBeenCalled();
+    expect(h.replies.at(-1)).toBe(alreadyProcessedReply());
+  });
+
+  it("a savings command during awaiting_savings_rule closes the state, executes and appends the menu", async () => {
+    await h.service.handleCallback(callbackUpdate({ data: "sa:new" }), h.reply);
+
+    await h.service.handleUpdate(textUpdate({ text: "registrar ahorro: entrenuts al 10%", messageId: 2 }), h.reply);
+
+    expect(h.mockDefineRule).toHaveBeenCalledWith(ownerId, "entrenuts", 10);
+    const state = await h.botStateRepository.get(ownerId);
+    expect(state?.state).toBe("idle");
+    expect(h.replies.at(-2)).toBe(savingsRuleDefinedReply("entrenuts", 10));
+    expect(h.replies.at(-1)).toBe(menuReply());
+  });
+
+  it("non-command text during awaiting_savings_rule re-prompts and keeps the state", async () => {
+    await h.service.handleCallback(callbackUpdate({ data: "sa:new" }), h.reply);
+
+    await h.service.handleUpdate(textUpdate({ text: "entrenuts 10", messageId: 2 }), h.reply);
+
+    const state = await h.botStateRepository.get(ownerId);
+    expect(state?.state).toBe("awaiting_savings_rule");
+    expect(h.replies.at(-1)).toBe(savingsRulePromptReply());
+  });
+
+  it("an invalid-percent command during awaiting_savings_rule closes the state with the invalid reply and the menu", async () => {
+    await h.service.handleCallback(callbackUpdate({ data: "sa:new" }), h.reply);
+
+    await h.service.handleUpdate(textUpdate({ text: "registrar ahorro: entrenuts al 0%", messageId: 2 }), h.reply);
+
+    expect(h.mockDefineRule).not.toHaveBeenCalled();
+    const state = await h.botStateRepository.get(ownerId);
+    expect(state?.state).toBe("idle");
+    expect(h.replies.at(-2)).toBe(savingsRuleInvalidReply());
+    expect(h.replies.at(-1)).toBe(menuReply());
+  });
+
+  it("a savings command during awaiting_savings_percent closes the state and appends the menu", async () => {
+    await h.service.handleCallback(callbackUpdate({ data: "m:inc" }), h.reply);
+    await h.service.handleUpdate(textUpdate({ text: "cobro sueldo 1000", messageId: 2 }), h.reply);
+    const state = await h.botStateRepository.get(ownerId);
+    const payload = previewPayloadSchema.parse(JSON.parse(state?.pendingNote ?? "{}"));
+    await h.service.handleCallback(callbackUpdate({ data: "cat:c0" }), h.reply);
+    await h.service.handleCallback(callbackUpdate({ data: `sv:other:${payload.saveToken}` }), h.reply);
+
+    await h.service.handleUpdate(textUpdate({ text: "listar ahorros", messageId: 3 }), h.reply);
+
+    expect(h.mockListRules).toHaveBeenCalledWith(ownerId);
+    const after = await h.botStateRepository.get(ownerId);
+    expect(after?.state).toBe("idle");
+    expect(h.replies.at(-2)).toBe(savingsRulesListReply([]));
+    expect(h.replies.at(-1)).toBe(menuReply());
+  });
+
+  it("borrar ahorro: <palabra> deletes the rule with the confirmation and no menu from idle", async () => {
+    h.mockDeleteRule.mockResolvedValue({ id: "r1", ownerId, keyword: "entrenuts", percent: 10, createdAt: new Date() });
+
+    await h.service.handleUpdate(textUpdate({ text: "borrar ahorro: entrenuts", messageId: 1 }), h.reply);
+
+    expect(h.mockDeleteRule).toHaveBeenCalledWith(ownerId, "entrenuts");
+    expect(h.replies.at(-1)).toBe(savingsRuleDeletedReply("entrenuts"));
   });
 });
 

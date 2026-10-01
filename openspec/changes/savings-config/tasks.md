@@ -56,8 +56,8 @@ Chain strategy: pending
 
 ## Phase 5: Savings Admin `sa:*` + States
 
-- [ ] 5.1 RED `telegram.service.test.ts`: `sa:*`/`svdel:*`, stale pick, close
-- [ ] 5.2 GREEN `telegram.service.ts`+`bot-state.repository.ts`: handlers + 3 states
+- [x] 5.1 RED `telegram.service.test.ts`: `sa:*`/`svdel:*`, stale pick, close
+- [x] 5.2 GREEN `telegram.service.ts`+`bot-state.repository.ts`: handlers + 3 states
 
 ## Phase 6: Commands + Help
 

@@ -71,10 +71,18 @@ import {
   reportsMenuReply,
   reservedCategoryReply,
   savingsOverrideRedirectReply,
+  savingsAdminReply,
   savingsPercentInvalidReply,
   savingsPercentPromptReply,
   savingsRuleDefinedReply,
+  savingsRuleDeletedReply,
+  savingsRuleDeleteConfirmReply,
+  savingsRuleDeletePickReply,
+  savingsRuleGoneReply,
   savingsRuleInvalidReply,
+  savingsRuleMissingReply,
+  savingsRulePromptReply,
+  savingsRulesListReply,
   selectionAbandonedReply,
   type SavingsChoice,
   setupBatchDoneReply,
@@ -125,10 +133,11 @@ const AWAITING_CATEGORY_NAME = "awaiting_category_name";
 const AWAITING_MOVEMENT_SELECTION = "awaiting_movement_selection";
 const AWAITING_CATEGORY_SELECTION = "awaiting_category_selection";
 const AWAITING_DELETE_CONFIRMATION = "awaiting_delete_confirmation";
-// savings-config: awaiting_savings_rule / awaiting_savings_delete arrive with
-// the sa:* sub-menu handlers (Phase 5); the enum already carries all three
-// (design D11) so rollback payloads recover through normalizeState.
+// savings-config (design D11): the sa:* sub-menu dialogs. The BOT_STATES enum
+// already carries all three so rollback payloads recover through normalizeState.
+const AWAITING_SAVINGS_RULE = "awaiting_savings_rule";
 const AWAITING_SAVINGS_PERCENT = "awaiting_savings_percent";
+const AWAITING_SAVINGS_DELETE = "awaiting_savings_delete";
 
 /** v2 capture types — chosen ONLY by the main-menu tap (spec quick-capture "Type Selection by Menu"). */
 export type CaptureType = "REAL" | "PENDING" | "INGRESO" | "COMPARTIDO";
@@ -196,6 +205,31 @@ export const savingsPercentPayloadSchema = z.object({
 });
 
 export type SavingsPercentPayload = z.infer<typeof savingsPercentPayloadSchema>;
+
+/**
+ * Stored payload of `awaiting_savings_rule` (design D2): no payload — the
+ * state alone means the next text is a savings rule. An empty-object schema
+ * keeps the corrupt-payload discipline uniform (valid state decodes, corrupt
+ * JSON falls back to the idle recovery).
+ */
+export const savingsRulePayloadSchema = z.object({});
+
+export type SavingsRulePayload = z.infer<typeof savingsRulePayloadSchema>;
+
+/**
+ * Stored payload of `awaiting_savings_delete` (design D3): the resolved rule
+ * rides the state so `svdel:ok/no:<ruleId>` confirms against the persisted id
+ * (state+id gate; the expense delete-gate precedent).
+ */
+export const savingsRuleDeletePayloadSchema = z.object({
+  rule: z.object({
+    id: z.string().min(1),
+    keyword: z.string().min(1),
+    percent: z.number().positive().max(100),
+  }),
+});
+
+export type SavingsRuleDeletePayload = z.infer<typeof savingsRuleDeletePayloadSchema>;
 
 /**
  * Stored payload of `awaiting_category_name` (design D5): one state, three
@@ -362,6 +396,15 @@ export class TelegramService {
       case AWAITING_SAVINGS_PERCENT:
         await this.handleAwaitingSavingsPercent(body, ownerId, reply);
         return;
+      case AWAITING_SAVINGS_RULE:
+        await this.handleAwaitingSavingsRule(body, ownerId, reply);
+        return;
+      case AWAITING_SAVINGS_DELETE:
+        // Any new message abandons the savings delete gate: idle, nothing
+        // deleted, then the text idle-routes (dc precedent).
+        await this.deps.botStateRepository.set({ ownerId, state: IDLE, pendingMovementId: null, pendingNote: null });
+        await this.routeIdleMessage(body, ownerId, reply);
+        return;
       case AWAITING_MOVEMENT_SELECTION:
         // A non-command text during a pick abandons it: nothing changes, the
         // menu returns (spec movement-correction "Ambiguity Resolution").
@@ -445,6 +488,12 @@ export class TelegramService {
         return;
       case "sv":
         await this.handleSavingsChoiceCallback(callback, ownerId, reply);
+        return;
+      case "sa":
+        await this.handleSavingsAdminCallback(callback, ownerId, reply);
+        return;
+      case "svdel":
+        await this.handleSavingsDeleteGateCallback(callback, ownerId, reply);
         return;
       default:
         // Unknown action prefix: honest reply, no state change (spec
@@ -892,6 +941,165 @@ export class TelegramService {
   }
 
   /**
+   * Savings-rule admin sub-menu (design D1/D2/D3, spec bot-manage-savings):
+   * `sa:menu` supersedes any pending flow and opens the three actions;
+   * `sa:new` enters `awaiting_savings_rule` (the next text is parsed by the
+   * existing `parseCommand`); `sa:list` lists the owner's rules; `sa:del`
+   * renders the rules as pick buttons, and `sa:dl:<id>` resolves the rule at
+   * callback time (stale → gone reply) before entering the delete gate.
+   * Callback data carries ids only, never keywords or percents.
+   */
+  private async handleSavingsAdminCallback(callback: TelegramCallback, ownerId: string, reply?: ReplyPort): Promise<void> {
+    const [, sub, value] = callback.data.split(":");
+    switch (sub) {
+      case "menu": {
+        await this.deps.botStateRepository.set({ ownerId, state: IDLE, pendingMovementId: null, pendingNote: null });
+        await this.safeReply(
+          reply,
+          savingsAdminReply(),
+          [
+            [{ text: "➕ Crear regla", callback_data: buildCallbackData(["sa", "new"]) }],
+            [{ text: "📋 Listar reglas", callback_data: buildCallbackData(["sa", "list"]) }],
+            [{ text: "🗑 Borrar regla", callback_data: buildCallbackData(["sa", "del"]) }],
+          ],
+          undefined,
+        );
+        return;
+      }
+      case "new": {
+        await this.deps.botStateRepository.set({
+          ownerId,
+          state: AWAITING_SAVINGS_RULE,
+          pendingMovementId: null,
+          pendingNote: JSON.stringify({} satisfies SavingsRulePayload),
+        });
+        await this.safeReply(reply, savingsRulePromptReply());
+        return;
+      }
+      case "list": {
+        const rules = await this.deps.savingsService.listRules(ownerId);
+        await this.safeReply(
+          reply,
+          savingsRulesListReply(rules.map((rule) => ({ keyword: rule.keyword, percent: rule.percent }))),
+        );
+        await this.sendMenu(reply);
+        return;
+      }
+      case "del": {
+        const rules = await this.deps.savingsService.listRules(ownerId);
+        if (rules.length === 0) {
+          await this.safeReply(reply, savingsRulesListReply([]));
+          await this.sendMenu(reply);
+          return;
+        }
+        await this.safeReply(
+          reply,
+          savingsRuleDeletePickReply(rules.map((rule) => ({ keyword: rule.keyword, percent: rule.percent }))),
+          rules.map((rule) => [
+            { text: `"${rule.keyword}" al ${rule.percent}%`, callback_data: buildCallbackData(["sa", "dl", rule.id]) },
+          ]),
+          undefined,
+        );
+        return;
+      }
+      case "dl": {
+        if (value === undefined) {
+          await this.safeReply(reply, callbackUnavailableReply());
+          return;
+        }
+        const rules = await this.deps.savingsService.listRules(ownerId);
+        const rule = rules.find((candidate) => candidate.id === value);
+        if (rule === undefined) {
+          // Stale pick (the rule was deleted meanwhile): honest gone reply.
+          await this.safeReply(reply, savingsRuleGoneReply());
+          return;
+        }
+        const gatePayload: SavingsRuleDeletePayload = { rule: { id: rule.id, keyword: rule.keyword, percent: rule.percent } };
+        await this.deps.botStateRepository.set({
+          ownerId,
+          state: AWAITING_SAVINGS_DELETE,
+          pendingMovementId: null,
+          pendingNote: JSON.stringify(gatePayload),
+        });
+        await this.safeReply(
+          reply,
+          savingsRuleDeleteConfirmReply(rule.keyword, rule.percent),
+          [
+            [
+              { text: "❌ Cancelar", callback_data: buildCallbackData(["svdel", "no", rule.id]) },
+              { text: "🗑 Borrar", callback_data: buildCallbackData(["svdel", "ok", rule.id]) },
+            ],
+          ],
+          undefined,
+        );
+        return;
+      }
+      default:
+        await this.safeReply(reply, callbackUnavailableReply());
+    }
+  }
+
+  /**
+   * Savings-rule delete gate (design D3): `svdel:ok/no:<ruleId>` confirm
+   * against the persisted state+id (a mismatch replies "ya procesado" and
+   * executes nothing). Confirm transitions to idle FIRST (the state is the
+   * consumption record), then `deleteRule` → deleted or graceful missing reply
+   * + menu; cancel closes idle with nothing deleted + menu.
+   */
+  private async handleSavingsDeleteGateCallback(callback: TelegramCallback, ownerId: string, reply?: ReplyPort): Promise<void> {
+    const [, sub, ruleId] = callback.data.split(":");
+    if (ruleId === undefined) {
+      await this.safeReply(reply, callbackUnavailableReply());
+      return;
+    }
+    const state = await this.deps.botStateRepository.get(ownerId);
+    const payload = this.decodeSavingsRuleDeletePayload(state?.pendingNote ?? null);
+
+    // Corrupt gate payload: the gate cannot be trusted, abandon to idle.
+    if (state?.state === AWAITING_SAVINGS_DELETE && payload === null) {
+      await this.deps.botStateRepository.set({ ownerId, state: IDLE, pendingMovementId: null, pendingNote: null });
+      await this.safeReply(reply, alreadyProcessedReply());
+      return;
+    }
+
+    // D5 — state+id gate: a mismatch executes nothing.
+    if (state?.state !== AWAITING_SAVINGS_DELETE || payload === null || payload.rule.id !== ruleId) {
+      await this.safeReply(reply, alreadyProcessedReply());
+      return;
+    }
+
+    if (sub === "no") {
+      await this.deps.botStateRepository.set({ ownerId, state: IDLE, pendingMovementId: null, pendingNote: null });
+      await this.safeReply(reply, deleteCancelledReply());
+      await this.sendMenu(reply);
+      return;
+    }
+
+    // Confirm: idle first (idempotency), then delete via the guarded service.
+    await this.deps.botStateRepository.set({ ownerId, state: IDLE, pendingMovementId: null, pendingNote: null });
+    const deleted = await this.deps.savingsService.deleteRule(ownerId, payload.rule.keyword);
+    if (deleted === null) {
+      await this.safeReply(reply, savingsRuleMissingReply(payload.rule.keyword));
+    } else {
+      await this.safeReply(reply, savingsRuleDeletedReply(payload.rule.keyword));
+    }
+    await this.sendMenu(reply);
+  }
+
+  /** Decodes a persisted `awaiting_savings_delete` payload; corrupt JSON yields null. */
+  private decodeSavingsRuleDeletePayload(pendingNote: string | null): SavingsRuleDeletePayload | null {
+    if (pendingNote === null) {
+      return null;
+    }
+    try {
+      const parsed = savingsRuleDeletePayloadSchema.safeParse(JSON.parse(pendingNote));
+      return parsed.success ? parsed.data : null;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
    * Guardar executes exactly once: the state transitions to idle FIRST (the
    * state IS the consumption record), then the movement registers with the
    * previewed facts and the confirmation + menu tail reply (spec "Guardar
@@ -1052,6 +1260,38 @@ export class TelegramService {
       pendingNote: JSON.stringify(preview),
     });
     await this.renderPreviewConfirmation(ownerId, preview, preview.category as string, reply, preview.confirmMessageId);
+  }
+
+  /**
+   * `awaiting_savings_rule` (design D2): non-command text re-prompts and the
+   * state stays open (the awaiting_capture precedent). Savings commands are
+   * intercepted globally BEFORE this handler and close the state through the
+   * state-aware command cases in `handleCommand`.
+   */
+  private async handleAwaitingSavingsRule(body: string, ownerId: string, reply?: ReplyPort): Promise<void> {
+    const state = await this.deps.botStateRepository.get(ownerId);
+    const payload = this.decodeSavingsRulePayload(state?.pendingNote ?? null);
+
+    if (state?.state !== AWAITING_SAVINGS_RULE || payload === null) {
+      await this.deps.botStateRepository.set({ ownerId, state: IDLE, pendingMovementId: null, pendingNote: null });
+      await this.safeReply(reply, questionDroppedReply());
+      return;
+    }
+
+    await this.safeReply(reply, savingsRulePromptReply());
+  }
+
+  /** Decodes a persisted `awaiting_savings_rule` payload; corrupt JSON yields null. */
+  private decodeSavingsRulePayload(pendingNote: string | null): SavingsRulePayload | null {
+    if (pendingNote === null) {
+      return null;
+    }
+    try {
+      const parsed = savingsRulePayloadSchema.safeParse(JSON.parse(pendingNote));
+      return parsed.success ? parsed.data : null;
+    } catch {
+      return null;
+    }
   }
 
   /**
@@ -2084,24 +2324,81 @@ export class TelegramService {
       }
 
       case "savings-rule": {
+        // D2 — state-aware: a savings command arriving during
+        // awaiting_savings_rule / awaiting_savings_percent closes the input
+        // state, executes the command and appends the menu (the sub-menu
+        // create flow returns to the main menu).
+        const wasAwaitingSavingsInput = await this.closeSavingsInputState(ownerId);
         try {
           await this.deps.savingsService.defineRule(ownerId, command.keyword, command.percent);
         } catch (error) {
           if (error instanceof ValidationFailedError) {
             await this.safeReply(reply, savingsRuleInvalidReply());
+            if (wasAwaitingSavingsInput) {
+              await this.sendMenu(reply);
+            }
             return;
           }
           throw error;
         }
         await this.safeReply(reply, savingsRuleDefinedReply(command.keyword, command.percent));
+        if (wasAwaitingSavingsInput) {
+          await this.sendMenu(reply);
+        }
         return;
       }
 
       case "savings-rule-invalid": {
+        const wasAwaitingSavingsInput = await this.closeSavingsInputState(ownerId);
         await this.safeReply(reply, savingsRuleInvalidReply());
+        if (wasAwaitingSavingsInput) {
+          await this.sendMenu(reply);
+        }
+        return;
+      }
+
+      case "savings-rule-list": {
+        const wasAwaitingSavingsInput = await this.closeSavingsInputState(ownerId);
+        const rules = await this.deps.savingsService.listRules(ownerId);
+        await this.safeReply(
+          reply,
+          savingsRulesListReply(rules.map((rule) => ({ keyword: rule.keyword, percent: rule.percent }))),
+        );
+        if (wasAwaitingSavingsInput) {
+          await this.sendMenu(reply);
+        }
+        return;
+      }
+
+      case "savings-rule-delete": {
+        const wasAwaitingSavingsInput = await this.closeSavingsInputState(ownerId);
+        const deleted = await this.deps.savingsService.deleteRule(ownerId, command.keyword);
+        if (deleted === null) {
+          await this.safeReply(reply, savingsRuleMissingReply(command.keyword));
+        } else {
+          await this.safeReply(reply, savingsRuleDeletedReply(command.keyword));
+        }
+        if (wasAwaitingSavingsInput) {
+          await this.sendMenu(reply);
+        }
         return;
       }
     }
+  }
+
+  /**
+   * D2 — closes an open savings input state (`awaiting_savings_rule` /
+   * `awaiting_savings_percent`) to idle so a globally-intercepted savings
+   * command supersedes the pending input. Returns whether a state was closed
+   * (the caller appends the menu in that case).
+   */
+  private async closeSavingsInputState(ownerId: string): Promise<boolean> {
+    const state = await this.deps.botStateRepository.get(ownerId);
+    if (state?.state === AWAITING_SAVINGS_RULE || state?.state === AWAITING_SAVINGS_PERCENT) {
+      await this.deps.botStateRepository.set({ ownerId, state: IDLE, pendingMovementId: null, pendingNote: null });
+      return true;
+    }
+    return false;
   }
 
   /**

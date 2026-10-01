@@ -1944,11 +1944,9 @@ describe("TelegramService registration collection (awaiting_registration)", () =
 
     expect(h.mockBrainInterpret).toHaveBeenCalledWith(
       "decime los últimos movimientos",
-      expect.objectContaining({
-        state: "awaiting_registration",
-        pending: expect.objectContaining({ amount: 5000, note: "gym" }),
-        openQuestion: expect.stringContaining("categoría"),
-      }),
+      // v2 vestige context: the brain never consumes dialog context; only the
+      // corrupt-payload gate decides whether the brain is called at all.
+      { state: "idle" },
     );
 // Non-consuming: the pending collect survives the query.
     const state = await h.botStateRepository.get(ownerId);
@@ -3493,7 +3491,8 @@ describe("TelegramService brain orchestration (llm-conversational-bot)", () => {
 
     expect(h.mockBrainInterpret).toHaveBeenCalledWith(
       "Transporte",
-      expect.objectContaining({ state: "awaiting_category", openQuestion: expect.stringContaining("uber viaje") }),
+      // v2 vestige context: the brain never consumes dialog context.
+      { state: "idle" },
     );
     expect(h.mockUpdateMovement).toHaveBeenCalledWith(ownerId, "mov-1", { category: "Transporte" });
     expect(h.mockBrainReply).toHaveBeenCalledWith({
@@ -3524,10 +3523,8 @@ describe("TelegramService brain orchestration (llm-conversational-bot)", () => {
 
     expect(h.mockBrainInterpret).toHaveBeenCalledWith(
       "5000",
-      expect.objectContaining({
-        state: "awaiting_amount_confirmation",
-        pending: expect.objectContaining({ amounts: [4800, 5000] }),
-      }),
+      // v2 vestige context: the brain never consumes dialog context.
+      { state: "idle" },
     );
     // The stored category is null, so the answer registers in "otro" and the
     // branch result reports the correction offer.
@@ -4314,7 +4311,8 @@ describe("TelegramService dialog controller (brain-routed)", () => {
 
     expect(h.mockBrainInterpret).toHaveBeenCalledWith(
       "no se qué categoria",
-      expect.objectContaining({ state: "awaiting_category" }),
+      // v2 vestige context: the brain never consumes dialog context.
+      { state: "idle" },
     );
     expect(h.mockUpdateMovement).not.toHaveBeenCalled();
     expect(h.mockSetState).not.toHaveBeenCalled();

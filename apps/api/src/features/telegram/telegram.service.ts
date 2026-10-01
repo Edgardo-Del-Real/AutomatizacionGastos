@@ -2139,39 +2139,20 @@ private async handleDialogMessage(
   }
 
   /**
-   * Reconstructs the `InterpretContext` from the persisted state (design
-   * "buildInterpretContext"). A corrupt amount-confirmation payload yields null
-   * so the D6 fallback (today's abandon-and-reprocess rules) owns the message.
+   * v2 vestige (spec bot-brain "Bot Brain Port"): the brain never consumes
+   * dialog context anymore — the interpret prompt is context-blind. The
+   * per-state construction collapses to `{state: "idle"}`; ONLY the
+   * corrupt-payload gate is preserved: a corrupt persisted payload yields
+   * null so the D6 fallback owns the message.
    */
   private buildInterpretContext(state: BotStateRecord): InterpretContext | null {
-    if (state.state === AWAITING_CATEGORY) {
-      return {
-        state: "awaiting_category",
-        pending: { movementId: state.pendingMovementId, note: state.pendingNote },
-        openQuestion: `¿Querés asignarle otra categoría al movimiento "${state.pendingNote ?? ""}"? Escribí el nombre o "no".`,
-      };
-    }
     if (state.state === AWAITING_REGISTRATION) {
-      const payload = this.decodeCollectPayload(state.pendingNote);
-      if (payload === null) {
-        return null;
-      }
-      const openField = payload.amount === null ? "amount" : "category";
-      return {
-        state: "awaiting_registration",
-        pending: { amount: payload.amount, category: payload.category, note: payload.note },
-        openQuestion: openField === "amount" ? askAmountReply(payload.note) : askCategoryReply(payload.note),
-      };
+      return this.decodeCollectPayload(state.pendingNote) === null ? null : { state: "idle" };
     }
-    const payload = this.decodeConfirmationPayload(state.pendingNote);
-    if (payload === null) {
-      return null;
+    if (state.state === AWAITING_AMOUNT_CONFIRMATION) {
+      return this.decodeConfirmationPayload(state.pendingNote) === null ? null : { state: "idle" };
     }
-    return {
-      state: "awaiting_amount_confirmation",
-      pending: { amounts: payload.amounts, note: payload.note, category: payload.category },
-      openQuestion: amountConflictReply(payload.amounts[0], payload.amounts[1]),
-    };
+    return { state: "idle" };
   }
 
   /** `dialog_action: "resolve"` → deterministic resolution from the persisted payload ONLY. */

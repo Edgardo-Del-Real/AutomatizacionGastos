@@ -1,32 +1,57 @@
 import { z } from "zod";
 import { QUERY_TYPES, type QueryExecutionResult, type QueryType } from "./query.types";
 
+/**
+ * v2 intent taxonomy (spec bot-brain "Intent Taxonomy"): the three-intent
+ * classification surface — query (with query-type phrasings), greeting and
+ * off_topic — plus the static-help intent. The 11 removed intents
+ * (register_expense, lifecycle, category CRUD, savings rule, capabilities)
+ * fail the envelope enum and degrade to null.
+ */
 export const BOT_INTENTS = [
-  "register_expense",
-  "correct_amount",
-  "correct_category",
   "query",
   "query_recent",
   "query_balance",
   "query_month",
   "query_planned",
-  "associate_keyword",
-  "create_category",
-  "delete_category",
-  "rename_category",
-  "create_savings_rule",
-  "capabilities",
-  "help",
-  "off_topic",
   "greeting",
-  "mark_paid",
-  "delete_expense",
+  "off_topic",
+  "help",
 ] as const;
 
 export type BotIntent = (typeof BOT_INTENTS)[number];
 
+/**
+ * Transitional intent union: telegram.service.ts and the category executor
+ * still consume the removed intents until the Phase 3/8 rewrites land. The
+ * runtime contract is the 8-intent `BOT_INTENTS` enum above — a response
+ * carrying a legacy intent fails the zod schema and degrades to null; this
+ * type only keeps the transitional consumers compiling.
+ */
+export type LegacyBotIntent =
+  | BotIntent
+  | "register_expense"
+  | "correct_amount"
+  | "correct_category"
+  | "associate_keyword"
+  | "create_category"
+  | "delete_category"
+  | "rename_category"
+  | "create_savings_rule"
+  | "capabilities"
+  | "mark_paid"
+  | "delete_expense";
+
+/**
+ * Transitional conversation-envelope TYPE: the service still consumes the
+ * legacy fields (category, dialog_action, then_reassign, shared, new_name)
+ * until Phase 3. The runtime contract is `conversationEnvelopeSchema` below —
+ * it accepts ONLY `{intent, amount, note, query_type?}` and rejects every
+ * legacy key via `z.never()`, so a brain response carrying them degrades to
+ * null. This type narrows to the schema shape when the service rewrites.
+ */
 export type ConversationEnvelope = {
-  intent: BotIntent;
+  intent: LegacyBotIntent;
   amount: number | null;
   category: string | null;
   note: string | null;
@@ -34,24 +59,11 @@ export type ConversationEnvelope = {
   query_type?: QueryType | null;
   /** Target name for `rename_category`; null for every other intent. */
   new_name?: string | null;
-  /**
-   * Dialog-state classification: "resolve" answers the open question, "abandon"
-   * explicitly closes it, null/absent means intent routing. Only meaningful in
-   * dialog states; idle ignores it. The zod schema defaults it to null.
-   */
+  /** Dialog-state classification (legacy — schema-rejected in v2). */
   dialog_action?: "resolve" | "abandon" | null;
-  /**
-   * Mixed-intent flag: with `create_category`, reassign the pending correction
-   * movement to the created category. Schema-permissive boolean (default false);
-   * the controller reads it only for create_category with a pending movement.
-   */
+  /** Mixed-intent flag (legacy — schema-rejected in v2). */
   then_reassign?: boolean;
-  /**
-   * SHARED-registration signal, only meaningful with `register_expense` (spec
-   * "Shared Flag Contract"): true registers as SHARED. A SIGNAL only — the
-   * deterministic `compartido:` prefix is authoritative and wins over this flag
-   * when both are present (AD6). Schema default false.
-   */
+  /** SHARED-registration signal (legacy — schema-rejected in v2). */
   shared?: boolean;
 };
 
@@ -81,7 +93,12 @@ export type CategoryCommandErrorCode =
   | "unknown";
 
 export type ExecutionResult = {
-  intent: BotIntent;
+  /**
+   * Transitional: the service still emits legacy intents until Phase 3; the
+   * v2 contract narrows this to `BotIntent` when the service rewrites. The
+   * brain's `reply` never invents facts absent from the result.
+   */
+  intent: LegacyBotIntent;
   ok: boolean;
   action: BotAction;
   amount: number | null;
@@ -119,26 +136,13 @@ export type ExecutionResult = {
 };
 
 /**
- * Context passed to `interpret` for dialog-state messages: the bot state, the
- * persisted pending payload, and the reconstructed open-question text. The
- * prompt stays category-blind — it never embeds the owner's category names.
+ * v2 vestige context (spec bot-brain "Bot Brain Port"): the brain never
+ * consumes dialog context anymore — every flow is button-driven. The port
+ * signature keeps the optional `context?` argument per spec, but the service
+ * never passes meaningful state in the final design. The pre-v2 dialog-context
+ * union is gone with the dialog machinery.
  */
-export type InterpretContext =
-  | {
-      state: "awaiting_category";
-      pending: { movementId: string | null; note: string | null };
-      openQuestion: string;
-    }
-  | {
-      state: "awaiting_amount_confirmation";
-      pending: { amounts: [number, number]; note: string | null; category: string | null };
-      openQuestion: string;
-    }
-  | {
-      state: "awaiting_registration";
-      pending: { amount: number | null; category: string | null; note: string | null };
-      openQuestion: string;
-    };
+export type InterpretContext = { state: "idle" };
 
 export interface BotBrain {
   /** Never throws. null = degrade to the deterministic flow. */
@@ -203,28 +207,33 @@ const llmAmount = z
   .transform((value) => normalizeAmountString(String(value)))
   .refine((value) => value !== null, "present-but-invalid amount"); // explicit JSON null passes via .nullable()
 
+/**
+ * v2 interpret envelope contract (spec bot-brain "Interpret Envelope
+ * Contract"): `{intent, amount, note, query_type?}`. `intent` is one of the
+ * eight v2 intents; `amount` accepts number or string and normalizes via
+ * `normalizeAmountString`; `note` is a trimmed string ≤ 200 chars or null;
+ * `query` REQUIRES `query_type`. Every legacy key (`category`, `new_name`,
+ * `dialog_action`, `then_reassign`, `shared`, `planned`) is rejected via
+ * `z.never()` — presence degrades the response to null — and the 11 removed
+ * intents fail the enum. The call uses temperature 0 + JSON mode.
+ */
 export const conversationEnvelopeSchema = z
   .object({
     intent: z.enum(BOT_INTENTS),
     amount: llmAmount.nullable(),
-    category: z.string().trim().min(1).max(60).nullable(),
     note: z.string().trim().min(1).max(200).nullable().default(null),
     query_type: z.enum(QUERY_TYPES).nullable().default(null),
-    new_name: z.string().trim().min(1).max(60).nullable().default(null),
-    dialog_action: z.enum(["resolve", "abandon"]).nullable().default(null),
-    then_reassign: z.boolean().default(false),
-    shared: z.boolean().default(false),
-    // D7 — the planned type is a deterministic button decision (quick-capture
-    // preview) or the `previsto:` prefix, NEVER a brain inference. Presence of
-    // the key fails the schema (zod strips unknown keys silently, so a merely
-    // removed field could never produce the mandated degradation): a response
-    // carrying `planned` MUST degrade to null.
+    // Legacy keys: presence MUST fail the schema (zod strips unknown keys
+    // silently, so a merely removed field could never produce the mandated
+    // degradation). `planned` was already rejected pre-v2; the dialog, CRUD,
+    // shared and category surfaces are rejected the same way.
+    category: z.never().optional(),
+    new_name: z.never().optional(),
+    dialog_action: z.never().optional(),
+    then_reassign: z.never().optional(),
+    shared: z.never().optional(),
     planned: z.never().optional(),
   })
-  .refine(
-    (data) =>
-      data.intent !== "register_expense" || data.amount === null || (data.amount > 0 && Number.isFinite(data.amount)),
-  ) // belt-and-braces, mirrors today's schema
   .refine((data) => data.intent !== "query" || data.query_type !== null, "query intent requires a query_type");
 
 export const replyEnvelopeSchema = z.object({ reply: z.string().trim().min(1).max(400) });
@@ -232,145 +241,60 @@ export const replyEnvelopeSchema = z.object({ reply: z.string().trim().min(1).ma
 export type ChatMessage = { role: "user" | "assistant"; content: string };
 
 export const INTERPRET_SYSTEM_PROMPT = [
-  'Respondé SOLO con un objeto JSON con exactamente estas claves: {"intent": string, "amount": number|null, "category": string|null, "note": string|null, "query_type": string|null, "new_name": string|null, "dialog_action": string|null, "then_reassign": boolean, "shared": boolean}.',
-  "No agregues texto ni campos extra. El campo \"planned\" NO existe: nunca lo incluyas.",
-  '"intent" es exactamente UNA de: "register_expense" (cualquier movimiento de dinero, gasto o ingreso), "correct_amount", "correct_category", "query", "query_recent", "query_balance", "query_month", "query_planned", "associate_keyword", "create_category", "delete_category", "rename_category", "create_savings_rule", "capabilities", "help", "off_topic", "greeting".',
-  "Si el mensaje tiene señal de gasto (verbo de gasto, $ o un monto) usá register_expense, aunque no tenga monto.",
-  "NUNCA inventes un monto: usá null cuando el mensaje no tiene monto.",
-  'Un "register_expense" con amount null abre el diálogo de registro: el bot pregunta el monto y luego la categoría (no es un mensaje sin sentido).',
-  'Todo es en pesos argentinos (ARS): ignorá símbolos o nombres de moneda ($, usd, €) y no conviertas.',
-  '"1.234,50" y "1234,50" significan 1234.50; "1234.5" significa 1234.5; "5 mil" o "cinco mil" significan 5000 — devolvé el número.',
-  '"category" es una sugerencia de categoría (ej: "Supermercado", "Transporte"), máximo 60 caracteres, null si no estás seguro.',
-  '"category" se resuelve contra las categorías existentes del dueño: sugerí el nombre más parecido a una existente (los plurales valen, ej: "cafes" para "Cafe"); si nada se parece usá "otro", la categoría de respaldo. Nunca inventes categorías nuevas.',
-  '"note" es la descripción concreta del gasto o ingreso, máximo 200 caracteres, null si no hay.',
-  'Para preguntas sobre los datos del dueño usá "query" con su "query_type": "categories" (qué categorías tiene/disponibles), "recent" (últimos movimientos), "balance" (saldo, "cuánto me queda", "cuál es mi saldo"), "month" (resumen del mes), "savings" (cuánto ahorró este mes: "cuánto ahorré", "cuánto ahorré este mes"), "planned" (gastos fijos previstos del mes que viene: "cuánto tengo previsto", "gastos fijos previstos", "cuánto voy a gastar el mes que viene").',
-  'Para preguntas sobre gastos fijos previstos usá "query_planned": "cuánto tengo previsto", "gastos fijos previstos", "cuánto voy a gastar el mes que viene" (también válido como "query" con "query_type": "planned").',
+  'Respondé SOLO con un objeto JSON con exactamente estas claves: {"intent": string, "amount": number|null, "note": string|null, "query_type": string|null}.',
+  'No agregues texto ni campos extra. Los campos "category", "new_name", "dialog_action", "then_reassign", "shared" y "planned" NO existen: nunca los incluyas.',
+  '"intent" es exactamente UNA de: "query", "query_recent", "query_balance", "query_month", "query_planned", "greeting", "off_topic", "help".',
+  'Para consultas sobre los datos del dueño usá "query" con su "query_type": "categories" (qué categorías tiene/disponibles), "recent" (últimos movimientos), "balance" (saldo, "cuánto me queda", "cuál es mi saldo"), "month" (resumen del mes), "savings" (cuánto ahorró este mes: "cuánto ahorré", "cuánto ahorré este mes"), "planned" (gastos fijos previstos del mes que viene: "cuánto tengo previsto", "gastos fijos previstos", "cuánto voy a gastar el mes que viene").',
   '"query_recent", "query_balance", "query_month" y "query_planned" se mantienen por compatibilidad: preferí "query".',
   '"query_type" es null para cualquier intent que no sea "query".',
-  'Para crear, borrar o renombrar categorías usá "create_category", "delete_category" o "rename_category": "create_category" y "delete_category" llevan el nombre en "category"; "rename_category" lleva el nombre actual en "category" y el nuevo en "new_name". "new_name" es null salvo en "rename_category".',
-  'Para definir un ahorro automático sobre un ingreso usá "create_savings_rule": el bot redirige al comando "registrar ahorro: <palabra> al <X>%" y no ejecuta nada él mismo.',
-  'Para preguntas sobre lo que el bot SABE hacer (¿podes borrar categorías?, ¿qué sabés hacer?, ¿qué podes hacer?) usá "capabilities": es una pregunta de capacidades, NUNCA la trates como off_topic ni dejes la acción vacía.',
+  "NUNCA inventes un monto: usá null cuando el mensaje no tiene monto.",
+  'Todo es en pesos argentinos (ARS): ignorá símbolos o nombres de moneda ($, usd, €) y no conviertas.',
+  '"1.234,50" y "1234,50" significan 1234.50; "1234.5" significa 1234.5; "5 mil" o "cinco mil" significan 5000 — devolvé el número.',
+  '"note" es la descripción concreta del gasto o ingreso, máximo 200 caracteres, null si no hay.',
+  'El bot NUNCA registra movimientos desde texto libre: la captura es por botones del menú (➕ Nuevo gasto, 📅 Gasto previsto, ➕ Ingreso, 👥 Compartido). Un mensaje con monto o con intención de registrar no es un intent: es "off_topic".',
+  "El bot NUNCA crea, renombra ni borra categorías, NUNCA infiere tipos de captura (real, previsto, ingreso, compartido) y NUNCA decide acciones destructivas (borrar gastos, marcar pagado): todo eso es por botones. Si el mensaje lo pide, clasificalo \"off_topic\" — nunca lo ejecutes.",
+  'Preguntas sobre lo que el bot SABE hacer (¿podes borrar categorías?, ¿qué sabés hacer?, ¿qué podes hacer?) son "help": ayuda estática, NUNCA off_topic.',
   'off_topic es para mensajes sin relación con gastos: clasificalo, NUNCA lo respondas como charla general.',
   'Los saludos ("hola", "buenas", "qué tal", "cómo andás") son "greeting": un saludo cálido, NO off_topic.',
-  '"dialog_action" se usa SOLO cuando hay un diálogo abierto (pregunta pendiente del bot): "resolve" si el mensaje responde la pregunta con un valor presentado, "abandon" si el dueño abandona explícitamente ("no, dejalo"), null en cualquier otro caso. Fuera de diálogo siempre null.',
-  'Para "correct_category": "category" es la categoría DESTINO; "amount" y/o "note" identifican el movimiento a corregir.',
-  'Para marcar pagado un gasto previsto ya registrado usá "mark_paid": "ya lo pagué", "pásalo a pagado", "el previsto de alquiler lo pagué". Para borrar un gasto ya registrado usá "delete_expense": "borra ese gasto", "borralo", "borrá el de cafe". Nunca son "register_expense": no crean movimientos ni categorías. En "mark_paid" y "delete_expense", "category" y/o "amount" identifican el movimiento ya registrado (ej: "Alquiler" en category, 2500 en amount); si el mensaje no trae referencia usá null en ambos y el bot usa el más reciente. Nunca inventes ids.',
-  '"then_reassign" es true SOLO cuando "create_category" pide guardar el movimiento pendiente en la categoría nueva (ej: "creá X y guardalo ahí"); en cualquier otro caso false.',
-  '"shared" es true SOLO en "register_expense" cuando el dueño pide que el gasto sea compartido con su pareja ("ponelo compartido", "es compartido"); en cualquier otro caso false. Si el mensaje ya trae el prefijo "compartido:" el bot lo maneja solo: no lo dupliques.',
-  'Sos el respaldo: la captura determinística corre primero; las sugerencias de categoría se resuelven contra las categorías existentes, "otro" es el respaldo.',
-  "Nunca infieras \"previsto\": el tipo lo decide el botón de la vista previa o el prefijo \"previsto:\".",
-  "\"delete_expense\" solo abre la confirmación: el borrado lo decide el botón 🗑 del dueño.",
 ].join(" ");
 
 export const FEW_SHOTS: readonly ChatMessage[] = [
-  { role: "user", content: "gaste 5 mil en el super" },
-  {
-    role: "assistant",
-    content: '{"intent":"register_expense","amount":5000,"category":"Supermercado","note":"super"}',
-  },
-  { role: "user", content: "compre mercaderia" },
-  {
-    role: "assistant",
-    content: '{"intent":"register_expense","amount":null,"category":"Supermercado","note":"mercaderia"}',
-  },
-  { role: "user", content: "poné el alquiler como compartido" },
-  {
-    role: "assistant",
-    content: '{"intent":"register_expense","amount":null,"category":null,"note":"alquiler","shared":true}',
-  },
-  { role: "user", content: "dejalo para el mes que viene: 2500 alquiler" },
-  {
-    role: "assistant",
-    content: '{"intent":"register_expense","amount":2500,"category":null,"note":"alquiler"}',
-  },
-  { role: "user", content: "dejá previsto el alquiler de 2500" },
-  {
-    role: "assistant",
-    content: '{"intent":"register_expense","amount":2500,"category":null,"note":"alquiler"}',
-  },
   { role: "user", content: "cuánto gasté este mes?" },
   {
     role: "assistant",
-    content: '{"intent":"query","amount":null,"category":null,"note":null,"query_type":"month"}',
+    content: '{"intent":"query","amount":null,"note":null,"query_type":"month"}',
   },
   { role: "user", content: "cuales son las categorias disponibles" },
   {
     role: "assistant",
-    content: '{"intent":"query","amount":null,"category":null,"note":null,"query_type":"categories"}',
-  },
-  { role: "user", content: "que categorias tengo" },
-  {
-    role: "assistant",
-    content: '{"intent":"query","amount":null,"category":null,"note":null,"query_type":"categories"}',
+    content: '{"intent":"query","amount":null,"note":null,"query_type":"categories"}',
   },
   { role: "user", content: "ultimos movimientos" },
   {
     role: "assistant",
-    content: '{"intent":"query","amount":null,"category":null,"note":null,"query_type":"recent"}',
+    content: '{"intent":"query","amount":null,"note":null,"query_type":"recent"}',
   },
   { role: "user", content: "cuanto me queda" },
   {
     role: "assistant",
-    content: '{"intent":"query","amount":null,"category":null,"note":null,"query_type":"balance"}',
+    content: '{"intent":"query","amount":null,"note":null,"query_type":"balance"}',
   },
   { role: "user", content: "cuánto ahorré este mes?" },
   {
     role: "assistant",
-    content: '{"intent":"query","amount":null,"category":null,"note":null,"query_type":"savings"}',
+    content: '{"intent":"query","amount":null,"note":null,"query_type":"savings"}',
   },
   { role: "user", content: "cuánto tengo previsto?" },
   {
     role: "assistant",
-    content: '{"intent":"query_planned","amount":null,"category":null,"note":null}',
-  },
-  { role: "user", content: "guarda un ahorro del 10% para entrenuts" },
-  {
-    role: "assistant",
-    content: '{"intent":"create_savings_rule","amount":null,"category":"entrenuts","note":"al 10%"}',
+    content: '{"intent":"query_planned","amount":null,"note":null}',
   },
   { role: "user", content: "hola, cómo andás?" },
-  { role: "assistant", content: '{"intent":"greeting","amount":null,"category":null,"note":null}' },
-  { role: "user", content: "de ahora en más uber va a transporte" },
-  { role: "assistant", content: '{"intent":"associate_keyword","amount":null,"category":null,"note":null}' },
-  { role: "user", content: "creá una categoria llamada mascotas" },
-  {
-    role: "assistant",
-    content:
-      '{"intent":"create_category","amount":null,"category":"mascotas","note":null,"query_type":null,"new_name":null}',
-  },
-  { role: "user", content: "borra la categoria viajes" },
-  {
-    role: "assistant",
-    content:
-      '{"intent":"delete_category","amount":null,"category":"viajes","note":null,"query_type":null,"new_name":null}',
-  },
-  { role: "user", content: "renombra super a supermercado" },
-  {
-    role: "assistant",
-    content:
-      '{"intent":"rename_category","amount":null,"category":"super","note":null,"query_type":null,"new_name":"supermercado"}',
-  },
-  { role: "user", content: "podes borrar categorias?" },
-  {
-    role: "assistant",
-    content:
-      '{"intent":"capabilities","amount":null,"category":null,"note":null,"query_type":null,"new_name":null}',
-  },
-  { role: "user", content: "5000" },
-  { role: "assistant", content: '{"intent":"correct_amount","amount":5000,"category":null,"note":null}' },
-  { role: "user", content: "ya lo pagué" },
-  { role: "assistant", content: '{"intent":"mark_paid","amount":null,"category":null,"note":null}' },
-  { role: "user", content: "el previsto de alquiler lo pagué" },
-  { role: "assistant", content: '{"intent":"mark_paid","amount":null,"category":"alquiler","note":null}' },
-  { role: "user", content: "ya lo pagué, los 2500" },
-  { role: "assistant", content: '{"intent":"mark_paid","amount":2500,"category":null,"note":null}' },
-  { role: "user", content: "borra ese gasto" },
-  { role: "assistant", content: '{"intent":"delete_expense","amount":null,"category":null,"note":null}' },
-  { role: "user", content: "borra el de cafe" },
-  { role: "assistant", content: '{"intent":"delete_expense","amount":null,"category":"cafe","note":null}' },
-  // Anti-degradation: "marcá pagado" must never classify as register_expense.
-  { role: "user", content: "marcá pagado el gasto de 2500" },
-  { role: "assistant", content: '{"intent":"mark_paid","amount":2500,"category":null,"note":null}' },
+  { role: "assistant", content: '{"intent":"greeting","amount":null,"note":null}' },
+  { role: "user", content: "que lindo día" },
+  { role: "assistant", content: '{"intent":"off_topic","amount":null,"note":null}' },
+  { role: "user", content: "quiero registrar un gasto" },
+  { role: "assistant", content: '{"intent":"off_topic","amount":null,"note":null}' },
 ];
 
 export const REPLY_SYSTEM_PROMPT = [
@@ -378,138 +302,18 @@ export const REPLY_SYSTEM_PROMPT = [
   "Recibís SOLO el JSON del resultado ejecutado y respondés con un objeto JSON: {\"reply\": string}.",
   "NUNCA afirmes un dato que no esté en el resultado: si amount es null no menciones montos.",
   "Máximo 2 oraciones, sin markdown.",
-  "Según action: registered = el movimiento se guardó o actualizó — confirmalo con los datos presentes; asked_amount = el monto es ambiguo — pedí el número exacto sin afirmar cuál es el correcto; asked_category = el movimiento quedó guardado en la categoría — ofrecé reasignarla; answered = respondé la consulta usando SOLO los datos del campo query (query_type y sus valores), sin inventar montos, categorías ni fechas; redirected = todavía no se puede — decilo con honestidad; none = no se ejecutó nada — guiá al dueño; created = la categoría se creó — confirmalo con category; deleted = la categoría se borró — confirmalo con category; renamed = la categoría se renombró — confirmá category a new_name; capabilities = enumerá lo que el bot puede hacer (registrar gastos, corregir, consultar categorías/últimos movimientos/saldo/resumen del mes/ahorro del mes, crear/borrar/renombrar categorías, asociar palabras, marcar pagado un gasto previsto, borrar un gasto, ayuda); asked_movement = el bot preguntó qué movimiento corregir — enumerá SOLO los candidatos recibidos, sin inventar datos; created_reassigned = la categoría se creó y el movimiento pendiente se reasignó — confirmá ambos hechos; asked_registration = el bot está juntando un registro — preguntá SOLO el campo de asked_field (\"amount\": pedí el monto; \"category\": pedí el nombre de la categoría), nunca inventes el otro campo; marked_paid = el gasto previsto quedó pagado — confirmalo con amount y category, y que ya suma en los gastos; deleted_movement = el gasto se borró — confirmalo con amount y category.",
-  "Si intent es greeting con action none: respondé con un saludo cálido de una línea orientado a gastos, sin cerrar ningún diálogo abierto.",
-  "Si vienen gross_amount, net_amount y savings_amount (un ingreso con ahorro automático): confirmá el ingreso neto (net_amount) y cuánto ahorraste (savings_amount), sin inventar otros montos.",
-  "Si vienen planned_month y planned_total (una consulta de gastos previstos): confirmá el total previsto para ese mes con esos datos exactos, sin inventar montos.",
-  "Si planned es true en un registro (gasto previsto): confirmá el registro sin afirmar que ya cuenta en el saldo ni en los gastos.",
-  "Si abandoned_dialog es true: el registro nuevo reemplazó un diálogo anterior que dejaste sin efecto — confirmá ambos hechos en el mismo mensaje, sin contradecirte.",
+  "Según action: answered = respondé la consulta usando SOLO los datos del campo query (query_type y sus valores), sin inventar montos, categorías ni fechas; none = no se ejecutó nada — guiá al dueño; redirected = todavía no se puede — decilo con honestidad.",
+  "Si intent es greeting: respondé con un saludo cálido de una línea orientado a gastos.",
   "Si ok es false y viene message, transmití ese error de forma amable y honesta sin inventar causas.",
 ].join(" ");
 
 /**
- * Per-state dialog instructions appended to the interpret system prompt. These
- * teach the `dialog_action` classification for each open question.
+ * v2 — the Groq client implementing the BotBrain port (spec bot-brain "Bot
+ * Brain Port"): the ONLY LLM surface the bot consumes, used ONLY for idle
+ * query/greeting classification and query replies — never for capture or
+ * editing. The dialog context argument is a vestige: it is never embedded in
+ * the prompt (the dialog machinery is gone).
  */
-export const DIALOG_INTERPRET_ADDENDUM: Record<InterpretContext["state"], string> = {
-  awaiting_category: [
-    "Estás en un diálogo de corrección: el dueño debe elegir la categoría del movimiento pendiente.",
-    '"dialog_action" es "resolve" SOLO para una respuesta que nombra una categoría ("Transporte", "Gastos fijos").',
-    '"dialog_action" es "abandon" SOLO para un abandono explícito ("no", "no, dejalo", "dejalo").',
-    'Cualquier otra cosa (consulta, registro nuevo, crear categoría, marcar pagado o borrar un gasto) es "dialog_action" null con su intent real.',
-    'En "resolve", "category" es el nombre exacto de la categoría elegida; nunca inventes una.',
-  ].join(" "),
-  awaiting_amount_confirmation: [
-    "Estás en un diálogo de confirmación de monto: se presentaron dos montos y el dueño debe elegir uno.",
-    '"dialog_action" es "resolve" SOLO cuando el mensaje repite UNO de los montos presentados ("5000", "5 mil" para 5000).',
-    'Una afirmación sin monto ("si", "sí", "dale") NUNCA es "resolve": usá "dialog_action" null y "amount" null.',
-    'Un monto distinto a los presentados es un registro NUEVO: "dialog_action" null con intent register_expense y ese monto.',
-    '"dialog_action" es "abandon" para un abandono explícito ("no, dejalo").',
-  ].join(" "),
-  awaiting_registration: [
-    "Estás en un diálogo de recolección de registro: el dueño completa un registro pendiente (primero el monto, luego la categoría).",
-    '"dialog_action" es "resolve" SOLO cuando el mensaje responde el campo abierto: un monto si la pregunta abierta es el monto, o un nombre de categoría si es la categoría.',
-    'Una afirmación sin valor ("si", "dale") NUNCA es "resolve": usá "dialog_action" null.',
-    '"dialog_action" es "abandon" SOLO para un abandono explícito ("no, dejalo", "cancelalo").',
-    'Cualquier otra cosa (consulta, registro nuevo, crear categoría, marcar pagado o borrar un gasto) es "dialog_action" null con su intent real.',
-    'NUNCA inventes un monto ni una categoría que no estén en el mensaje.',
-  ].join(" "),
-};
-
-/** Per-state dialog few-shots appended after the base few-shots. */
-export const DIALOG_FEW_SHOTS: Record<InterpretContext["state"], readonly ChatMessage[]> = {
-  awaiting_category: [
-    { role: "user", content: "Transporte" },
-    {
-      role: "assistant",
-      content:
-        '{"intent":"correct_category","amount":null,"category":"Transporte","note":null,"query_type":null,"new_name":null,"dialog_action":"resolve","then_reassign":false}',
-    },
-    { role: "user", content: "no, dejalo" },
-    {
-      role: "assistant",
-      content:
-        '{"intent":"correct_category","amount":null,"category":null,"note":null,"query_type":null,"new_name":null,"dialog_action":"abandon","then_reassign":false}',
-    },
-    { role: "user", content: "decime los últimos movimientos" },
-    {
-      role: "assistant",
-      content:
-        '{"intent":"query","amount":null,"category":null,"note":null,"query_type":"recent","new_name":null,"dialog_action":null,"then_reassign":false}',
-    },
-    { role: "user", content: "creá gastos hormiga y guardalo ahí" },
-    {
-      role: "assistant",
-      content:
-        '{"intent":"create_category","amount":null,"category":"gastos hormiga","note":null,"query_type":null,"new_name":null,"dialog_action":null,"then_reassign":true}',
-    },
-    { role: "user", content: "ya lo pagué" },
-    {
-      role: "assistant",
-      content:
-        '{"intent":"mark_paid","amount":null,"category":null,"note":null,"query_type":null,"new_name":null,"dialog_action":null,"then_reassign":false}',
-    },
-  ],
-  awaiting_amount_confirmation: [
-    { role: "user", content: "5000" },
-    {
-      role: "assistant",
-      content:
-        '{"intent":"register_expense","amount":5000,"category":null,"note":null,"query_type":null,"new_name":null,"dialog_action":"resolve","then_reassign":false}',
-    },
-    { role: "user", content: "si" },
-    {
-      role: "assistant",
-      content:
-        '{"intent":"register_expense","amount":null,"category":null,"note":null,"query_type":null,"new_name":null,"dialog_action":null,"then_reassign":false}',
-    },
-    { role: "user", content: "6000" },
-    {
-      role: "assistant",
-      content:
-        '{"intent":"register_expense","amount":6000,"category":null,"note":null,"query_type":null,"new_name":null,"dialog_action":null,"then_reassign":false}',
-    },
-  ],
-  awaiting_registration: [
-    { role: "user", content: "5000" },
-    {
-      role: "assistant",
-      content:
-        '{"intent":"register_expense","amount":5000,"category":null,"note":null,"query_type":null,"new_name":null,"dialog_action":"resolve","then_reassign":false}',
-    },
-    { role: "user", content: "no, dejalo" },
-    {
-      role: "assistant",
-      content:
-        '{"intent":"register_expense","amount":null,"category":null,"note":null,"query_type":null,"new_name":null,"dialog_action":"abandon","then_reassign":false}',
-    },
-    { role: "user", content: "decime los últimos movimientos" },
-    {
-      role: "assistant",
-      content:
-        '{"intent":"query","amount":null,"category":null,"note":null,"query_type":"recent","new_name":null,"dialog_action":null,"then_reassign":false}',
-    },
-    { role: "user", content: "borralo" },
-    {
-      role: "assistant",
-      content:
-        '{"intent":"delete_expense","amount":null,"category":null,"note":null,"query_type":null,"new_name":null,"dialog_action":null,"then_reassign":false}',
-    },
-  ],
-};
-
-/** Renders the dialog context into a deterministic prompt fragment. */
-export function renderDialogContext(context: InterpretContext): string {
-  switch (context.state) {
-    case "awaiting_category":
-      return `Contexto del diálogo: estado ${context.state}; movimiento pendiente ${context.pending.movementId ?? "ninguno"} (nota: ${context.pending.note ?? "sin nota"}); pregunta abierta: "${context.openQuestion}".`;
-    case "awaiting_amount_confirmation":
-      return `Contexto del diálogo: estado ${context.state}; montos presentados: ${context.pending.amounts.join(" / ")}; nota: ${context.pending.note ?? "sin nota"}; categoría: ${context.pending.category ?? "sin categoría"}; pregunta abierta: "${context.openQuestion}".`;
-    case "awaiting_registration":
-      return `Contexto del diálogo: estado ${context.state}; monto: ${context.pending.amount ?? "pendiente"}; categoría: ${context.pending.category ?? "pendiente"}; nota: ${context.pending.note ?? "sin nota"}; pregunta abierta: "${context.openQuestion}".`;
-  }
-}
-
 export class GroqBotBrain implements BotBrain {
   private readonly apiKey: string;
   private readonly model: string;
@@ -573,20 +377,19 @@ export class GroqBotBrain implements BotBrain {
   }
 
   async interpret(message: string, context?: InterpretContext): Promise<ConversationEnvelope | null> {
-    let system = INTERPRET_SYSTEM_PROMPT;
-    let messages: ChatMessage[] = [...FEW_SHOTS];
-    if (context !== undefined) {
-      system = `${INTERPRET_SYSTEM_PROMPT} ${DIALOG_INTERPRET_ADDENDUM[context.state]} ${renderDialogContext(context)}`;
-      messages = [...messages, ...DIALOG_FEW_SHOTS[context.state], { role: "user", content: message }];
-    } else {
-      messages = [...messages, { role: "user", content: message }];
-    }
-    const payload = await this.chat(system, messages);
+    // The context argument is the spec-mandated vestige: the v2 brain never
+    // embeds it in the prompt. Kept (and ignored) so the port signature stays
+    // stable while the service transitions.
+    void context;
+    const payload = await this.chat(INTERPRET_SYSTEM_PROMPT, [...FEW_SHOTS, { role: "user", content: message }]);
     if (payload === null) {
       return null;
     }
     const result = conversationEnvelopeSchema.safeParse(payload);
-    return result.success ? result.data : null;
+    // The narrow schema output is the v2 envelope; the wide transitional type
+    // keeps the service compiling until Phase 3 (the runtime contract is the
+    // schema — legacy keys/intents already degrade to null).
+    return result.success ? (result.data as unknown as ConversationEnvelope) : null;
   }
 
   async reply(result: ExecutionResult): Promise<string | null> {

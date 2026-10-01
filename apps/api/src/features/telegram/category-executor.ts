@@ -7,11 +7,11 @@ import {
 import type { CategoryService } from "../categories/categories.service";
 import { ReservedCategoryError } from "../categories/reserved";
 import type {
-  BotIntent,
   BotAction,
   CategoryCommandErrorCode,
   ConversationEnvelope,
   ExecutionResult,
+  LegacyBotIntent,
 } from "./bot-brain";
 import { reservedCategoryReply } from "./reply-text";
 
@@ -185,7 +185,7 @@ export class CategoryExecutor {
   }
 
   private result(
-    intent: BotIntent,
+    intent: LegacyBotIntent,
     ok: boolean,
     action: BotAction,
     fields: {

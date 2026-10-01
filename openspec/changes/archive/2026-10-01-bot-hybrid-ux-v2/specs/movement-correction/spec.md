@@ -1,10 +1,6 @@
-# Movement Correction Specification
+# Delta for Movement Correction
 
-## Purpose
-
-Free-form correction of past movements: the owner points at an already-registered movement ("esos 2500", "el uber de ayer") and names a category; the deterministic matcher resolves the reference to exactly one movement and reassigns it via `updateMovement`. Ambiguity is resolved by asking, never by guessing. The system MUST NEVER fabricate a movement, amount, or note.
-
-## Requirements
+## MODIFIED Requirements
 
 ### Requirement: Movement Correction Executor
 
@@ -62,13 +58,3 @@ Ambiguity is eliminated by explicit button picks: the system MUST NOT reassign a
 - GIVEN the bot asked which movement to correct
 - WHEN the owner taps a main-menu button instead
 - THEN the pick closes, nothing is reassigned, and the chosen flow starts fresh
-
-### Requirement: Correction Safety (Phantom Guard)
-
-The executor MUST reassign only a movement resolved by the matcher or explicitly picked by the owner. A missing or deleted target movement MUST produce a clear "movement no longer exists" reply; the system MUST NOT create anything in its place.
-
-#### Scenario: Missing movement degrades
-
-- GIVEN the matched movement was deleted before the update
-- WHEN `updateMovement` runs
-- THEN a clear error reply is sent and nothing is created

@@ -52,12 +52,13 @@ A savings rule MUST be definable conversationally and via an explicit command. T
 
 ### Requirement: Income Split and Rounding
 
-When an INCOME registration's note matches a savings-rule keyword, the system MUST register INCOME with the NET amount (gross − savings) and a SAVINGS movement of the savings amount in the "ahorro" category, both in a single transaction. Rounding MUST be `savings = round2(gross × percent / 100)`, `net = gross − savings`, and `net + savings` MUST equal `gross` exactly. With no matching rule or an active "sin ahorro" override, the income MUST register whole (single movement, today's behavior).
+When an INGRESO-type movement registers (from the ➕ Ingreso menu button) and its note matches a savings-rule keyword, the system MUST register INCOME with the NET amount (gross − savings) and a SAVINGS movement of the savings amount in the "ahorro" category, both in a single transaction. Rounding MUST be `savings = round2(gross × percent / 100)`, `net = gross − savings`, and `net + savings` MUST equal `gross` exactly. With no matching rule, the income MUST register whole (single movement). Per-message overrides no longer exist — every INGRESO follows the rule.
+(Previously: the split triggered on keyword-matched income free text, and a "sin ahorro" override could register the income whole.)
 
 #### Scenario: Split registers net and savings
 
-- GIVEN rule "entrenuts" at 10% and message "cobro sueldo de entrenuts 1000"
-- WHEN processed
+- GIVEN rule "entrenuts" at 10% and an INGRESO capture "cobro sueldo de entrenuts 1000"
+- WHEN the preview saves
 - THEN INCOME 900 and SAVINGS 100 in "ahorro" are created
 
 #### Scenario: Rounding keeps the invariant
@@ -74,41 +75,26 @@ When an INCOME registration's note matches a savings-rule keyword, the system MU
 
 #### Scenario: No rule registers whole
 
-- GIVEN an income matching no rule
-- WHEN processed
+- GIVEN an INGRESO matching no rule
+- WHEN the preview saves
 - THEN a single whole INCOME movement is created
 
 ### Requirement: SHARED Inheritance
 
-A SAVINGS movement created from a SHARED income MUST inherit SHARED visibility; it MUST be visible to the same viewers as the source income.
+A SAVINGS movement created from a SHARED income MUST inherit SHARED visibility and be visible to the same viewers as the source income. Shared incomes are legacy-only after the redesign (no new shared-income capture exists — COMPARTIDO captures expenses), so the inheritance MUST keep applying to pre-existing shared incomes.
+(Previously: shared incomes came from the `compartido:` prefix and the inheritance applied to them at registration.)
 
-#### Scenario: Shared income shares savings
+#### Scenario: Legacy shared income shares savings
 
-- GIVEN "compartido: cobro sueldo de entrenuts 1000" with a matching rule
-- WHEN processed
+- GIVEN a shared income registered before the redesign with a matching rule
+- WHEN the split applies to it
 - THEN the SAVINGS movement carries SHARED visibility like the net INCOME
 
-### Requirement: Deterministic Overrides
+#### Scenario: Compartido captures never split
 
-Per-message overrides MUST be parsed at arrival like the `compartido:` prefix and MUST work when the brain is absent. "sin ahorro" MUST register the full gross with no SAVINGS movement; "con X%" MUST replace the rule percent for that message only, with X validated as `0 < X <= 100`.
-
-#### Scenario: sin ahorro registers whole
-
-- GIVEN a matching rule and message "sin ahorro cobro sueldo de entrenuts 1000"
-- WHEN processed
-- THEN INCOME 1000 registers whole and no SAVINGS movement is created
-
-#### Scenario: con X% overrides the percent
-
-- GIVEN a rule at 10% and message "con 5% cobro sueldo de entrenuts 1000"
-- WHEN processed
-- THEN INCOME 950 and SAVINGS 50 are created
-
-#### Scenario: Brain-absent path
-
-- GIVEN no brain configured
-- WHEN an income with a matching rule and an override arrives
-- THEN the override applies deterministically
+- GIVEN a COMPARTIDO-typed capture whose note matches a rule
+- WHEN the preview saves
+- THEN a single SHARED EXPENSE registers and no SAVINGS movement is created
 
 ### Requirement: KPI-Exclusion Invariants
 

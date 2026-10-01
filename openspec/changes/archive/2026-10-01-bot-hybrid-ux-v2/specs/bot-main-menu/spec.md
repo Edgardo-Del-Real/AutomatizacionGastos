@@ -1,10 +1,6 @@
-# Bot Main Menu Specification
+# Delta for Bot Main Menu
 
-## Purpose
-
-The owner-facing main menu: five inline actions (Nuevo gasto, Gasto previsto, Borrar, Reporte, Ayuda), Telegram `setMyCommands` registration, and a static help text with capture examples that works without the LLM.
-
-## Requirements
+## MODIFIED Requirements
 
 ### Requirement: Main Menu Actions
 
@@ -74,6 +70,8 @@ The system MUST provide a static help reply (no LLM) that explains the eight-but
 - GIVEN the static help text
 - WHEN it is rendered
 - THEN it explains the eight buttons with real capture examples and never mentions prefixes
+
+## ADDED Requirements
 
 ### Requirement: Post-Action Menu Return
 

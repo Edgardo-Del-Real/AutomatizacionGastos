@@ -1,10 +1,6 @@
-# Quick Capture Specification
+# Delta for Quick Capture
 
-## Purpose
-
-Deterministic fast path for expense capture: a pure parser extracts amount and note and resolves the category against the owner's CLOSED category set; on a match the bot shows a preview with `[✅ Guardar] [✏️ Corregir]` and the Real/Previsto type is chosen by button. The LLM is never invoked for a captured message and never decides the type.
-
-## Requirements
+## MODIFIED Requirements
 
 ### Requirement: Deterministic Capture Parser
 
@@ -116,15 +112,7 @@ The parser MUST run ONLY on the message that follows a capture-type menu tap (`a
 - WHEN the message is processed
 - THEN an educational redirect teaches ➕ Nuevo gasto, no preview opens, and no movement registers
 
-### Requirement: Save Idempotency
-
-`✅ Guardar` MUST execute exactly once per preview: the persisted `saveToken` in the callback data MUST gate execution, a repeated Guardar callback MUST NOT register twice, and the second tap MUST reply "ya procesado".
-
-#### Scenario: Repeated Guardar registers once
-
-- GIVEN a Guardar callback whose save-token was already consumed
-- WHEN it is processed again
-- THEN no second movement registers and a "ya procesado" reply is sent
+## ADDED Requirements
 
 ### Requirement: Create Category from Preview
 

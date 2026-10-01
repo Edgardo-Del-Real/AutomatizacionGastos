@@ -1,118 +1,6 @@
-# Telegram Bot Specification
+# Delta for Telegram Bot
 
-## Purpose
-
-Sole inbound surface for movement ingestion, via Telegram Bot API long polling (`getUpdates`). Only the owner's text messages are parsed, classified, and persisted as movements; successful registrations, setup, and correction flows reply back to the owner. Only `message` updates are processed; all logic is drivable offline through `bot.handleUpdate()`.
-
-## Requirements
-
-### Requirement: Long-Polling Lifecycle
-
-The system MUST start the Telegram long-polling loop when the API process starts and MUST stop it gracefully on SIGINT/SIGTERM. The loop MUST NOT require any inbound HTTP surface. The processing pipeline MUST be fully drivable via `bot.handleUpdate(update)` with no polling loop and no network calls.
-
-#### Scenario: Graceful stop on shutdown
-
-- GIVEN the API process is polling
-- WHEN SIGINT or SIGTERM is received
-- THEN the polling loop stops cleanly without errors
-
-#### Scenario: Offline pipeline drive
-
-- GIVEN a fixture `Update` object
-- WHEN `bot.handleUpdate(update)` is invoked in tests
-- THEN the update is processed with zero network calls
-
-### Requirement: Update Filtering
-
-The system MUST process `message` and `callback_query` updates (callback routing per bot-inline-interactions). `edited_message`, channel posts, service/status updates, and group-chat messages MUST be ignored entirely — never recorded, never creating movements, never triggering a reply. A `message` without text MUST NOT create a movement or reply. A `callback_query` MUST be processed only when its action is known and its sender resolves to a household member.
-(Previously: only `message` updates were processed; `callback_query` updates were rejected by the normalizer.)
-
-#### Scenario: Edited message ignored
-
-- GIVEN an `edited_message` update
-- WHEN it is processed
-- THEN no movement is created and nothing is recorded
-- AND no reply is sent
-
-#### Scenario: Non-text message
-
-- GIVEN a `message` update with a photo and no text
-- WHEN it is processed
-- THEN no movement is created
-- AND no reply is sent
-
-#### Scenario: Group chat ignored
-
-- GIVEN a `message` update in a group chat
-- WHEN it is processed
-- THEN no movement is created
-- AND no reply is sent
-
-#### Scenario: Callback query processed
-
-- GIVEN a `callback_query` with a known action from a known owner chat
-- WHEN it is processed
-- THEN the callback action executes
-- AND no text movement is created
-
-### Requirement: Owner Filtering
-
-The system MUST identify the sender by `message.from.id` and MUST resolve it to a household member's `ownerId` via the household registry. A chatId with a matching member MUST proceed under that member's ownerId; any other chatId MUST NOT produce a movement and MUST NOT receive a reply. When `HOUSEHOLD_MEMBERS` is unset (single-user degraded mode), the system MUST process only when `from.id` equals `TELEGRAM_OWNER_CHAT_ID`, attributing to ownerId `default`.
-(Previously: only `TELEGRAM_OWNER_CHAT_ID` was accepted and everything attributed to a single owner.)
-
-#### Scenario: Member chat proceeds under its owner
-
-- GIVEN a `message` whose `from.id` matches Rita's chatId in the registry
-- WHEN it is processed
-- THEN the message proceeds and attributes to Rita's ownerId
-
-#### Scenario: Partner chat proceeds under its owner
-
-- GIVEN a `message` whose `from.id` matches Edgardo's chatId in the registry
-- WHEN it is processed
-- THEN the message proceeds and attributes to Edgardo's ownerId
-
-#### Scenario: Unknown chat ignored silently
-
-- GIVEN a `message` whose `from.id` matches no household member
-- WHEN it is processed
-- THEN no movement is created and no reply is sent
-
-#### Scenario: Single-user degraded mode
-
-- GIVEN `HOUSEHOLD_MEMBERS` unset and `from.id` equals `TELEGRAM_OWNER_CHAT_ID`
-- WHEN it is processed
-- THEN the message proceeds and attributes to ownerId `default`
-
-### Requirement: Message Deduplication
-
-The system MUST record every processed `message` in `ProcessedMessage` under `(chatId, messageId)` and MUST skip, without error or reply, any message whose key already exists. Recording MUST happen AFTER the chat gate: unknown chats MUST NOT be recorded. Deduplication MUST be per `(chatId, messageId)` after the sender's owner has been resolved. Callback retries MUST be idempotent: every registering or destructive callback MUST carry a persisted token (save-token, target id) so a repeated callback MUST NOT double-execute and MUST reply "ya procesado" (per bot-inline-interactions).
-(Previously: dedup covered only text `message` updates via `ProcessedMessage`; callback retries had no protection.)
-
-#### Scenario: Duplicate update skipped
-
-- GIVEN a message already recorded with the same `(chatId, messageId)`
-- WHEN the same message arrives again
-- THEN it is skipped, no movement is created, and no reply is sent
-
-#### Scenario: Same id in different chats
-
-- GIVEN two messages with the same `messageId` from different chats
-- WHEN both are processed
-- THEN both are recorded and processed
-
-#### Scenario: Unknown chat is not recorded
-
-- GIVEN a `message` from a chatId matching no household member
-- WHEN it is processed
-- THEN nothing is recorded in `ProcessedMessage`
-
-#### Scenario: Retried callback does not double-execute
-
-- GIVEN a callback whose action token was already consumed
-- WHEN the same callback arrives again
-- THEN a "ya procesado" reply is sent
-- AND nothing executes
+## MODIFIED Requirements
 
 ### Requirement: Movement Parsing, Classification and Categorization
 
@@ -142,75 +30,6 @@ The system MUST NOT parse free text as a movement: capture starts ONLY from a me
 - GIVEN the owner has keyword rules associated with categories
 - WHEN any capture or idle message is processed
 - THEN no keyword rule is consulted or matched by the bot
-
-### Requirement: Movement Persistence and Error Tolerance
-
-The system MUST persist each valid message as a movement (currency `ARS`, classified type, extracted note, timestamp, resolved owner, assigned category, visibility per the shared-prefix/brain-flag rules) through the movement service. A movement-creation failure MUST be logged and MUST NOT stop subsequent messages or crash the polling loop.
-(Previously: category was never set, replies did not exist, and visibility did not exist.)
-
-#### Scenario: Movement persisted for the resolved owner
-
-- GIVEN a member's message resolves to Edgardo's ownerId
-- WHEN the movement is created
-- THEN it is stored under Edgardo's ownerId
-
-#### Scenario: Persistence failure tolerated
-
-- GIVEN a valid message whose movement creation fails
-- WHEN the message is processed
-- THEN the failure is logged and remaining messages still process
-
-### Requirement: Configuration and Token Secrecy
-
-The system MUST require `TELEGRAM_BOT_TOKEN` with no default. When `HOUSEHOLD_MEMBERS` is set, member chatIds MUST be validated as positive integers. When unset, `TELEGRAM_OWNER_CHAT_ID` MUST be a positive integer. WhatsApp env vars MUST NOT exist. The token MUST never be logged, including any `api.telegram.org` URL containing it, and household chatIds MUST NOT be logged.
-(Previously: only `TELEGRAM_OWNER_CHAT_ID` defined the sole owner chat.)
-
-#### Scenario: Missing token fails fast
-
-- GIVEN `TELEGRAM_BOT_TOKEN` is unset
-- WHEN the API starts
-- THEN startup fails with a clear configuration error
-
-#### Scenario: Token never logged
-
-- GIVEN an error involving the Telegram API
-- WHEN it is logged
-- THEN the log contains no token and no `bot<token>` URL
-
-#### Scenario: Malformed household chatId fails fast
-
-- GIVEN `HOUSEHOLD_MEMBERS` contains a non-integer chatId
-- WHEN the API starts
-- THEN startup fails with a clear configuration error
-
-### Requirement: Reply Channel (Bidirectional)
-
-The system MUST expose an injectable reply port `(text: string, keyboard?: InlineKeyboard, editMessageId?: number) => Promise<void>` that sends a text message back to the sender chat, optionally with an inline keyboard, and edits an existing message when `editMessageId` is present. The reply port MUST be wired to the Telegram bot's reply/edit mechanism in production and to a recording stub in offline tests; the stub MUST record text, keyboard rows, and edit target through `recordApiCalls` with zero network calls. A reply failure MUST be logged and MUST NOT stop the polling loop or crash processing.
-(Previously: the reply port accepted a plain text string only, and the offline harness recorded text replies.)
-
-#### Scenario: Successful reply wired
-
-- GIVEN a processed owner message that requires a reply
-- WHEN the pipeline emits a reply
-- THEN the reply text is sent to the owner chat
-
-#### Scenario: Reply failure tolerated
-
-- GIVEN the Telegram API fails to send a reply
-- WHEN the pipeline attempts the reply
-- THEN the failure is logged and processing continues
-
-#### Scenario: Keyboard reply recorded offline
-
-- GIVEN a processed update that emits a reply with an inline keyboard
-- WHEN the pipeline emits the reply
-- THEN the stub records the text and the keyboard rows with no network call
-
-#### Scenario: Edit reply updates the message
-
-- GIVEN a reply emitted with `editMessageId` set
-- WHEN the pipeline emits it
-- THEN the port edits the existing message instead of sending a new one
 
 ### Requirement: Success and Help Reply Content
 
@@ -369,22 +188,6 @@ The system MUST recognize and handle these owner commands: `menu`, `ayuda`, `lis
 - WHEN the bot boots
 - THEN `setMyCommands` is called with the trimmed command list
 
-### Requirement: Offline Testability (Reply + Middleware)
-
-The system MUST be drivable offline for reply logic. The offline test harness MUST record outbound reply payloads instead of throwing on network calls, so that reply behavior is asserted without touching the Telegram network. The reply feature and this middleware change MUST be implemented together in the same test-driven cycle.
-
-#### Scenario: Offline reply is recorded
-
-- GIVEN the offline bot harness with a recording middleware
-- WHEN `bot.handleUpdate` processes an update that triggers a reply
-- THEN the reply payload is captured and asserted with no network call
-
-#### Scenario: Both land together
-
-- GIVEN the reply feature is added
-- WHEN tests run
-- THEN the recording middleware exists in the same change, so reply tests pass offline
-
 ### Requirement: Intent-First Message Handling
 
 For every non-command owner message in `idle`, the system MUST run the idle classifier (see bot-free-text-routing): deterministic pre-checks first (legacy-prefix and capture-shaped text → educational redirect + menu, zero LLM), then the bot brain for query | greeting | off_topic classification. `query`/`query_recent`/`query_balance`/`query_month`/`query_planned` MUST execute the deterministic query executor and answer from real data (an honest redirect replies only when the query fails or the type is unresolvable); `greeting` MUST reply with a warm expense-scoped greeting plus the menu; `off_topic` or a brain-null result MUST reply "no puedo resolver eso" plus the menu. In `awaiting_capture`, the message MUST be parsed as `monto+nota` with no brain call. The setup gate (owner with no categories) MUST take precedence over idle routing. The state machine MUST remain authoritative — the LLM MUST never decide state transitions, capture types, categories, or destructive actions.
@@ -455,28 +258,6 @@ The LLM reply surface MUST be limited to query answers and greeting replies: the
 - WHEN it is processed
 - THEN the brain's `reply` is not invoked
 
-### Requirement: Savings Rule Command
-
-The system MUST recognize `registrar ahorro: <palabra> al <X>%` as an owner command that creates or upserts the savings rule (semantics per the savings capability) and MUST reply with a confirmation. A malformed percent MUST be rejected with a validation error and MUST NOT store a rule. Unrecognized commands MUST still fall through to normal registration parsing.
-
-#### Scenario: Define a savings rule
-
-- GIVEN owner sends "registrar ahorro: entrenuts al 10%"
-- WHEN it is processed
-- THEN the rule is created or upserted and a confirmation is sent
-
-#### Scenario: Invalid percent rejected
-
-- GIVEN owner sends "registrar ahorro: entrenuts al 0%"
-- WHEN it is processed
-- THEN a validation error replies and no rule is stored
-
-#### Scenario: Unrecognized command falls through
-
-- GIVEN owner text that is not a recognized command
-- WHEN it is processed
-- THEN it is treated as a normal registration
-
 ### Requirement: Savings Split on Income Registration
 
 When an INGRESO-type movement registers (from the ➕ Ingreso menu button) and its note matches a savings-rule keyword, the system MUST register the INCOME with the NET amount and a SAVINGS movement in the "ahorro" category in a single transaction (semantics per the savings capability), and the confirmation reply MUST report the gross, net, and savings amounts. A COMPARTIDO-typed capture MUST NOT trigger a split. An INGRESO matching no rule MUST register whole. Shared incomes are legacy-only after the redesign; a pre-existing shared income keeps the SHARED inheritance behavior (see savings). The `sin ahorro`/`con X%` overrides are REMOVED — such text in `idle` gets an educational redirect and never alters a split.
@@ -507,22 +288,6 @@ When an INGRESO-type movement registers (from the ➕ Ingreso menu button) and i
 - WHEN the split applies to it
 - THEN its SAVINGS movement inherits SHARED visibility like the net INCOME
 
-### Requirement: Savings Query Routing
-
-The system MUST answer "cuánto ahorré este mes" from real data with the sum of SAVINGS movements in the current calendar month (semantics per the savings capability); an honest redirect MUST be used only when query execution fails.
-
-#### Scenario: Savings query answers real data
-
-- GIVEN SAVINGS 100 and 50 this month
-- WHEN the owner asks "cuánto ahorré este mes"
-- THEN the reply answers 150 from real data
-
-#### Scenario: Savings query failure redirects
-
-- GIVEN a savings query whose execution fails
-- WHEN the owner asks "cuánto ahorré este mes"
-- THEN an honest redirect replies and no amount is fabricated
-
 ### Requirement: Planned Expense Registration (Gasto previsto button)
 
 The system MUST register a PENDING EXPENSE ONLY through the `📅 Gasto previsto` menu button: the tap persists capture type PENDING, the next `monto+nota` opens the preview, and saving registers a `PENDING` EXPENSE through the existing create path. Planned expenses are INDIVIDUAL by design: a PENDING capture MUST NEVER compose with COMPARTIDO. The `previsto:` prefix is REMOVED: a message starting with `previsto:` in `idle` MUST reply with an educational redirect teaching the 📅 button and MUST NOT create anything, start a dialog, or change the bot state. A PENDING registration MUST NOT trigger any savings split. The type MUST NOT be signaled by the LLM — PENDING results ONLY from the menu button.
@@ -546,44 +311,6 @@ The system MUST register a PENDING EXPENSE ONLY through the `📅 Gasto previsto
 - WHEN it is processed
 - THEN no PENDING movement results
 
-### Requirement: Recent Movements Exclude Planned
-
-The bot's `recent` query MUST exclude PENDING movements; PENDING rows MUST be visible only through the `planned` query.
-
-#### Scenario: recent omits pending
-
-- GIVEN a PENDING EXPENSE and recent PAID movements
-- WHEN the owner asks for recent movements
-- THEN the reply lists only the PAID movements
-
-#### Scenario: planned still answers
-
-- GIVEN the same PENDING EXPENSE
-- WHEN the owner asks "¿cuánto tengo previsto?"
-- THEN the reply reports the planned total from real data
-
-### Requirement: Planned Query Routing
-
-The system MUST answer "¿cuánto tengo previsto?" and equivalent phrasings ("gastos fijos previstos", "cuánto voy a gastar el mes que viene") from real data: the sum of PENDING EXPENSE movements targeted at next month (`summary.planned`). An honest redirect MUST be used only when query execution fails.
-
-#### Scenario: planned query answers real data
-
-- GIVEN PENDING EXPENSE 2500 and 1500 targeted next month
-- WHEN the owner asks "¿cuánto tengo previsto?"
-- THEN the reply answers 4000 for next month from real data
-
-#### Scenario: no pending answers zero
-
-- GIVEN no PENDING EXPENSE
-- WHEN the owner asks "¿cuánto tengo previsto?"
-- THEN the reply answers 0 for next month
-
-#### Scenario: planned query failure redirects
-
-- GIVEN a planned query whose execution fails
-- WHEN the owner asks "¿cuánto tengo previsto?"
-- THEN an honest redirect replies and no amount is fabricated
-
 ### Requirement: Guarded Category Creation Funnel
 
 Every bot-side category-creation path — the preview `➕ Crear categoría` flow, the `🗂 Administrar categorías` create flow, and setup-list entries — MUST funnel through the guarded `CategoryService.createCategory`. Dialog auto-creation MUST NOT exist: capture previews and correction reassigns resolve ONLY against the closed category set or the category buttons and MUST NEVER create a category. A name rejected by the reserved or duplicate-variant guards MUST produce a redirect reply, MUST NOT create any category, and MUST leave the current flow open without a selection.
@@ -600,3 +327,30 @@ Every bot-side category-creation path — the preview `➕ Crear categoría` flo
 - GIVEN a preview category row or a correction reassign row
 - WHEN any category button or text is processed
 - THEN no category is created beyond the explicit ➕ or admin flows
+
+## REMOVED Requirements
+
+### Requirement: Correction Loop (awaiting_category) and Learning
+
+(Reason: the `awaiting_category` state is removed — category is mandatory at the preview, so no movement falls to "otro" and no correction loop exists.)
+(Migration: category changes for past movements go through 🧾 Administrar gastos → ✏️ Corregir categoría (see movement-correction).)
+
+### Requirement: Dialog Controller (Brain-Routed Dialogs)
+
+(Reason: the dialog states (`awaiting_category`, `awaiting_amount_confirmation`, `awaiting_registration`) are removed; every flow is button-driven.)
+(Migration: deterministic button chains in quick-capture and bot-manage-expenses replace brain-routed dialog resolution.)
+
+### Requirement: Mixed-Intent Create + Reassign (then_reassign)
+
+(Reason: the brain no longer creates categories; creation is button-driven via preview ➕ and the category admin.)
+(Migration: none — the preview ➕ flow covers create-and-select.)
+
+### Requirement: Registration Overrides
+
+(Reason: the `sin ahorro`/`con X%` text overrides are legacy prefixes and are removed with the prefix surface.)
+(Migration: savings splits always follow the rule; legacy override text gets an educational redirect (see bot-free-text-routing).)
+
+### Requirement: Shared Registration via Prefix
+
+(Reason: the `compartido:` prefix is removed; shared captures now use the 👥 Compartido menu button with type COMPARTIDO.)
+(Migration: shared movement creation is a menu-chosen capture type (see quick-capture).)

@@ -1,10 +1,24 @@
-# Bot Expense Lifecycle Specification
+# Delta for Bot Expense Lifecycle
 
-## Purpose
+## ADDED Requirements
 
-The conversational expense lifecycle: the bot marks planned expenses as paid (PENDING→PAID) and deletes expenses from chat, reusing the existing REST services (`MovementService.markMovementPaid`, `ExpenseService.deleteExpense`) with zero duplicated business logic. Reference resolution is deterministic (recency, category, amount cues); ambiguity reuses the existing movement-selection ask.
+### Requirement: Administrar Gastos Sub-Menu
 
-## Requirements
+The system MUST expose the `🧾 Administrar gastos` sub-menu, reachable from the main menu, with exactly three buttons — `🗑 Borrar gasto`, `✏️ Corregir categoría`, `💵 Marcar como pagado`. Every completed or abandoned chain MUST return to the main menu.
+
+#### Scenario: Sub-menu opens from the main menu
+
+- GIVEN an owner taps `🧾 Administrar gastos`
+- WHEN the callback is processed
+- THEN the three-button sub-menu renders
+
+#### Scenario: Menu tap abandons a pending chain
+
+- GIVEN an owner mid-chain in the expense admin
+- WHEN they tap any main-menu button
+- THEN the chain abandons and the chosen flow starts fresh
+
+## MODIFIED Requirements
 
 ### Requirement: Mark-Paid Intent Execution
 
@@ -74,19 +88,3 @@ The system MUST resolve the lifecycle target by explicit button pick, never by r
 - GIVEN no movement matches the chain window
 - WHEN the chain renders
 - THEN a clear no-match reply is sent and no movement changes
-
-### Requirement: Administrar Gastos Sub-Menu
-
-The system MUST expose the `🧾 Administrar gastos` sub-menu, reachable from the main menu, with exactly three buttons — `🗑 Borrar gasto`, `✏️ Corregir categoría`, `💵 Marcar como pagado`. Every completed or abandoned chain MUST return to the main menu.
-
-#### Scenario: Sub-menu opens from the main menu
-
-- GIVEN an owner taps `🧾 Administrar gastos`
-- WHEN the callback is processed
-- THEN the three-button sub-menu renders
-
-#### Scenario: Menu tap abandons a pending chain
-
-- GIVEN an owner mid-chain in the expense admin
-- WHEN they tap any main-menu button
-- THEN the chain abandons and the chosen flow starts fresh

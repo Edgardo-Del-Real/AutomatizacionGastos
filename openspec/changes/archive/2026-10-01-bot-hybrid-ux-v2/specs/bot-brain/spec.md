@@ -1,10 +1,6 @@
-# Bot Brain Specification
+# Delta for Bot Brain
 
-## Purpose
-
-The bot brain is the conversational LLM surface of the Telegram bot. It interprets every conversational message into a strict intent envelope and, after deterministic execution, writes the reply from the ACTUAL executed result (reply-after-action, zero hallucination by construction). It replaces the extraction-only `NoteInterpreter` port, reusing its Groq transport, `normalizeAmountString`, degrade-to-null policy, and env contract verbatim. Every brain failure degrades to the deterministic flow — the brain never blocks the bot.
-
-## Requirements
+## MODIFIED Requirements
 
 ### Requirement: Bot Brain Port
 
@@ -104,38 +100,6 @@ The brain's `reply` MUST receive ONLY the executed result — `{intent, ok, acti
 - WHEN the bot processes it
 - THEN no movement is registered, corrected, marked paid, or deleted by the brain
 
-### Requirement: Degrade-to-Null Contract
-
-`interpret` and `reply` MUST return `null` — and MUST NOT throw to the caller — on every failure class: HTTP error, HTTP 429, timeout, non-JSON response, zod schema mismatch, and invalid or missing amount. A `null` result MUST leave the caller on today's deterministic flow.
-
-#### Scenario: Provider error degrades
-
-- GIVEN the provider responds with HTTP 429 or an HTTP error
-- WHEN `interpret(message)` is invoked
-- THEN `null` is returned
-
-#### Scenario: Timeout degrades
-
-- GIVEN the provider does not respond within `LLM_TIMEOUT_MS`
-- WHEN `interpret(message)` is invoked
-- THEN `null` is returned
-
-### Requirement: Amount Normalization and Validation
-
-The brain MUST normalize amounts via `normalizeAmountString`, reused verbatim from the interpreter. Spanish formats (`"1.234,50"`, `"1234,50"`, `"1234.5"`, `"5 mil"`, `"5k"`) MUST normalize to the same numeric values. A non-finite, zero, or negative amount MUST reject the schema and degrade to `null`.
-
-#### Scenario: Prose amounts normalize
-
-- GIVEN an LLM amount `"5 mil"`
-- WHEN the payload is validated
-- THEN the amount normalizes to 5000
-
-#### Scenario: Invalid amount rejected
-
-- GIVEN an LLM amount that is `NaN`, zero, or negative
-- WHEN the payload is validated
-- THEN the envelope degrades to `null`
-
 ### Requirement: Prompt Contract (three-intent)
 
 The `interpret` system prompt MUST teach the three-intent taxonomy only: query (with query-type phrasings), greeting, and off_topic. The prompt MUST instruct: strict JSON only, never invent amounts, off-topic never answered as general chat, and the brain never creating categories, never inferring capture types, and never deciding destructive actions. The prompt MUST be pinned by golden snapshot tests so prompt drift fails CI. When the prompts are trimmed, all pinned golden snapshots MUST be regenerated in the same change.
@@ -153,28 +117,19 @@ The `interpret` system prompt MUST teach the three-intent taxonomy only: query (
 - WHEN the change is implemented and tests run
 - THEN all pinned golden snapshots are regenerated in the same change and CI passes
 
-### Requirement: Environment Configuration
+## REMOVED Requirements
 
-`GROQ_API_KEY` MUST be optional; without it the bot MUST run deterministic-only. `LLM_MODEL` MUST default to `openai/gpt-oss-20b`, `LLM_BASE_URL` MUST default to the Groq chat-completions URL, and `LLM_TIMEOUT_MS` MUST default to `5000`. All four MUST be zod-validated (key min-length when present, URL format, positive integer timeout).
+### Requirement: Dialog Action Contract
 
-#### Scenario: Invalid base URL fails startup
+(Reason: the dialog states are removed, so no `dialog_action` classification exists; flows are button-driven.)
+(Migration: none — deterministic button chains replace dialog resolution.)
 
-- GIVEN `LLM_BASE_URL` is not a valid URL
-- WHEN the API starts
-- THEN startup fails with a clear configuration error
+### Requirement: Shared Flag Contract
 
-### Requirement: Timeout, No-Retry, and Injectable Fetch
+(Reason: the `shared` flag is gone from the envelope; shared captures use the 👥 Compartido menu button with type COMPARTIDO.)
+(Migration: quick-capture Type Selection by Menu.)
 
-The brain MUST make a single request attempt per call, bounded by `LLM_TIMEOUT_MS` via `AbortSignal.timeout`, and MUST NOT retry. The Groq client MUST accept an injectable `fetchImpl` so unit and integration tests never reach the real endpoint.
+### Requirement: Category Suggestion Contract
 
-#### Scenario: Slow provider aborts
-
-- GIVEN the provider exceeds `LLM_TIMEOUT_MS`
-- WHEN a brain call is made
-- THEN the request aborts and the call degrades to `null`
-
-#### Scenario: Stubbed fetch in tests
-
-- GIVEN a test harness injecting a `fetchImpl` stub
-- WHEN `interpret(message)` is invoked
-- THEN the stub returns canned JSON and no real network call occurs
+(Reason: the trimmed envelope carries no category field and capture/editing never use the LLM — suggestions no longer exist.)
+(Migration: categories are button-chosen (see conversational-categories); the "LLM never creates" ceiling remains covered by the intent taxonomy and the Suggester Ceiling requirement.)

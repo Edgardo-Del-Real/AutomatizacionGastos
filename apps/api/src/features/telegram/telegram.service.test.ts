@@ -1425,7 +1425,8 @@ describe("TelegramService state machine", () => {
       expect.objectContaining({ category: "Kiosco" }),
       ownerId,
     );
-    expect(h.replies.at(-1)).toContain("Cafe");
+    expect(h.replies.at(-2)).toContain("Cafe");
+    expect(h.replies.at(-1)).toBe(menuReply());
     expect(h.mockSetState).toHaveBeenLastCalledWith({
       ownerId,
       state: "idle",
@@ -2034,7 +2035,8 @@ expect(h.mockCreateExpense).not.toHaveBeenCalled();
       pendingMovementId: null,
       pendingNote: null,
     });
-    expect(h.replies.at(-1)).toBe("Listo, quedó en Transporte.");
+    expect(h.replies.at(-2)).toBe("Listo, quedó en Transporte.");
+    expect(h.replies.at(-1)).toBe(menuReply());
   });
 
   it("T5: a folded plural category answer resolves to the existing category without creating", async () => {
@@ -2587,7 +2589,8 @@ describe("TelegramService brain orchestration (llm-conversational-bot)", () => {
       pendingMovementId: null,
       pendingNote: null,
     });
-    expect(h.replies.at(-1)).toContain("Supermercado");
+    expect(h.replies.at(-2)).toContain("Supermercado");
+    expect(h.replies.at(-1)).toBe(menuReply());
   });
 
   it("enters the collect dialog when a signaled category resolves to nothing, never auto-creating it (E2)", async () => {
@@ -3057,7 +3060,8 @@ describe("TelegramService brain orchestration (llm-conversational-bot)", () => {
       category: "Supermercado",
       note: "compre mercaderia",
     });
-    expect(h.replies.at(-1)).toBe("Listo, quedó registrado 5000 en Supermercado.");
+    expect(h.replies.at(-2)).toBe("Listo, quedó registrado 5000 en Supermercado.");
+    expect(h.replies.at(-1)).toBe(menuReply());
     expect(h.mockSetState).toHaveBeenLastCalledWith({
       ownerId,
       state: "idle",
@@ -3079,9 +3083,10 @@ describe("TelegramService brain orchestration (llm-conversational-bot)", () => {
     await h.service.handleUpdate(textUpdate({ text: "compre mercaderia", messageId: 1 }), h.reply);
 
     expect(h.mockBrainReply).toHaveBeenCalled();
-    expect(h.replies.at(-1)).toContain(formatARS(5000));
-    expect(h.replies.at(-1)).toContain("compre mercaderia");
-    expect(h.replies.at(-1)).toContain("Supermercado");
+    expect(h.replies.at(-2)).toContain(formatARS(5000));
+    expect(h.replies.at(-2)).toContain("compre mercaderia");
+    expect(h.replies.at(-2)).toContain("Supermercado");
+    expect(h.replies.at(-1)).toBe(menuReply());
   });
 
   it("answers a query_balance intent with the real balance and sends the brain reply verbatim", async () => {
@@ -5029,9 +5034,10 @@ describe("TelegramService planned registration (previsto:)", () => {
       ownerId,
       { visibility: "INDIVIDUAL" },
     );
-    expect(h.replies.at(-1)).toContain("previsto");
-    expect(h.replies.at(-1)).toContain(formatARS(2500));
-    expect(h.replies.at(-1)).toContain("Vivienda");
+    expect(h.replies.at(-2)).toContain("previsto");
+    expect(h.replies.at(-2)).toContain(formatARS(2500));
+    expect(h.replies.at(-2)).toContain("Vivienda");
+    expect(h.replies.at(-1)).toBe(menuReply());
     expect(h.mockSetState).toHaveBeenLastCalledWith({ ownerId, state: "idle", pendingMovementId: null, pendingNote: null });
   });
 
@@ -5051,7 +5057,8 @@ describe("TelegramService planned registration (previsto:)", () => {
       ownerId,
       { visibility: "INDIVIDUAL" },
     );
-    expect(h.replies.at(-1)).toContain("previsto");
+    expect(h.replies.at(-2)).toContain("previsto");
+    expect(h.replies.at(-1)).toBe(menuReply());
   });
 
   it.each([
@@ -5324,7 +5331,8 @@ describe("TelegramService resolveSuggestion folded (B2 truth table)", () => {
       pendingMovementId: null,
       pendingNote: null,
     });
-    expect(h.replies.at(-1)).toBe(successReply(2000, "$ feria", "otro"));
+    expect(h.replies.at(-2)).toBe(successReply(2000, "$ feria", "otro"));
+    expect(h.replies.at(-1)).toBe(menuReply());
   });
 
   it('an exact "otro" suggestion stays a no-suggestion: otro + correction offer (today kept)', async () => {

@@ -710,10 +710,9 @@ export class TelegramService {
     await this.deps.botStateRepository.set({ ownerId, state: IDLE, pendingMovementId: null, pendingNote: null });
     const planned = payload.type === "PENDING";
     // PENDING registers as EXPENSE + PENDING and is NEVER SHARED (spec
-    // quick-capture "Save with Previsto registers PENDING").
-    await this.registerWithCategory(payload.body, payload.amount, payload.note, payload.category, ownerId, payload.shared, planned, payload.override, this.makeSender(false, reply));
-    // Invite to continue: the action is done, show the menu again.
-    await this.sendMenu(reply);
+    // quick-capture "Save with Previsto registers PENDING"). The shared tail
+    // sends the success reply AND returns to the menu.
+    await this.registerWithCategory(payload.body, payload.amount, payload.note, payload.category, ownerId, payload.shared, planned, payload.override, this.makeSender(false, reply), reply);
   }
 
   /** D4 — decodes a persisted preview payload; corrupt JSON yields null (spec "Corrupt preview payload recovers"). */
@@ -1169,7 +1168,7 @@ export class TelegramService {
 
     // A user-authored keyword rule beats any brain suggestion.
     if (matched !== null) {
-      await this.registerWithCategory(body, parsed.amount, parsed.note, matched, ownerId, shared, planned, override, this.makeSender(false, reply));
+      await this.registerWithCategory(body, parsed.amount, parsed.note, matched, ownerId, shared, planned, override, this.makeSender(false, reply), reply);
       return;
     }
 
@@ -1268,7 +1267,7 @@ export class TelegramService {
     const matched = await this.deps.categoryService.matchNote(ownerId, note ?? body);
     const category = matched ?? this.resolveSuggestion(envelope.category, categories);
     if (category !== null) {
-      await this.registerWithCategory(body, amount, note, category, ownerId, shared, effectivePlanned, override, activeSend);
+      await this.registerWithCategory(body, amount, note, category, ownerId, shared, effectivePlanned, override, activeSend, reply);
       return;
     }
     // E2 (T2): the envelope SIGNALED a category ("category" non-null) but the
@@ -1909,7 +1908,7 @@ export class TelegramService {
     // T5 rule 1: exact normalized match on an existing category → ANSWER.
     const exactCategory = categories.find((category) => normalizeForMatch(category.name) === normalizedAnswer);
     if (exactCategory !== undefined) {
-      await this.registerWithCategory(payload.body, payload.amount as number, payload.note, exactCategory.name, ownerId, payload.shared, payload.planned, payload.override, send);
+      await this.registerWithCategory(payload.body, payload.amount as number, payload.note, exactCategory.name, ownerId, payload.shared, payload.planned, payload.override, send, reply);
       return;
     }
 
@@ -1919,7 +1918,7 @@ export class TelegramService {
       (category) => normalizeForMatchTolerant(category.name) === normalizeForMatchTolerant(answer),
     );
     if (foldedCategory !== undefined) {
-      await this.registerWithCategory(payload.body, payload.amount as number, payload.note, foldedCategory.name, ownerId, payload.shared, payload.planned, payload.override, send);
+      await this.registerWithCategory(payload.body, payload.amount as number, payload.note, foldedCategory.name, ownerId, payload.shared, payload.planned, payload.override, send, reply);
       return;
     }
 
@@ -3002,6 +3001,7 @@ private async handleDialogMessage(
     planned: boolean,
     override: SavingsOverride,
     send: Sender,
+    reply?: ReplyPort,
   ): Promise<boolean> {
     const type = planned ? "EXPENSE" : classifyMovementType(body);
     if (!planned && type === "INCOME") {
@@ -3034,6 +3034,10 @@ private async handleDialogMessage(
       },
       planned ? plannedReply(amount, note, category) : successReply(amount, note, category),
     );
+    // Invite to continue: every registration confirmation returns to the menu.
+    if (reply !== undefined) {
+      await this.sendMenu(reply);
+    }
     return true;
   }
 

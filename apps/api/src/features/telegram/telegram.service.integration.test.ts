@@ -418,7 +418,8 @@ describe("TelegramService (integration)", () => {
     expect(movements[0]?.amount.toNumber()).toBe(2000);
     const state = await prisma.botState.findUnique({ where: { ownerId } });
     expect(state?.state).toBe("idle");
-    expect(replies.at(-1)).toContain("Supermercado");
+    expect(replies.at(-2)).toContain("Supermercado");
+    expect(replies.at(-1)).toContain("menú");
   });
 
   it("brain: rescues an amount for an unparseable note and registers it", async () => {
@@ -459,7 +460,8 @@ describe("TelegramService (integration)", () => {
     expect(movements).toHaveLength(1);
     expect(movements[0]?.amount.toNumber()).toBe(2500);
     expect(movements[0]?.category).toBe("Cafe");
-    expect(replies.at(-1)).toBe("Listo, quedó registrado 2500 en Cafe.");
+    expect(replies.at(-2)).toBe("Listo, quedó registrado 2500 en Cafe.");
+    expect(replies.at(-1)).toContain("menú");
   });
 
   it("brain: a null reply falls back to the fixed success template carrying the same facts", async () => {
@@ -478,9 +480,10 @@ describe("TelegramService (integration)", () => {
 
     await stubbed.handleUpdate(textUpdate({ messageId: 1, text: "$2500 cafe" }), reply);
 
-    expect(replies.at(-1)).toContain("Registrado");
-    expect(replies.at(-1)).toContain(formatARS(2500));
-    expect(replies.at(-1)).toContain("Cafe");
+    expect(replies.at(-2)).toContain("Registrado");
+    expect(replies.at(-2)).toContain(formatARS(2500));
+    expect(replies.at(-2)).toContain("Cafe");
+    expect(replies.at(-1)).toContain("menú");
   });
 
   it("brain: a query_balance intent executes the real balance and falls back to the fixed template when the brain reply is null", async () => {
@@ -1179,7 +1182,8 @@ describe("TelegramService (integration)", () => {
     const rows = await prisma.expense.findMany({ where: { ownerId } });
     expect(rows).toHaveLength(1);
     expect(rows[0]?.status).toBe("PENDING");
-    expect(replies.at(-1)).toContain("previsto");
+    expect(replies.at(-2)).toContain("previsto");
+    expect(replies.at(-1)).toContain("menú");
   });
 
   it("collect e2e: amount-null entry → amount answer → category answer registers from stored context", async () => {

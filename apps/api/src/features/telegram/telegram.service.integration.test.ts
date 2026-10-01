@@ -14,7 +14,7 @@ import { PrismaSavingsRuleRepository } from "../savings/savings.repository";
 import { SavingsRuleService } from "../savings/savings.service";
 import type { BotBrain, ConversationEnvelope } from "./bot-brain";
 import { HouseholdService } from "../household/household.service";
-import { captureShapedRedirectReply, menuReply, previstoPrefixRedirectReply, questionDroppedReply } from "./reply-text";
+import { captureShapedRedirectReply, categoryCrudRedirectReply, menuReply, previstoPrefixRedirectReply, questionDroppedReply } from "./reply-text";
 import { capturePayloadSchema, previewPayloadSchema, TelegramService } from "./telegram.service";
 
 loadDotEnvFromDisk();
@@ -307,6 +307,36 @@ describe("TelegramService (integration v2)", () => {
     expect(await prisma.expense.count()).toBe(0);
     expect(replies.at(-2)).toBe(captureShapedRedirectReply());
     expect(replies.at(-1)).toBe(menuReply());
+  });
+
+  it("idle routing e2e: the three pre-checks and awaiting_capture NEVER invoke the brain (zero-LLM contract)", async () => {
+    await seedCategories(["Cafe"]);
+    const interpret = vi.fn(async () => null);
+    const stubbed = buildService(() => undefined, stubBrain({ interpret }));
+    const { replies, reply } = replyCollector();
+
+    // 1. Legacy prefix.
+    await stubbed.handleUpdate(textUpdate({ messageId: 1, text: "previsto: 2500 alquiler" }), reply);
+    expect(interpret).not.toHaveBeenCalled();
+    expect(replies.at(-2)).toBe(previstoPrefixRedirectReply());
+
+    // 2. Capture-shaped text.
+    await stubbed.handleUpdate(textUpdate({ messageId: 2, text: "14000 pasaje" }), reply);
+    expect(interpret).not.toHaveBeenCalled();
+    expect(replies.at(-2)).toBe(captureShapedRedirectReply());
+
+    // 3. Legacy text CRUD.
+    await stubbed.handleUpdate(textUpdate({ messageId: 3, text: "registrar categoria: Salud" }), reply);
+    expect(interpret).not.toHaveBeenCalled();
+    expect(replies.at(-2)).toBe(categoryCrudRedirectReply());
+
+    // awaiting_capture + monto+nota: the capture chain runs without the brain.
+    await stubbed.handleCallback(callbackUpdate("m:new"), reply);
+    await stubbed.handleUpdate(textUpdate({ messageId: 4, text: "30000 gym" }), reply);
+    expect(interpret).not.toHaveBeenCalled();
+    expect(replies.at(-1)).toContain("¿Guardamos?");
+
+    expect(await prisma.expense.count()).toBe(0);
   });
 
   it("idle routing e2e: the legacy previsto: prefix redirects and creates nothing", async () => {

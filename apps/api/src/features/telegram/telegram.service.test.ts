@@ -816,26 +816,42 @@ describe("TelegramService idle routing (v2 pre-checks and brain classification)"
     expect(h.replies.at(-1)).toBe(menuReply());
   });
 
-  it("redirects the compartido: prefix to the 👥 button", async () => {
+  it("redirects the compartido: prefix to the 👥 button with the menu and zero LLM", async () => {
+    h.mockBrainInterpret.mockClear();
+
     await h.service.handleUpdate(textUpdate({ text: "compartido: 2000 super", messageId: 1 }), h.reply);
 
+    expect(h.mockBrainInterpret).not.toHaveBeenCalled();
+    expect(h.mockCreateExpense).not.toHaveBeenCalled();
     expect(h.replies.at(-2)).toBe(compartidoPrefixRedirectReply());
     expect(h.replies.at(-1)).toBe(menuReply());
   });
 
-  it("redirects savings-override text to the automatic rule", async () => {
+  it("redirects savings-override text to the automatic rule with the menu and zero LLM", async () => {
+    h.mockBrainInterpret.mockClear();
+
     await h.service.handleUpdate(textUpdate({ text: "sin ahorro cobro sueldo de entrenuts 1000", messageId: 1 }), h.reply);
 
+    expect(h.mockBrainInterpret).not.toHaveBeenCalled();
+    expect(h.mockCreateExpense).not.toHaveBeenCalled();
     expect(h.replies.at(-2)).toBe(savingsOverrideRedirectReply());
-  });
-
-  it("redirects legacy text CRUD to the 🗂 button and never creates", async () => {
-    await h.service.handleUpdate(textUpdate({ text: "registrar categoria: Salud", messageId: 1 }), h.reply);
-
-    expect(h.mockCreateCategory).not.toHaveBeenCalled();
-    expect(h.replies.at(-2)).toBe(categoryCrudRedirectReply());
     expect(h.replies.at(-1)).toBe(menuReply());
   });
+
+  it.each(["registrar categoria: Salud", "renombrar categoria: Cafe a: Cafeteria", "asociar palabra: uber a categoria: Transporte"] as const)(
+    "redirects legacy text CRUD %s to the 🗂 button with the menu and zero LLM",
+    async (text) => {
+      h.mockBrainInterpret.mockClear();
+
+      await h.service.handleUpdate(textUpdate({ text, messageId: 1 }), h.reply);
+
+      expect(h.mockBrainInterpret).not.toHaveBeenCalled();
+      expect(h.mockCreateCategory).not.toHaveBeenCalled();
+      expect(h.mockRenameCategory).not.toHaveBeenCalled();
+      expect(h.replies.at(-2)).toBe(categoryCrudRedirectReply());
+      expect(h.replies.at(-1)).toBe(menuReply());
+    },
+  );
 
   it("routes a query-classified message through the executor and returns to the menu", async () => {
     h.mockGetSummary.mockResolvedValue({
@@ -890,6 +906,48 @@ describe("TelegramService idle routing (v2 pre-checks and brain classification)"
 
     expect(h.replies.at(-2)).toBe(queryRedirectReply());
     expect(h.replies.at(-1)).toBe(menuReply());
+  });
+
+  it("sends a query brain reply verbatim when the brain writes one (fixed template otherwise)", async () => {
+    h.mockGetSummary.mockResolvedValue({
+      ...emptySummary(),
+      kpis: { income: 2000, expenses: 500, balance: 1500, count: 2, maxAmount: 2000 },
+    });
+    h.mockBrainInterpret.mockResolvedValue({ intent: "query_balance", amount: null, note: null } satisfies ConversationEnvelope);
+    h.mockBrainReply.mockResolvedValue("Tu balance es $ 1.500,00.");
+
+    await h.service.handleUpdate(textUpdate({ text: "cuánto gasté", messageId: 1 }), h.reply);
+
+    expect(h.mockBrainReply).toHaveBeenCalledWith(
+      expect.objectContaining({ intent: "query_balance", ok: true, action: "answered" }),
+    );
+    expect(h.replies.at(-2)).toBe("Tu balance es $ 1.500,00.");
+    expect(h.replies.at(-1)).toBe(menuReply());
+  });
+
+  it("sends a greeting brain reply verbatim and always closes with the menu", async () => {
+    h.mockBrainInterpret.mockResolvedValue({ intent: "greeting", amount: null, note: null } satisfies ConversationEnvelope);
+    h.mockBrainReply.mockResolvedValue("¡Hola! Soy Rita, tu bot de gastos.");
+
+    await h.service.handleUpdate(textUpdate({ text: "hola", messageId: 1 }), h.reply);
+
+    expect(h.replies.at(-2)).toBe("¡Hola! Soy Rita, tu bot de gastos.");
+    expect(h.replies.at(-1)).toBe(menuReply());
+  });
+
+  it("routes deterministically without a brain (GROQ_API_KEY unset): redirects pre-checks and falls back to unresolvable", async () => {
+    const hNoBrain = makeHarness({ noBrain: true });
+    seedHarnessCategories(hNoBrain, ["Cafe", "Transporte"]);
+
+    // Capture-shaped text still redirects (no brain needed).
+    await hNoBrain.service.handleUpdate(textUpdate({ text: "14000 pasaje", messageId: 1 }), hNoBrain.reply);
+    expect(hNoBrain.replies.at(-2)).toBe(captureShapedRedirectReply());
+    expect(hNoBrain.replies.at(-1)).toBe(menuReply());
+
+    // A non-capture message falls back to the deterministic off_topic reply + menu.
+    await hNoBrain.service.handleUpdate(textUpdate({ text: "que lindo día", messageId: 2 }), hNoBrain.reply);
+    expect(hNoBrain.replies.at(-2)).toBe(unresolvableReply());
+    expect(hNoBrain.replies.at(-1)).toBe(menuReply());
   });
 
   it("the setup gate precedes idle routing: no categories → awaiting_setup, no parser, no brain", async () => {

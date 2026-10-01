@@ -15,7 +15,7 @@ import { MovementLifecycleExecutor } from "./movement-lifecycle-executor";
 import { MovementCorrector } from "./movement-corrector";
 import { QueryExecutor } from "./query-executor";
 import { deriveQueryType, type QueryExecutionResult, type QueryType } from "./query.types";
-import { parseCommand, parseLegacyCategoryCrud, parseSetupBatchCommand, type TelegramCommand } from "./telegram.commands";
+import { parseCommand, parseLegacyCategoryCrud, parseSavingsPercentInput, parseSetupBatchCommand, type TelegramCommand } from "./telegram.commands";
 import {
   normalizeTelegramMessage,
   normalizeTelegramCallback,
@@ -71,9 +71,12 @@ import {
   reportsMenuReply,
   reservedCategoryReply,
   savingsOverrideRedirectReply,
+  savingsPercentInvalidReply,
+  savingsPercentPromptReply,
   savingsRuleDefinedReply,
   savingsRuleInvalidReply,
   selectionAbandonedReply,
+  type SavingsChoice,
   setupBatchDoneReply,
   setupQuestionReply,
   setupRetryReply,
@@ -122,6 +125,10 @@ const AWAITING_CATEGORY_NAME = "awaiting_category_name";
 const AWAITING_MOVEMENT_SELECTION = "awaiting_movement_selection";
 const AWAITING_CATEGORY_SELECTION = "awaiting_category_selection";
 const AWAITING_DELETE_CONFIRMATION = "awaiting_delete_confirmation";
+// savings-config: awaiting_savings_rule / awaiting_savings_delete arrive with
+// the sa:* sub-menu handlers (Phase 5); the enum already carries all three
+// (design D11) so rollback payloads recover through normalizeState.
+const AWAITING_SAVINGS_PERCENT = "awaiting_savings_percent";
 
 /** v2 capture types — chosen ONLY by the main-menu tap (spec quick-capture "Type Selection by Menu"). */
 export type CaptureType = "REAL" | "PENDING" | "INGRESO" | "COMPARTIDO";
@@ -178,6 +185,17 @@ export const previewPayloadSchema = z.object({
 });
 
 export type PreviewPayload = z.infer<typeof previewPayloadSchema>;
+
+/**
+ * Stored payload of `awaiting_savings_percent` (design D4/D11): the open
+ * preview rides the state so a valid percent reply returns to `awaiting_preview`
+ * with the override persisted and the confirmation re-rendered in place.
+ */
+export const savingsPercentPayloadSchema = z.object({
+  preview: previewPayloadSchema,
+});
+
+export type SavingsPercentPayload = z.infer<typeof savingsPercentPayloadSchema>;
 
 /**
  * Stored payload of `awaiting_category_name` (design D5): one state, three
@@ -341,6 +359,9 @@ export class TelegramService {
       case AWAITING_CATEGORY_NAME:
         await this.handleAwaitingCategoryName(body, ownerId, reply);
         return;
+      case AWAITING_SAVINGS_PERCENT:
+        await this.handleAwaitingSavingsPercent(body, ownerId, reply);
+        return;
       case AWAITING_MOVEMENT_SELECTION:
         // A non-command text during a pick abandons it: nothing changes, the
         // menu returns (spec movement-correction "Ambiguity Resolution").
@@ -421,6 +442,9 @@ export class TelegramService {
         return;
       case "cc":
         await this.handleReassignCallback(callback, ownerId, reply);
+        return;
+      case "sv":
+        await this.handleSavingsChoiceCallback(callback, ownerId, reply);
         return;
       default:
         // Unknown action prefix: honest reply, no state change (spec
@@ -621,6 +645,15 @@ export class TelegramService {
     await this.safeReply(reply, previewReply(amount, note, type), await this.previewKeyboard(ownerId, payload, 0), undefined);
   }
 
+  /** NORMAL categories only (`type === "NORMAL"` and name ≠ "otro"), sorted alphabetically. */
+  private async normalCategoryList(ownerId: string): Promise<{ id: string; name: string }[]> {
+    const categories = await this.deps.categoryService.listCategories(ownerId);
+    return categories
+      .filter((category) => category.type === "NORMAL" && normalizeForMatch(category.name) !== "otro")
+      .sort((a, b) => a.name.localeCompare(b.name))
+      .map((category) => ({ id: category.id, name: category.name }));
+  }
+
   /**
    * The v2 preview keyboard (spec quick-capture "Capture Preview with
    * Save/Correct"; movement-categories "Preview Category Selection"): NORMAL
@@ -629,10 +662,7 @@ export class TelegramService {
    * they live only on the confirmation keyboard (`previewConfirmKeyboard`).
    */
   private async previewKeyboard(ownerId: string, payload: PreviewPayload, page: number): Promise<InlineKeyboard> {
-    const categories = await this.deps.categoryService.listCategories(ownerId);
-    const normal = categories
-      .filter((category) => category.type === "NORMAL" && normalizeForMatch(category.name) !== "otro")
-      .sort((a, b) => a.name.localeCompare(b.name));
+    const normal = await this.normalCategoryList(ownerId);
     const pageSize = 5;
     const pageItems = normal.slice(page * pageSize, page * pageSize + pageSize);
     const rows: InlineButton[][] = pageItems.map((category) => [
@@ -651,17 +681,32 @@ export class TelegramService {
   }
 
   /**
-   * Two-step confirmation keyboard: the [✅ Guardar] [✏️ Corregir] rows ONLY
-   * (same callback tokens as the removed preview rows) — rendered on the
-   * confirmation message that follows a category pick.
+   * Two-step confirmation keyboard (design D7): ≤5 NORMAL category rows (no
+   * nav on the confirmation — the preview message keeps pagination) + ➕ Crear
+   * categoría + the savings row [5%][10%][Otro][No apartar] for INGRESO only +
+   * [✅ Guardar] [✏️ Corregir] — at most 8 rows. `sv:*` callbacks carry ONLY
+   * the save token, never a percent or a name (spec bot-inline-interactions
+   * "Savings callbacks encode tokens").
    */
-  private previewConfirmKeyboard(saveToken: string): InlineKeyboard {
-    return [
-      [
-        { text: "✅ Guardar", callback_data: buildCallbackData(["pv", "save", saveToken]) },
-        { text: "✏️ Corregir", callback_data: buildCallbackData(["pv", "edit", saveToken]) },
-      ],
-    ];
+  private async previewConfirmKeyboard(ownerId: string, payload: PreviewPayload): Promise<InlineKeyboard> {
+    const normal = await this.normalCategoryList(ownerId);
+    const rows: InlineButton[][] = normal.slice(0, 5).map((category) => [
+      { text: category.name, callback_data: buildCallbackData(["cat", category.id]) },
+    ]);
+    rows.push([{ text: "➕ Crear categoría", callback_data: buildCallbackData(["pv", "catnew", payload.saveToken]) }]);
+    if (payload.type === "INGRESO") {
+      rows.push([
+        { text: "5%", callback_data: `sv:5:${payload.saveToken}` },
+        { text: "10%", callback_data: `sv:10:${payload.saveToken}` },
+        { text: "Otro", callback_data: `sv:other:${payload.saveToken}` },
+        { text: "No apartar", callback_data: `sv:off:${payload.saveToken}` },
+      ]);
+    }
+    rows.push([
+      { text: "✅ Guardar", callback_data: buildCallbackData(["pv", "save", payload.saveToken]) },
+      { text: "✏️ Corregir", callback_data: buildCallbackData(["pv", "edit", payload.saveToken]) },
+    ]);
+    return rows;
   }
 
   /** Decodes a persisted preview payload; corrupt JSON yields null (spec "Corrupt preview payload recovers"). */
@@ -675,6 +720,43 @@ export class TelegramService {
     } catch {
       return null;
     }
+  }
+
+  /**
+   * Consolidated confirmation render (design D6): computes the matched-rule
+   * suggestion via `matchNote` at render time (rules can change mid-preview),
+   * applies the manual-wins precedence for the savings label, and renders the
+   * confirmation text + keyboard (INGRESO gains the savings row + line, D7).
+   * `editMessageId` edits an existing confirmation in place (category re-pick,
+   * sv:* choice); absent sends a new one. Returns the new message id when sent
+   * (undefined on edits) so the caller can persist `confirmMessageId`.
+   */
+  private async renderPreviewConfirmation(
+    ownerId: string,
+    payload: PreviewPayload,
+    category: string,
+    reply?: ReplyPort,
+    editMessageId?: number,
+  ): Promise<number | undefined> {
+    let savingsChoice: SavingsChoice | undefined;
+    if (payload.type === "INGRESO") {
+      const manual = payload.savings;
+      if (manual?.kind === "percent") {
+        savingsChoice = { kind: "percent", percent: manual.percent };
+      } else if (manual?.kind === "disabled") {
+        savingsChoice = { kind: "disabled" };
+      } else {
+        const suggested = await this.deps.savingsService.matchNote(ownerId, payload.note ?? "");
+        savingsChoice = { kind: "auto", percent: suggested };
+      }
+    }
+    const keyboard = await this.previewConfirmKeyboard(ownerId, payload);
+    return this.safeReply(
+      reply,
+      previewConfirmReply(payload.amount, payload.note, payload.type, category, savingsChoice),
+      keyboard,
+      editMessageId,
+    );
   }
 
   /**
@@ -734,6 +816,74 @@ export class TelegramService {
           pendingNote: JSON.stringify(namePayload),
         });
         await this.safeReply(reply, categoryNamePromptReply("preview"));
+        return;
+      }
+      default:
+        await this.safeReply(reply, callbackUnavailableReply());
+    }
+  }
+
+  /**
+   * INGRESO confirmation savings choices (design D4, spec quick-capture
+   * "Savings Override Choice in Confirmation"): `sv:5`/`sv:10` persist
+   * {kind:"percent"}, `sv:off` persists {kind:"disabled"} ("No apartar"),
+   * `sv:other` enters `awaiting_savings_percent` for a free-form percent.
+   * Callback data encodes ONLY the save token (never the percent or a name).
+   * The same state+token gate as pv:* — a mismatched tap replies "ya
+   * procesado" and executes nothing. Manual choices update the confirmation
+   * in place (edit-in-place like category re-picks).
+   */
+  private async handleSavingsChoiceCallback(callback: TelegramCallback, ownerId: string, reply?: ReplyPort): Promise<void> {
+    const parts = callback.data.split(":");
+    const choice = parts[1];
+    const token = parts[2];
+    if (token === undefined) {
+      await this.safeReply(reply, callbackUnavailableReply());
+      return;
+    }
+    const state = await this.deps.botStateRepository.get(ownerId);
+    const payload = this.decodePreviewPayload(state?.pendingNote ?? null);
+
+    // D5 — state+token gate: idempotent, executes nothing on a mismatch.
+    if (state?.state !== AWAITING_PREVIEW || payload === null || payload.saveToken !== token) {
+      await this.safeReply(reply, alreadyProcessedReply());
+      return;
+    }
+
+    switch (choice) {
+      case "5":
+      case "10": {
+        const updated: PreviewPayload = { ...payload, savings: { kind: "percent", percent: Number(choice) } };
+        await this.deps.botStateRepository.set({
+          ownerId,
+          state: AWAITING_PREVIEW,
+          pendingMovementId: null,
+          pendingNote: JSON.stringify(updated),
+        });
+        await this.renderPreviewConfirmation(ownerId, updated, updated.category as string, reply, updated.confirmMessageId);
+        return;
+      }
+      case "off": {
+        const updated: PreviewPayload = { ...payload, savings: { kind: "disabled" } };
+        await this.deps.botStateRepository.set({
+          ownerId,
+          state: AWAITING_PREVIEW,
+          pendingMovementId: null,
+          pendingNote: JSON.stringify(updated),
+        });
+        await this.renderPreviewConfirmation(ownerId, updated, updated.category as string, reply, updated.confirmMessageId);
+        return;
+      }
+      case "other": {
+        // Free-form percent input: the open preview rides the state.
+        const percentPayload: SavingsPercentPayload = { preview: payload };
+        await this.deps.botStateRepository.set({
+          ownerId,
+          state: AWAITING_SAVINGS_PERCENT,
+          pendingMovementId: null,
+          pendingNote: JSON.stringify(percentPayload),
+        });
+        await this.safeReply(reply, savingsPercentPromptReply());
         return;
       }
       default:
@@ -833,31 +983,16 @@ export class TelegramService {
         // confirmation message (the preview is never edited) showing the full
         // data; its message id is persisted so a later different-category tap
         // edits the confirmation itself.
-        const confirmId = await this.safeReply(
-          reply,
-          previewConfirmReply(payload.amount, payload.note, payload.type, category.name),
-          this.previewConfirmKeyboard(payload.saveToken),
-          undefined,
-        );
+        const confirmId = await this.renderPreviewConfirmation(ownerId, updated, category.name, reply);
         updated.confirmMessageId = confirmId;
       } else if (payload.confirmMessageId !== undefined) {
         // Different category on an already-confirmed preview: edit the
         // confirmation message with the new category (never the preview).
-        await this.safeReply(
-          reply,
-          previewConfirmReply(payload.amount, payload.note, payload.type, category.name),
-          this.previewConfirmKeyboard(payload.saveToken),
-          payload.confirmMessageId,
-        );
+        await this.renderPreviewConfirmation(ownerId, updated, category.name, reply, payload.confirmMessageId);
       } else {
         // Defensive fallback when the confirmation id is unknown (e.g. the
         // first send failed): send a new confirmation and track it.
-        const confirmId = await this.safeReply(
-          reply,
-          previewConfirmReply(payload.amount, payload.note, payload.type, category.name),
-          this.previewConfirmKeyboard(payload.saveToken),
-          undefined,
-        );
+        const confirmId = await this.renderPreviewConfirmation(ownerId, updated, category.name, reply);
         updated.confirmMessageId = confirmId;
       }
       await this.deps.botStateRepository.set({
@@ -870,6 +1005,53 @@ export class TelegramService {
     }
 
     await this.safeReply(reply, callbackUnavailableReply());
+  }
+
+  /** Decodes a persisted `awaiting_savings_percent` payload; corrupt JSON yields null. */
+  private decodeSavingsPercentPayload(pendingNote: string | null): SavingsPercentPayload | null {
+    if (pendingNote === null) {
+      return null;
+    }
+    try {
+      const parsed = savingsPercentPayloadSchema.safeParse(JSON.parse(pendingNote));
+      return parsed.success ? parsed.data : null;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * `awaiting_savings_percent` — the [Otro] free-form percent input (design
+   * D4, spec quick-capture "Otro accepts a percent and re-renders"): parsed
+   * with `parseSavingsPercentInput` (optional %, comma decimal, 0 < p ≤ 100).
+   * A valid percent returns to `awaiting_preview` with the override persisted
+   * and edits the confirmation in place; an invalid one re-prompts and the
+   * state stays open (nothing is set).
+   */
+  private async handleAwaitingSavingsPercent(body: string, ownerId: string, reply?: ReplyPort): Promise<void> {
+    const state = await this.deps.botStateRepository.get(ownerId);
+    const payload = this.decodeSavingsPercentPayload(state?.pendingNote ?? null);
+
+    if (state?.state !== AWAITING_SAVINGS_PERCENT || payload === null) {
+      await this.deps.botStateRepository.set({ ownerId, state: IDLE, pendingMovementId: null, pendingNote: null });
+      await this.safeReply(reply, questionDroppedReply());
+      return;
+    }
+
+    const percent = parseSavingsPercentInput(body);
+    if (percent === null) {
+      await this.safeReply(reply, savingsPercentInvalidReply());
+      return;
+    }
+
+    const preview: PreviewPayload = { ...payload.preview, savings: { kind: "percent", percent } };
+    await this.deps.botStateRepository.set({
+      ownerId,
+      state: AWAITING_PREVIEW,
+      pendingMovementId: null,
+      pendingNote: JSON.stringify(preview),
+    });
+    await this.renderPreviewConfirmation(ownerId, preview, preview.category as string, reply, preview.confirmMessageId);
   }
 
   /**
@@ -962,12 +1144,7 @@ export class TelegramService {
       const updated: PreviewPayload = { ...preview, category: created.name };
       // Two-step flow, step 2: the created category is selected and the
       // confirmation message is shown (with Guardar/Corregir), not the preview.
-      const confirmId = await this.safeReply(
-        reply,
-        previewConfirmReply(updated.amount, updated.note, updated.type, created.name),
-        this.previewConfirmKeyboard(updated.saveToken),
-        undefined,
-      );
+      const confirmId = await this.renderPreviewConfirmation(ownerId, updated, created.name, reply);
       updated.confirmMessageId = confirmId;
       await this.deps.botStateRepository.set({
         ownerId,

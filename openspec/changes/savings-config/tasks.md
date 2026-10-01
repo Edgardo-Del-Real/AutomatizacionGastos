@@ -50,9 +50,9 @@ Chain strategy: pending
 
 ## Phase 4: Manual Choice `sv:*`
 
-- [ ] 4.1 RED `telegram.service.savings.test.ts`: `sv:*` gates, INGRESO-only, manual-wins
-- [ ] 4.2 GREEN `telegram.service.ts`: `sv` handlers, confirmation render
-- [ ] 4.3 Update `:177/:198`/`:179-187` asserts (default stays)
+- [x] 4.1 RED `telegram.service.savings.test.ts`: `sv:*` gates, INGRESO-only, manual-wins
+- [x] 4.2 GREEN `telegram.service.ts`: `sv` handlers, confirmation render
+- [x] 4.3 Update `:177/:198`/`:179-187` asserts (default stays)
 
 ## Phase 5: Savings Admin `sa:*` + States
 

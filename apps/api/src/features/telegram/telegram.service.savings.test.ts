@@ -7,8 +7,16 @@ import type { SavingsRuleService } from "../savings/savings.service";
 import type { HouseholdService } from "../household/household.service";
 import type { BotStateRepository, BotStateRecord } from "./bot-state.repository";
 import type { InlineKeyboard } from "./telegram.parser";
-import { capturePayloadSchema, previewPayloadSchema, TelegramService } from "./telegram.service";
-import { menuReply, successReply, successSplitReply } from "./reply-text";
+import { capturePayloadSchema, previewPayloadSchema, savingsPercentPayloadSchema, TelegramService, type PreviewPayload } from "./telegram.service";
+import {
+  alreadyProcessedReply,
+  menuReply,
+  previewConfirmReply,
+  savingsPercentInvalidReply,
+  savingsPercentPromptReply,
+  successReply,
+  successSplitReply,
+} from "./reply-text";
 
 const OWNER_CHAT_ID = 123456789;
 const ownerId = "default";
@@ -45,15 +53,19 @@ type Harness = {
   mockCreateIncomeWithSavings: ReturnType<typeof vi.fn>;
   mockResolveSplit: ReturnType<typeof vi.fn>;
   mockEnsureAhorro: ReturnType<typeof vi.fn>;
+  mockMatchNote: ReturnType<typeof vi.fn>;
   botStateRepository: BotStateRepository;
   replies: string[];
+  keyboards: (InlineKeyboard | undefined)[];
   reply: (text: string, keyboard?: InlineKeyboard, editMessageId?: number) => Promise<number | undefined>;
 };
 
 function makeHarness(): Harness {
   const replies: string[] = [];
-  const reply = async (text: string): Promise<number | undefined> => {
+  const keyboards: (InlineKeyboard | undefined)[] = [];
+  const reply = async (text: string, keyboard?: InlineKeyboard): Promise<number | undefined> => {
     replies.push(text);
+    keyboards.push(keyboard);
     return undefined;
   };
   let storedState: BotStateRecord | null = null;
@@ -147,8 +159,10 @@ function makeHarness(): Harness {
     mockCreateIncomeWithSavings: vi.mocked(expenseService.createIncomeWithSavings),
     mockResolveSplit: vi.mocked(savingsService.resolveSplit),
     mockEnsureAhorro: vi.mocked(categoryService.ensureAhorro),
+    mockMatchNote: vi.mocked(savingsService.matchNote),
     botStateRepository,
     replies,
+    keyboards,
     reply,
   };
 }
@@ -248,5 +262,160 @@ describe("TelegramService savings split on INGRESO (v2)", () => {
     const state = await h.botStateRepository.get(ownerId);
     const payload = capturePayloadSchema.parse(JSON.parse(state?.pendingNote ?? "{}"));
     expect(payload.type).toBe("INGRESO");
+  });
+});
+
+describe("TelegramService savings row and sv:* choices on the INGRESO confirmation (savings-config)", () => {
+  let h: Harness;
+
+  beforeEach(() => {
+    h = makeHarness();
+  });
+
+  /** Opens an INGRESO preview, picks a category and returns the open payload + its saveToken. */
+  async function openIngresoConfirmation(text: string): Promise<PreviewPayload> {
+    await h.service.handleCallback(callbackUpdate("m:inc"), h.reply);
+    await h.service.handleUpdate(textUpdate({ text, messageId: 2 }), h.reply);
+    const state = await h.botStateRepository.get(ownerId);
+    const payload = previewPayloadSchema.parse(JSON.parse(state?.pendingNote ?? "{}"));
+    await h.service.handleCallback(callbackUpdate("cat:c0"), h.reply);
+    return payload;
+  }
+
+  /** Asserts the last keyboard contains exactly the savings row [5%][10%][Otro][No apartar] for the token. */
+  function expectSavingsRow(token: string): void {
+    const kb = h.keyboards.at(-1) as InlineKeyboard;
+    const savingsRow = kb.find((row) => row.some((button) => button.callback_data.startsWith("sv:")));
+    expect(savingsRow?.map((button) => button.callback_data)).toEqual([
+      `sv:5:${token}`,
+      `sv:10:${token}`,
+      `sv:other:${token}`,
+      `sv:off:${token}`,
+    ]);
+  }
+
+  it("renders the savings row on the INGRESO confirmation and labels the auto suggestion (regla)", async () => {
+    h.mockMatchNote.mockResolvedValue(10);
+    const payload = await openIngresoConfirmation("cobro sueldo de entrenuts 1000");
+
+    expectSavingsRow(payload.saveToken);
+    expect(h.replies.at(-1)).toBe(previewConfirmReply(1000, "cobro sueldo de entrenuts", "INGRESO", "Cafe", {
+      kind: "auto",
+      percent: 10,
+    }));
+  });
+
+  it("labels the auto suggestion as 'sin regla' when no rule matches", async () => {
+    h.mockMatchNote.mockResolvedValue(null);
+    const payload = await openIngresoConfirmation("cobro sueldo 1000");
+
+    expect(h.replies.at(-1)).toBe(previewConfirmReply(1000, "cobro sueldo", "INGRESO", "Cafe", {
+      kind: "auto",
+      percent: null,
+    }));
+    expectSavingsRow(payload.saveToken);
+  });
+
+  it("does NOT render the savings row on non-INGRESO confirmations (REAL keeps Guardar/Corregir)", async () => {
+    await h.service.handleCallback(callbackUpdate("m:new"), h.reply);
+    await h.service.handleUpdate(textUpdate({ text: "30000 gym", messageId: 2 }), h.reply);
+    const state = await h.botStateRepository.get(ownerId);
+    const payload = previewPayloadSchema.parse(JSON.parse(state?.pendingNote ?? "{}"));
+    await h.service.handleCallback(callbackUpdate("cat:c0"), h.reply);
+
+    const kb = h.keyboards.at(-1) as InlineKeyboard;
+    expect(kb.flat().some((button) => button.callback_data.startsWith("sv:"))).toBe(false);
+    expect(kb.flat().map((button) => button.callback_data)).toContain(`pv:save:${payload.saveToken}`);
+  });
+
+  it("sv:5 persists {kind:'percent', percent:5} and edits the confirmation in place with the manual label", async () => {
+    const payload = await openIngresoConfirmation("cobro sueldo de entrenuts 1000");
+
+    await h.service.handleCallback(callbackUpdate(`sv:5:${payload.saveToken}`), h.reply);
+
+    const state = await h.botStateRepository.get(ownerId);
+    const updated = previewPayloadSchema.parse(JSON.parse(state?.pendingNote ?? "{}"));
+    expect(updated.savings).toEqual({ kind: "percent", percent: 5 });
+    expect(h.replies.at(-1)).toBe(
+      previewConfirmReply(1000, "cobro sueldo de entrenuts", "INGRESO", "Cafe", { kind: "percent", percent: 5 }),
+    );
+    const kbAfter = h.keyboards.at(-1) as InlineKeyboard;
+    const savingsRowAfter = kbAfter.find((row) => row.some((button) => button.callback_data.startsWith("sv:")));
+    expect(savingsRowAfter?.map((button) => button.callback_data)).toEqual([
+      `sv:5:${payload.saveToken}`,
+      `sv:10:${payload.saveToken}`,
+      `sv:other:${payload.saveToken}`,
+      `sv:off:${payload.saveToken}`,
+    ]);
+    expect(kbAfter.at(-1)?.map((button) => button.callback_data)).toEqual([
+      `pv:save:${payload.saveToken}`,
+      `pv:edit:${payload.saveToken}`,
+    ]);
+  });
+
+  it("sv:off persists {kind:'disabled'} and saves register the whole INCOME via the disabled override", async () => {
+    h.mockResolveSplit.mockResolvedValue({ kind: "whole" });
+    const payload = await openIngresoConfirmation("cobro sueldo de entrenuts 1000");
+
+    await h.service.handleCallback(callbackUpdate(`sv:off:${payload.saveToken}`), h.reply);
+    expect(h.replies.at(-1)).toBe(
+      previewConfirmReply(1000, "cobro sueldo de entrenuts", "INGRESO", "Cafe", { kind: "disabled" }),
+    );
+
+    await h.service.handleCallback(callbackUpdate(`pv:save:${payload.saveToken}`), h.reply);
+
+    expect(h.mockResolveSplit).toHaveBeenCalledWith(ownerId, "cobro sueldo de entrenuts", { kind: "disabled" });
+    expect(h.mockCreateIncomeWithSavings).not.toHaveBeenCalled();
+  });
+
+  it("sv:other enters awaiting_savings_percent persisting the preview", async () => {
+    const payload = await openIngresoConfirmation("cobro sueldo 1000");
+
+    await h.service.handleCallback(callbackUpdate(`sv:other:${payload.saveToken}`), h.reply);
+
+    const state = await h.botStateRepository.get(ownerId);
+    expect(state?.state).toBe("awaiting_savings_percent");
+    const saved = savingsPercentPayloadSchema.parse(JSON.parse(state?.pendingNote ?? "{}"));
+    expect(saved.preview.saveToken).toBe(payload.saveToken);
+    expect(h.replies.at(-1)).toBe(savingsPercentPromptReply());
+  });
+
+  it("a valid percent reply returns to awaiting_preview, persists the override and edits the confirmation", async () => {
+    const payload = await openIngresoConfirmation("cobro sueldo 1000");
+    await h.service.handleCallback(callbackUpdate(`sv:other:${payload.saveToken}`), h.reply);
+
+    await h.service.handleUpdate(textUpdate({ text: "15,5%", messageId: 3 }), h.reply);
+
+    const state = await h.botStateRepository.get(ownerId);
+    expect(state?.state).toBe("awaiting_preview");
+    const updated = previewPayloadSchema.parse(JSON.parse(state?.pendingNote ?? "{}"));
+    expect(updated.savings).toEqual({ kind: "percent", percent: 15.5 });
+    expect(h.replies.at(-1)).toBe(
+      previewConfirmReply(1000, "cobro sueldo", "INGRESO", "Cafe", { kind: "percent", percent: 15.5 }),
+    );
+  });
+
+  it("an invalid percent reply re-prompts and keeps the awaiting_savings_percent state", async () => {
+    const payload = await openIngresoConfirmation("cobro sueldo 1000");
+    await h.service.handleCallback(callbackUpdate(`sv:other:${payload.saveToken}`), h.reply);
+
+    await h.service.handleUpdate(textUpdate({ text: "150", messageId: 3 }), h.reply);
+
+    const state = await h.botStateRepository.get(ownerId);
+    expect(state?.state).toBe("awaiting_savings_percent");
+    expect(h.replies.at(-1)).toBe(savingsPercentInvalidReply());
+    const saved = savingsPercentPayloadSchema.parse(JSON.parse(state?.pendingNote ?? "{}"));
+    expect(saved.preview.savings).toBeUndefined();
+  });
+
+  it("gates sv:* by state+token: a mismatched token replies already processed and changes nothing", async () => {
+    await openIngresoConfirmation("cobro sueldo 1000");
+
+    await h.service.handleCallback(callbackUpdate("sv:5:deadbeef"), h.reply);
+
+    expect(h.replies.at(-1)).toBe(alreadyProcessedReply());
+    const state = await h.botStateRepository.get(ownerId);
+    const unchanged = previewPayloadSchema.parse(JSON.parse(state?.pendingNote ?? "{}"));
+    expect(unchanged.savings).toBeUndefined();
   });
 });

@@ -16,6 +16,10 @@ export const BOT_STATES = [
   "awaiting_movement_selection",
   "awaiting_category_selection",
   "awaiting_delete_confirmation",
+  // savings-config: the three savings sub-menu/dialog states (design D11).
+  "awaiting_savings_rule",
+  "awaiting_savings_percent",
+  "awaiting_savings_delete",
 ] as const;
 
 export type BotStateName = (typeof BOT_STATES)[number];

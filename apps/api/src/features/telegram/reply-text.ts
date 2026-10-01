@@ -84,15 +84,19 @@ export function previewReply(
  * after a category is chosen on the preview — the full capture data including
  * the selected category, with the [✅ Guardar] [✏️ Corregir] rows that ONLY
  * exist on this confirmation (the initial preview asks for the category).
+ * INGRESO confirmations append the savings line (design "Savings line
+ * labels"); non-INGRESO types never pass a choice and never show it.
  */
 export function previewConfirmReply(
   amount: number,
   note: string | null,
   type: "REAL" | "PENDING" | "INGRESO" | "COMPARTIDO",
   category: string,
+  savingsChoice?: SavingsChoice,
 ): string {
   const notePart = note === null ? "" : ` (${truncateNote(note)})`;
-  return `Confirmá: ${formatARS(amount)}${notePart} — Tipo: ${captureTypeLabel(type)} — Categoría: ${category}`;
+  const savingsLine = savingsChoice === undefined ? "" : ` — ${savingsLineLabel(savingsChoice)}`;
+  return `Confirmá: ${formatARS(amount)}${notePart} — Tipo: ${captureTypeLabel(type)} — Categoría: ${category}${savingsLine}`;
 }
 
 /**

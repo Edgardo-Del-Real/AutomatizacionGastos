@@ -697,8 +697,10 @@ describe("TelegramService preview callbacks (v2)", () => {
     expect(h.replies.at(-1)).toBe(previewConfirmReply(30000, "gym", "REAL", "Cafe"));
     expect(h.edits.at(-1)).toBeUndefined();
     const kb = h.keyboards.at(-1) as InlineKeyboard;
-    expect(kb[0]?.[0]?.text).toBe("✅ Guardar");
-    expect(kb[0]?.[1]?.text).toBe("✏️ Corregir");
+    // D7: category rows first, then ➕ Crear categoría, then Guardar/Corregir.
+    expect(kb[0]?.[0]?.text).toBe("Cafe");
+    expect(kb.at(-1)?.[0]?.text).toBe("✅ Guardar");
+    expect(kb.at(-1)?.[1]?.text).toBe("✏️ Corregir");
   });
 
   it("a different category tap edits the CONFIRMATION message with the new category", async () => {

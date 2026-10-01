@@ -841,6 +841,21 @@ describe("TelegramService main menu (m:* callbacks, D8/D10)", () => {
       "Reporte",
       "Ayuda",
     ]);
+  });
+
+  it("/start renders the same five-button menu (Telegram entry point)", async () => {
+    await h.service.handleUpdate(textUpdate({ text: "/start", messageId: 2 }), h.reply);
+
+    expect(h.replies.at(-1)).toBe(menuReply());
+    const kb = h.keyboards.at(-1) as InlineKeyboard;
+    expect(kb).toHaveLength(5);
+    expect(kb.map((row) => row[0]?.text)).toEqual([
+      "Nuevo gasto",
+      "Gasto previsto",
+      "Borrar",
+      "Reporte",
+      "Ayuda",
+    ]);
     expect(kb.map((row) => row[0]?.callback_data)).toEqual(["m:new", "m:prev", "m:del", "m:rep", "m:help"]);
     // Reopening the menu never changes state (spec: Menu reopens without side effects).
     expect(h.mockSetState).not.toHaveBeenCalled();

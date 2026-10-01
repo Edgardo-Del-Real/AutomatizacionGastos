@@ -7,6 +7,7 @@ export type TelegramCommand =
   | { type: "list" }
   | { type: "configurar" }
   | { type: "menu" }
+  | { type: "start" }
   | { type: "ayuda" }
   | { type: "savings-rule"; keyword: string; percent: number }
   | { type: "savings-rule-invalid" };
@@ -18,6 +19,7 @@ const ASSOCIATE_RE = /^\s*asociar\s+palabra\s*:\s*(.+?)\s+a\s+categoria\s*:\s*(.
 const LIST_RE = /^\s*listar\s+categorias\s*$/;
 const CONFIGURAR_RE = /^\s*configurar\s+categorias\s*$/;
 const MENU_RE = /^\s*menu\s*$/;
+const START_RE = /^\s*start\s*$/;
 const AYUDA_RE = /^\s*ayuda\s*$/;
 const SAVINGS_RULE_RE = /^\s*registrar\s+ahorro\s*:\s*(.+?)\s+al\s+(-?\d+(?:[.,]\d+)?)%\s*$/;
 
@@ -51,6 +53,11 @@ export function parseCommand(text: string): TelegramCommand | null {
   }
   if (MENU_RE.test(normalized)) {
     return { type: "menu" };
+  }
+  // /start (always sent by Telegram when the user opens the bot) behaves as
+  // the main menu — the first thing a new user sees are the action buttons.
+  if (START_RE.test(normalized)) {
+    return { type: "start" };
   }
   if (AYUDA_RE.test(normalized)) {
     return { type: "ayuda" };

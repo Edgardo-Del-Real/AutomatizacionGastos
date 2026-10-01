@@ -4,6 +4,7 @@ import { parseCommand, parseSetupBatchCommand } from "./telegram.commands";
 describe("parseCommand (D12 normalization)", () => {
   it("normalizes a leading slash on the menu command", () => {
     expect(parseCommand("/menu")).toEqual({ type: "menu" });
+    expect(parseCommand("/start")).toEqual({ type: "start" });
   });
 
   it("normalizes underscores to spaces in slash commands", () => {

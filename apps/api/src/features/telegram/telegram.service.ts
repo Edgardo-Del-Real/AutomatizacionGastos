@@ -2876,9 +2876,12 @@ private async handleDialogMessage(
         return;
       }
 
-      case "menu": {
+      case "menu":
+      case "start": {
         // D8 — the five-button main menu (one per row). Reopening never
         // changes state (spec bot-main-menu "Menu reopens without side effects").
+        // /start is the Telegram entry point: show the same menu so the first
+        // thing a new user sees are the action buttons.
         await this.safeReply(
           reply,
           menuReply(),

@@ -553,6 +553,27 @@ export class TelegramService {
     }
   }
 
+  /**
+   * The five-button main menu (D8). Rendered after a completed action so the
+   * owner is invited to continue (the action "returns to" the menu instead of
+   * ending dead). The text is `menuReply()` and the keyboard is the same
+   * one-per-row set as /start and /menu.
+   */
+  private async sendMenu(reply?: ReplyPort): Promise<void> {
+    await this.safeReply(
+      reply,
+      menuReply(),
+      [
+        [{ text: "Nuevo gasto", callback_data: buildCallbackData(["m", "new"]) }],
+        [{ text: "Gasto previsto", callback_data: buildCallbackData(["m", "prev"]) }],
+        [{ text: "Borrar", callback_data: buildCallbackData(["m", "del"]) }],
+        [{ text: "Reporte", callback_data: buildCallbackData(["m", "rep"]) }],
+        [{ text: "Ayuda", callback_data: buildCallbackData(["m", "help"]) }],
+      ],
+      undefined,
+    );
+  }
+
   /** D8 — the Reporte menu action: the deterministic recent query against real data. */
   private async executeRecentQuery(ownerId: string, reply?: ReplyPort): Promise<void> {
     try {
@@ -691,6 +712,8 @@ export class TelegramService {
     // PENDING registers as EXPENSE + PENDING and is NEVER SHARED (spec
     // quick-capture "Save with Previsto registers PENDING").
     await this.registerWithCategory(payload.body, payload.amount, payload.note, payload.category, ownerId, payload.shared, planned, payload.override, this.makeSender(false, reply));
+    // Invite to continue: the action is done, show the menu again.
+    await this.sendMenu(reply);
   }
 
   /** D4 — decodes a persisted preview payload; corrupt JSON yields null (spec "Corrupt preview payload recovers"). */
@@ -737,6 +760,7 @@ export class TelegramService {
       // Cancel (D6): close the gate, nothing is deleted.
       await this.deps.botStateRepository.set({ ownerId, state: IDLE, pendingMovementId: null, pendingNote: null });
       await this.safeReply(reply, deleteCancelledReply());
+      await this.sendMenu(reply);
       return;
     }
 
@@ -746,6 +770,8 @@ export class TelegramService {
     await this.deps.botStateRepository.set({ ownerId, state: IDLE, pendingMovementId: null, pendingNote: null });
     const result = await this.movementLifecycleExecutor.deleteById(ownerId, payload.target);
     await this.sendLifecycleResult("delete_expense", result, reply);
+    // Invite to continue: the delete is done, show the menu again.
+    await this.sendMenu(reply);
   }
 
   /** D6 — decodes a persisted delete-gate payload; corrupt JSON yields null (corrupt gate recovers without deleting). */
@@ -2882,18 +2908,7 @@ private async handleDialogMessage(
         // changes state (spec bot-main-menu "Menu reopens without side effects").
         // /start is the Telegram entry point: show the same menu so the first
         // thing a new user sees are the action buttons.
-        await this.safeReply(
-          reply,
-          menuReply(),
-          [
-            [{ text: "Nuevo gasto", callback_data: buildCallbackData(["m", "new"]) }],
-            [{ text: "Gasto previsto", callback_data: buildCallbackData(["m", "prev"]) }],
-            [{ text: "Borrar", callback_data: buildCallbackData(["m", "del"]) }],
-            [{ text: "Reporte", callback_data: buildCallbackData(["m", "rep"]) }],
-            [{ text: "Ayuda", callback_data: buildCallbackData(["m", "help"]) }],
-          ],
-          undefined,
-        );
+        await this.sendMenu(reply);
         return;
       }
 

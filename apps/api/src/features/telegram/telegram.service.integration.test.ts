@@ -1624,7 +1624,8 @@ describe("TelegramService (integration)", () => {
     expect(rows[0]?.amount.toNumber()).toBe(30000);
     expect(rows[0]?.category).toBe("Gimnasio");
     expect(rows[0]?.status).toBe("PAID");
-    expect(replies.at(-1)).toContain("Registrado");
+    expect(replies.at(-2)).toContain("Registrado");
+    expect(replies.at(-1)).toContain("menú");
   });
 
   it("quick-capture e2e: Previsto button → Guardar registers a PENDING row, retry registers once", async () => {

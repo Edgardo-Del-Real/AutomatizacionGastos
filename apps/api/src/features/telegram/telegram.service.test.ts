@@ -652,7 +652,16 @@ describe("TelegramService quick-capture preview (awaiting_preview, D4)", () => {
       { visibility: "INDIVIDUAL" },
     );
     expect(h.mockSetState).toHaveBeenLastCalledWith({ ownerId, state: "idle", pendingMovementId: null, pendingNote: null });
-    expect(h.replies.at(-1)).toContain("Registrado");
+    expect(h.replies.at(-2)).toContain("Registrado");
+    // The action returns to the menu so the owner can continue (D8).
+    expect(h.replies.at(-1)).toBe(menuReply());
+    expect(h.keyboards.at(-1)?.map((row) => row[0]?.text)).toEqual([
+      "Nuevo gasto",
+      "Gasto previsto",
+      "Borrar",
+      "Reporte",
+      "Ayuda",
+    ]);
   });
 
   it("a retried Guardar replies 'ya procesado' and registers exactly once (spec: Repeated Guardar registers once)", async () => {
@@ -684,7 +693,8 @@ describe("TelegramService quick-capture preview (awaiting_preview, D4)", () => {
       ownerId,
       { visibility: "INDIVIDUAL" },
     );
-    expect(h.replies.at(-1)).toContain("previsto");
+    expect(h.replies.at(-2)).toContain("previsto");
+    expect(h.replies.at(-1)).toBe(menuReply());
   });
 
   it("Corregir abandons the preview, returns to idle and prompts a new capture (spec: Corregir reopens capture)", async () => {
@@ -758,7 +768,16 @@ describe("TelegramService delete confirmation gate (awaiting_delete_confirmation
 
     expect(processed).toBe(true);
     expect(h.mockDeleteExpense).toHaveBeenCalledWith("m1", ownerId);
-    expect(h.replies.at(-1)).toBe(deletedMovementReply(2500, "alquiler", "Alquiler"));
+    expect(h.replies.at(-2)).toBe(deletedMovementReply(2500, "alquiler", "Alquiler"));
+    // The action returns to the menu so the owner can continue (D8).
+    expect(h.replies.at(-1)).toBe(menuReply());
+    expect(h.keyboards.at(-1)?.map((row) => row[0]?.text)).toEqual([
+      "Nuevo gasto",
+      "Gasto previsto",
+      "Borrar",
+      "Reporte",
+      "Ayuda",
+    ]);
     expect(h.mockSetState).toHaveBeenLastCalledWith({ ownerId, state: "idle", pendingMovementId: null, pendingNote: null });
   });
 
@@ -781,7 +800,9 @@ describe("TelegramService delete confirmation gate (awaiting_delete_confirmation
 
     expect(processed).toBe(true);
     expect(h.mockDeleteExpense).not.toHaveBeenCalled();
-    expect(h.replies.at(-1)).toBe(deleteCancelledReply());
+    expect(h.replies.at(-2)).toBe(deleteCancelledReply());
+    // Cancel also returns to the menu (D8 invite to continue).
+    expect(h.replies.at(-1)).toBe(menuReply());
     expect(h.mockSetState).toHaveBeenLastCalledWith({ ownerId, state: "idle", pendingMovementId: null, pendingNote: null });
   });
 
@@ -791,7 +812,9 @@ describe("TelegramService delete confirmation gate (awaiting_delete_confirmation
 
     await h.service.handleCallback(callbackUpdate({ data: "dc:ok:m1" }), h.reply);
 
-    expect(h.replies.at(-1)).toBe(movementMissingReply());
+    expect(h.replies.at(-2)).toBe(movementMissingReply());
+    // Even a missing-target delete returns to the menu (D8 invite to continue).
+    expect(h.replies.at(-1)).toBe(menuReply());
     expect(h.mockSetState).toHaveBeenLastCalledWith({ ownerId, state: "idle", pendingMovementId: null, pendingNote: null });
   });
 

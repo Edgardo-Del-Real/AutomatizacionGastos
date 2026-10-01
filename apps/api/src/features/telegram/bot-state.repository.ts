@@ -20,9 +20,22 @@ export const BOT_STATES = [
 
 export type BotStateName = (typeof BOT_STATES)[number];
 
+/**
+ * Persisted-record state type: the DB column may still hold one of the
+ * removed dialog states until a v2 recovery pass normalizes it to `idle`
+ * (design "normalizeState" / corrupt-payload discipline). The `BOT_STATES`
+ * enum above remains the authoritative v2 contract — the widened read type
+ * only models what the store can physically contain during rollback.
+ */
+export type PersistedBotStateName =
+  | BotStateName
+  | "awaiting_category"
+  | "awaiting_registration"
+  | "awaiting_amount_confirmation";
+
 export type BotStateRecord = {
   ownerId: string;
-  state: BotStateName;
+  state: PersistedBotStateName;
   pendingMovementId: string | null;
   pendingNote: string | null;
 };

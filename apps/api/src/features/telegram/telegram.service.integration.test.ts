@@ -16,6 +16,7 @@ import type { BotBrain, ConversationEnvelope } from "./bot-brain";
 import { HouseholdService } from "../household/household.service";
 import { captureShapedRedirectReply, categoryCrudRedirectReply, menuReply, previstoPrefixRedirectReply, questionDroppedReply } from "./reply-text";
 import { capturePayloadSchema, previewPayloadSchema, TelegramService } from "./telegram.service";
+import type { InlineKeyboard } from "./telegram.parser";
 
 loadDotEnvFromDisk();
 
@@ -132,13 +133,19 @@ describe("TelegramService (integration v2)", () => {
     await categoryService.ensureOtro(ownerId);
   }
 
-  function replyCollector(): { replies: string[]; reply: (text: string) => Promise<number | undefined> } {
+  function replyCollector(): {
+    replies: string[];
+    keyboards: (InlineKeyboard | undefined)[];
+    reply: (text: string, keyboard?: InlineKeyboard) => Promise<number | undefined>;
+  } {
     const replies: string[] = [];
-    const reply = async (text: string): Promise<number | undefined> => {
+    const keyboards: (InlineKeyboard | undefined)[] = [];
+    const reply = async (text: string, keyboard?: InlineKeyboard): Promise<number | undefined> => {
       replies.push(text);
+      keyboards.push(keyboard);
       return undefined;
     };
-    return { replies, reply };
+    return { replies, keyboards, reply };
   }
 
   /** Resolves the real Prisma category id by name (cat:<id> callbacks carry real ids). */
@@ -152,11 +159,15 @@ describe("TelegramService (integration v2)", () => {
   }
 
   /** Opens a capture of the given type (menu tap + monto+nota) and returns the preview save token. */
-  async function openPreview(type: "REAL" | "PENDING" | "INGRESO" | "COMPARTIDO", text: string): Promise<{ saveToken: string }> {
+  async function openPreview(
+    type: "REAL" | "PENDING" | "INGRESO" | "COMPARTIDO",
+    text: string,
+    messageId = 1,
+  ): Promise<{ saveToken: string }> {
     const menu = { REAL: "m:new", PENDING: "m:prev", INGRESO: "m:inc", COMPARTIDO: "m:shr" }[type];
     const collector = replyCollector();
     await service.handleCallback(callbackUpdate(menu), collector.reply);
-    await service.handleUpdate(textUpdate({ messageId: 1, text }), collector.reply);
+    await service.handleUpdate(textUpdate({ messageId, text }), collector.reply);
     const state = await prisma.botState.findUnique({ where: { ownerId } });
     const payload = previewPayloadSchema.parse(JSON.parse(state?.pendingNote ?? "{}"));
     return { saveToken: payload.saveToken };
@@ -261,6 +272,111 @@ describe("TelegramService (integration v2)", () => {
     expect(replies.at(-1)).toBe(menuReply());
     expect(replies.at(-2)).toContain("900");
     expect(replies.at(-2)).toContain("100");
+  });
+
+  it("savings e2e: the INGRESO confirmation renders the savings row and the matched-rule label", async () => {
+    await seedCategories(["Cafe"]);
+    const savingsService = new SavingsRuleService(new PrismaSavingsRuleRepository(prisma));
+    await savingsService.defineRule(ownerId, "entrenuts", 10);
+    const preview = await openPreview("INGRESO", "cobro sueldo de entrenuts 1000");
+    const { replies, keyboards, reply } = replyCollector();
+
+    await service.handleCallback(callbackUpdate(`cat:${await categoryIdFor("Cafe")}`), reply);
+
+    expect(replies.at(-1)).toContain("Confirmá");
+    expect(replies.at(-1)).toContain("Ahorro: 10% (regla)");
+    const kb = keyboards.at(-1) as InlineKeyboard;
+    const savingsRow = kb.find((row) => row.some((button) => button.callback_data.startsWith("sv:")));
+    expect(savingsRow?.map((button) => button.callback_data)).toEqual([
+      `sv:5:${preview.saveToken}`,
+      `sv:10:${preview.saveToken}`,
+      `sv:other:${preview.saveToken}`,
+      `sv:off:${preview.saveToken}`,
+    ]);
+  });
+
+  it("savings e2e: [Otro] → '15' splits 150/850 keeping the picked net category", async () => {
+    await seedCategories(["Cafe"]);
+    const preview = await openPreview("INGRESO", "cobro sueldo 1000");
+    const { replies, reply } = replyCollector();
+    await service.handleCallback(callbackUpdate(`cat:${await categoryIdFor("Cafe")}`), reply);
+
+    await service.handleCallback(callbackUpdate(`sv:other:${preview.saveToken}`), reply);
+    expect(replies.at(-1)).toContain("porcentaje");
+    await service.handleUpdate(textUpdate({ messageId: 2, text: "15" }), reply);
+    // The confirmation re-renders in place with the manual percent label.
+    expect(replies.at(-1)).toContain("Ahorro: 15%");
+
+    await service.handleCallback(callbackUpdate(`pv:save:${preview.saveToken}`), reply);
+
+    const movements = await prisma.expense.findMany({ where: { ownerId } });
+    expect(movements).toHaveLength(2);
+    const income = movements.find((movement) => movement.type === "INCOME");
+    const savings = movements.find((movement) => movement.type === "SAVINGS");
+    expect(income?.amount.toNumber()).toBe(850);
+    expect(income?.category).toBe("Cafe");
+    expect(savings?.amount.toNumber()).toBe(150);
+    expect(savings?.category).toBe("ahorro");
+    expect(replies.at(-1)).toBe(menuReply());
+  });
+
+  it("savings e2e: [No apartar] (sv:off) registers the whole INCOME with no SAVINGS movement", async () => {
+    await seedCategories(["Cafe"]);
+    const savingsService = new SavingsRuleService(new PrismaSavingsRuleRepository(prisma));
+    await savingsService.defineRule(ownerId, "entrenuts", 10);
+    const preview = await openPreview("INGRESO", "cobro sueldo de entrenuts 1000");
+    const { replies, reply } = replyCollector();
+    await service.handleCallback(callbackUpdate(`cat:${await categoryIdFor("Cafe")}`), reply);
+
+    await service.handleCallback(callbackUpdate(`sv:off:${preview.saveToken}`), reply);
+    expect(replies.at(-1)).toContain("no apartar nada");
+
+    await service.handleCallback(callbackUpdate(`pv:save:${preview.saveToken}`), reply);
+
+    const movements = await prisma.expense.findMany({ where: { ownerId } });
+    expect(movements).toHaveLength(1);
+    expect(movements[0]?.type).toBe("INCOME");
+    expect(movements[0]?.amount.toNumber()).toBe(1000);
+    expect(replies.at(-1)).toBe(menuReply());
+  });
+
+  it("savings e2e: the manual percent choice is per income only — a later save with no choice re-applies the rule", async () => {
+    await seedCategories(["Cafe"]);
+    const savingsService = new SavingsRuleService(new PrismaSavingsRuleRepository(prisma));
+    await savingsService.defineRule(ownerId, "entrenuts", 10);
+    // Income 1: manual 50% via sv:5 → 50/50 split.
+    const first = await openPreview("INGRESO", "cobro sueldo de entrenuts 1000");
+    const firstCollector = replyCollector();
+    await service.handleCallback(callbackUpdate(`cat:${await categoryIdFor("Cafe")}`), firstCollector.reply);
+    await service.handleCallback(callbackUpdate(`sv:5:${first.saveToken}`), firstCollector.reply);
+    await service.handleCallback(callbackUpdate(`pv:save:${first.saveToken}`), firstCollector.reply);
+    // Income 2: no manual choice → the rule applies (10%).
+    const second = await openPreview("INGRESO", "cobro sueldo de entrenuts 1000", 3);
+    const secondCollector = replyCollector();
+    await service.handleCallback(callbackUpdate(`cat:${await categoryIdFor("Cafe")}`), secondCollector.reply);
+    await service.handleCallback(callbackUpdate(`pv:save:${second.saveToken}`), secondCollector.reply);
+
+    const incomes = await prisma.expense.findMany({ where: { ownerId, type: "INCOME" } });
+    const savings = await prisma.expense.findMany({ where: { ownerId, type: "SAVINGS" } });
+    expect(incomes).toHaveLength(2);
+    expect(savings).toHaveLength(2);
+    const amounts = incomes.map((movement) => movement.amount.toNumber()).sort((a, b) => a - b);
+    expect(amounts).toEqual([900, 950]);
+  });
+
+  it("recovery e2e: a corrupt awaiting_savings_percent payload recovers to idle with the dropped reply", async () => {
+    await seedCategories(["Cafe"]);
+    await prisma.botState.create({
+      data: { ownerId, state: "awaiting_savings_percent", pendingMovementId: null, pendingNote: "not-json" },
+    });
+    const { replies, reply } = replyCollector();
+
+    await service.handleUpdate(textUpdate({ messageId: 1, text: "15" }), reply);
+
+    expect(replies.at(-1)).toBe(questionDroppedReply());
+    const state = await prisma.botState.findUnique({ where: { ownerId } });
+    expect(state?.state).toBe("idle");
+    expect(await prisma.expense.count()).toBe(0);
   });
 
   it("capture e2e: COMPARTIDO registers a SHARED EXPENSE row", async () => {

@@ -204,7 +204,8 @@ describe("TelegramService (integration)", () => {
     let movements = await prisma.expense.findMany({ where: { ownerId } });
     expect(movements).toHaveLength(1);
     expect(movements[0]?.category).toBe("otro");
-    expect(replies.at(-1)).toContain("uber viaje");
+    expect(replies.at(-2)).toContain("uber viaje");
+    expect(replies.at(-1)).toContain("categorías");
 
     await service.handleUpdate(textUpdate({ messageId: 2, text: "Transporte" }), reply);
 
@@ -370,7 +371,7 @@ describe("TelegramService (integration)", () => {
     await fragile.handleUpdate(textUpdate({ messageId: 2, text: "$2000 almacen" }), async (text) => {
       replies.push(text);
     });
-    expect(replies.at(-1)).toContain("almacen");
+    expect(replies.at(-2)).toContain("almacen");
   });
 
   it("an unknown chat is ignored silently: NOT recorded, no movement, no reply (spec Owner Filtering)", async () => {
@@ -591,7 +592,7 @@ describe("TelegramService (integration)", () => {
     expect(movements[0]?.amount.toNumber()).toBe(5000);
     const state = await prisma.botState.findUnique({ where: { ownerId } });
     expect(state?.state).toBe("awaiting_category");
-    expect(replies.at(-1)).toContain(formatARS(5000));
+    expect(replies.at(-2)).toContain(formatARS(5000));
   });
 
   it("brain: the confirmation resolves after a service rebuild (restart survival)", async () => {

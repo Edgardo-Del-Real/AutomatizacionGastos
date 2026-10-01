@@ -1299,7 +1299,10 @@ describe("TelegramService state machine", () => {
       pendingMovementId: "mov-1",
       pendingNote: "$ supermercado",
     });
-    expect(h.replies.at(-1)).toContain("supermercado");
+    // Hybrid UX: the correction offer is followed by the category buttons.
+    expect(h.replies.at(-2)).toContain("supermercado");
+    expect(h.replies.at(-1)).toContain("Elegí una de estas categorías");
+    expect(h.keyboards.at(-1)).toBeDefined();
   });
 
   it("answers a correction by reassigning the pending movement without learning keywords", async () => {
@@ -1508,7 +1511,7 @@ describe("TelegramService ambiguity rules (awaiting_category, D6)", () => {
       ownerId,
       { visibility: "INDIVIDUAL" },
     );
-    expect(h.replies.at(-2)).toContain("corrección anterior");
+    expect(h.replies.at(-3)).toContain("corrección anterior");
     // Re-enters the correction loop with the NEW pending movement.
     expect(h.mockSetState).toHaveBeenLastCalledWith({
       ownerId,
@@ -1572,7 +1575,7 @@ describe("TelegramService ambiguity rules (awaiting_category, D6)", () => {
       ownerId,
       { visibility: "INDIVIDUAL" },
     );
-    expect(h.replies.at(-2)).toContain("corrección anterior");
+    expect(h.replies.at(-3)).toContain("corrección anterior");
     expect(h.mockSetState).toHaveBeenLastCalledWith({
       ownerId,
       state: "awaiting_category",
@@ -2206,10 +2209,12 @@ expect(h.mockCreateExpense).not.toHaveBeenCalled();
       ownerId,
       { visibility: "INDIVIDUAL" },
     );
-    // CR-5: exactly ONE merged reply carries the abandon fact + the outcome.
-    expect(h.replies).toHaveLength(1);
+    // CR-5: exactly ONE merged reply carries the abandon fact + the outcome;
+    // the hybrid category buttons are a second, keyboard-only message.
+    expect(h.replies).toHaveLength(2);
     expect(h.replies[0]).toContain(collectAbandonedReply());
     expect(h.replies[0]).toContain(formatARS(8000));
+    expect(h.keyboards[1]).toBeDefined();
   });
 
   it("T10: a corrupt collect payload abandons to idle with the dropped reply, registering nothing", async () => {
@@ -2844,8 +2849,9 @@ describe("TelegramService brain orchestration (llm-conversational-bot)", () => {
     expect(h.mockSetState).toHaveBeenLastCalledWith(
       expect.objectContaining({ state: "awaiting_category" }),
     );
-    expect(h.replies.at(-1)).toContain(formatARS(5000));
-    expect(h.replies.at(-1)).not.toContain("no me queda claro");
+    expect(h.replies.at(-2)).toContain(formatARS(5000));
+    expect(h.replies.at(-2)).not.toContain("no me queda claro");
+    expect(h.keyboards.at(-1)).toBeDefined(); // hybrid: category buttons after the correction offer
   });
 
   it("registers the chosen amount from the stored context on a matching answer", async () => {
@@ -2911,7 +2917,7 @@ describe("TelegramService brain orchestration (llm-conversational-bot)", () => {
       ownerId,
       { visibility: "INDIVIDUAL" },
     );
-    expect(h.replies.at(-2)).toContain("monto");
+    expect(h.replies.at(-3)).toContain("monto");
     expect(h.mockSetState).toHaveBeenLastCalledWith({
       ownerId,
       state: "awaiting_category",
@@ -2972,7 +2978,7 @@ describe("TelegramService brain orchestration (llm-conversational-bot)", () => {
       ownerId,
       { visibility: "INDIVIDUAL" },
     );
-    expect(h.replies.at(-2)).toContain("monto");
+    expect(h.replies.at(-3)).toContain("monto");
   });
 
   it("keeps the confirmation question open when movement creation fails", async () => {
@@ -3524,7 +3530,8 @@ describe("TelegramService brain orchestration (llm-conversational-bot)", () => {
     expect(h.mockBrainReply).toHaveBeenCalledWith(
       expect.objectContaining({ intent: "register_expense", action: "asked_category", amount: 5000 }),
     );
-    expect(h.replies.at(-1)).toBe("Listo, quedó registrado 5000.");
+    expect(h.replies.at(-2)).toBe("Listo, quedó registrado 5000.");
+    expect(h.keyboards.at(-1)).toBeDefined();
   });
 
   it("never calls the brain reply for commands", async () => {
@@ -3839,10 +3846,12 @@ describe("TelegramService dialog controller (brain-routed)", () => {
     await h.service.handleUpdate(textUpdate({ text: "$8000 supermercado", messageId: 2 }), h.reply);
 
     expect(h.mockBrainInterpret).toHaveBeenCalledTimes(1);
-    // CR-5: exactly ONE merged reply carries the abandon fact + the outcome.
-    expect(h.replies).toHaveLength(1);
+    // CR-5: exactly ONE merged reply carries the abandon fact + the outcome;
+    // the hybrid category buttons are a second, keyboard-only message.
+    expect(h.replies).toHaveLength(2);
     expect(h.replies[0]).toContain(collectAbandonedReply());
     expect(h.replies[0]).toContain(formatARS(8000));
+    expect(h.keyboards[1]).toBeDefined();
   });
 
   it("reassigns the pending movement on a resolve answer with an exact category", async () => {
@@ -4039,10 +4048,12 @@ describe("TelegramService dialog controller (brain-routed)", () => {
       ownerId,
       { visibility: "INDIVIDUAL" },
     );
-    // CR-5: exactly ONE merged reply carries the abandon fact + the outcome.
-    expect(h.replies).toHaveLength(1);
+    // CR-5: exactly ONE merged reply carries the abandon fact + the outcome;
+    // the hybrid category buttons are a second, keyboard-only message.
+    expect(h.replies).toHaveLength(2);
     expect(h.replies[0]).toContain("corrección anterior");
     expect(h.replies[0]).toContain(formatARS(8000));
+    expect(h.keyboards[1]).toBeDefined();
     // The pending correction was abandoned; the new movement re-enters the loop.
     expect(h.mockSetState).toHaveBeenLastCalledWith({
       ownerId,
@@ -4955,8 +4966,9 @@ describe("TelegramService planned registration (previsto:)", () => {
       pendingMovementId: "mov-1",
       pendingNote: "alquiler",
     });
-    expect(h.replies.at(-1)).toContain("previsto");
-    expect(h.replies.at(-1)).toContain(formatARS(2500));
+    expect(h.replies.at(-2)).toContain("previsto");
+    expect(h.replies.at(-2)).toContain(formatARS(2500));
+    expect(h.keyboards.at(-1)).toBeDefined();
   });
 
   it("brain-absent path: a planned phrasing WITHOUT the prefix never becomes PENDING (prefix is the only producer)", async () => {
@@ -5366,9 +5378,10 @@ describe("TelegramService CR-5 merged reply (register during a dialog)", () => {
       ownerId,
       { visibility: "INDIVIDUAL" },
     );
-    expect(h.replies).toHaveLength(1);
+    expect(h.replies).toHaveLength(2);
     expect(h.replies[0]).toContain(correctionAbandonedReply());
     expect(h.replies[0]).toContain(formatARS(8000));
+    expect(h.keyboards[1]).toBeDefined();
   });
 
   it("passes abandoned_dialog: true to the brain reply in the merged single send", async () => {
@@ -5384,8 +5397,9 @@ describe("TelegramService CR-5 merged reply (register during a dialog)", () => {
 
     await h.service.handleUpdate(textUpdate({ text: "$8000 supermercado", messageId: 2 }), h.reply);
 
-    expect(h.replies).toHaveLength(1);
+    expect(h.replies).toHaveLength(2);
     expect(h.replies[0]).toBe("Registré el nuevo gasto de 8000.");
     expect(h.mockBrainReply).toHaveBeenCalledWith(expect.objectContaining({ abandoned_dialog: true }));
+    expect(h.keyboards[1]).toBeDefined();
   });
 });

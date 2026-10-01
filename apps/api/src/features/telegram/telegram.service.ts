@@ -1147,7 +1147,7 @@ export class TelegramService {
       return;
     }
 
-    await this.registerOtroWithCorrection(body, parsed.amount, parsed.note, ownerId, shared, planned, override, this.makeSender(false, reply));
+    await this.registerOtroWithCorrection(body, parsed.amount, parsed.note, ownerId, shared, planned, override, this.makeSender(false, reply), reply);
   }
 
   /** register_expense envelope: amount → note → category, then register. */
@@ -1279,7 +1279,7 @@ export class TelegramService {
       );
       return;
     }
-    await this.registerOtroWithCorrection(body, amount, note, ownerId, shared, effectivePlanned, override, activeSend);
+    await this.registerOtroWithCorrection(body, amount, note, ownerId, shared, effectivePlanned, override, activeSend, reply);
   }
 
   /** Amounts differ: persist the question and ask; nothing registers silently. */
@@ -1373,7 +1373,7 @@ export class TelegramService {
     if (payload.category !== null) {
       await this.registerWithCategory(payload.body, chosen, payload.note, payload.category, ownerId, payload.shared, payload.planned, payload.override, send);
     } else {
-      await this.registerOtroWithCorrection(payload.body, chosen, payload.note, ownerId, payload.shared, payload.planned, payload.override, send);
+      await this.registerOtroWithCorrection(payload.body, chosen, payload.note, ownerId, payload.shared, payload.planned, payload.override, send, reply);
     }
   }
 
@@ -2308,7 +2308,7 @@ private async handleDialogMessage(
     if (payload.category !== null) {
       await this.registerWithCategory(payload.body, chosen, payload.note, payload.category, ownerId, payload.shared, payload.planned, payload.override, send);
     } else {
-      await this.registerOtroWithCorrection(payload.body, chosen, payload.note, ownerId, payload.shared, payload.planned, payload.override, send);
+      await this.registerOtroWithCorrection(payload.body, chosen, payload.note, ownerId, payload.shared, payload.planned, payload.override, send, reply);
     }
   }
 
@@ -3035,6 +3035,7 @@ private async handleDialogMessage(
     planned: boolean,
     override: SavingsOverride,
     send: Sender,
+    reply?: ReplyPort,
   ): Promise<boolean> {
     const type = planned ? "EXPENSE" : classifyMovementType(body);
     if (!planned && type === "INCOME") {
@@ -3060,6 +3061,11 @@ private async handleDialogMessage(
       pendingNote: displayNote,
     });
     // The movement is already registered in "otro"; the reassignment is optional.
+    // Hybrid UX: the category question ships WITH the closed-set buttons so the
+    // owner taps instead of typing (spec bot-inline-interactions "category pick").
+    const fixed = planned
+      ? `${plannedReply(amount, displayNote, "otro")} ¿Querés asignarle otra categoría? Elegí una:`
+      : correctionOfferReply(amount, displayNote, "otro");
     await send(
       {
         intent: "register_expense",
@@ -3070,10 +3076,11 @@ private async handleDialogMessage(
         note: displayNote,
         ...(planned ? { planned: true } : {}),
       },
-      planned
-        ? `${plannedReply(amount, displayNote, "otro")} ¿Querés asignarle otra categoría? Escribí el nombre o "no".`
-        : correctionOfferReply(amount, displayNote, "otro"),
+      fixed,
     );
+    if (reply !== undefined) {
+      await this.safeReply(reply, categoryButtonsReply(), await this.categoryKeyboard(ownerId, 0), undefined);
+    }
     return true;
   }
 

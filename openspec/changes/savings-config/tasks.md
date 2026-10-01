@@ -45,8 +45,8 @@ Chain strategy: pending
 
 ## Phase 3: Payload Schema
 
-- [ ] 3.1 RED `telegram.service.test.ts`: legacy decodes + `savePreview` default `{kind:"none"}`
-- [ ] 3.2 GREEN `telegram.service.ts`: `savings` union + wiring
+- [x] 3.1 RED `telegram.service.test.ts`: legacy decodes + `savePreview` default `{kind:"none"}`
+- [x] 3.2 GREEN `telegram.service.ts`: `savings` union + wiring
 
 ## Phase 4: Manual Choice `sv:*`
 

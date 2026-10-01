@@ -144,6 +144,19 @@ export const capturePayloadSchema = z.object({
 export type CapturePayload = z.infer<typeof capturePayloadSchema>;
 
 /**
+ * Optional per-income savings override persisted in the preview payload
+ * (design D5): only `disabled` ("No apartar") or `percent` (a manual choice)
+ * ever ride the payload — kind "none" is NEVER persisted; an absent field
+ * means `{kind:"none"}` and the automatic rule decides.
+ */
+export const savingsOverrideSchema = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("disabled") }),
+  z.object({ kind: z.literal("percent"), percent: z.number().positive().max(100) }),
+]);
+
+export type SavingsOverridePayload = z.infer<typeof savingsOverrideSchema>;
+
+/**
  * Stored payload of `awaiting_preview` (spec quick-capture "Capture Preview
  * with Save/Correct"): the parsed facts, the menu-chosen type, the
  * button-chosen category (null until a `cat:<id>` pick), the saveToken
@@ -159,6 +172,9 @@ export const previewPayloadSchema = z.object({
   category: z.string().min(1).nullable(),
   saveToken: z.string().regex(/^[0-9a-f]{8}$/),
   confirmMessageId: z.number().int().positive().optional(),
+  // D5 — optional so persisted previews without it keep decoding; absent = the
+  // automatic rule decides ({kind:"none"} is never persisted).
+  savings: savingsOverrideSchema.optional(),
 });
 
 export type PreviewPayload = z.infer<typeof previewPayloadSchema>;
@@ -733,7 +749,16 @@ export class TelegramService {
    */
   private async savePreview(payload: PreviewPayload, ownerId: string, reply?: ReplyPort): Promise<void> {
     await this.deps.botStateRepository.set({ ownerId, state: IDLE, pendingMovementId: null, pendingNote: null });
-    await this.registerCapture(payload.amount, payload.note, payload.type, payload.category as string, ownerId, reply);
+    // D5 — absent savings field defaults to the neutral override: the rule decides.
+    await this.registerCapture(
+      payload.amount,
+      payload.note,
+      payload.type,
+      payload.category as string,
+      ownerId,
+      payload.savings ?? { kind: "none" },
+      reply,
+    );
   }
 
   /**
@@ -1169,11 +1194,13 @@ export class TelegramService {
     type: CaptureType,
     category: string,
     ownerId: string,
+    savings: SavingsOverridePayload | { kind: "none" },
     reply?: ReplyPort,
   ): Promise<boolean> {
     if (type === "INGRESO") {
-      // The rule always applies: no per-message override exists in v2.
-      const split = await this.deps.savingsService.resolveSplit(ownerId, note ?? "", { kind: "none" });
+      // D5 — the manual per-income override (percent/disabled) wins; the absent
+      // default {kind:"none"} leaves the automatic rule to decide.
+      const split = await this.deps.savingsService.resolveSplit(ownerId, note ?? "", savings);
       if (split.kind === "split") {
         return this.registerIncomeSplit(amount, note, ownerId, split.percent, category, reply);
       }

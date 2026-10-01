@@ -115,6 +115,7 @@ type Harness = {
   mockEnsureAhorro: ReturnType<typeof vi.fn>;
   mockResolveSplit: ReturnType<typeof vi.fn>;
   mockDefineRule: ReturnType<typeof vi.fn>;
+  mockCreateIncomeWithSavings: ReturnType<typeof vi.fn>;
   mockSetState: ReturnType<typeof vi.fn>;
   mockBrainInterpret: ReturnType<typeof vi.fn>;
   mockBrainReply: ReturnType<typeof vi.fn>;
@@ -161,6 +162,10 @@ function makeHarness(options?: { noBrain?: boolean }): Harness {
       type: "EXPENSE",
     })),
     deleteExpense: vi.fn(async () => undefined),
+    createIncomeWithSavings: vi.fn(async () => ({
+      net: { id: "net-1", ownerId, amount: 850, currency: "ARS", category: null, note: null, occurredAt: new Date(), createdAt: new Date(), type: "INCOME" },
+      savings: { id: "sav-1", ownerId, amount: 150, currency: "ARS", category: "ahorro", note: null, occurredAt: new Date(), createdAt: new Date(), type: "SAVINGS" },
+    })),
   } as unknown as ExpenseService;
   const movementService = {
     updateMovement: vi.fn(async (ownerIdArg: string, id: string, patch: unknown) => ({
@@ -279,6 +284,7 @@ function makeHarness(options?: { noBrain?: boolean }): Harness {
     mockEnsureAhorro: vi.mocked(categoryService.ensureAhorro),
     mockResolveSplit: vi.mocked(savingsService.resolveSplit),
     mockDefineRule: vi.mocked(savingsService.defineRule),
+    mockCreateIncomeWithSavings: vi.mocked(expenseService.createIncomeWithSavings),
     mockSetState: vi.mocked(botStateRepository.set),
     mockBrainInterpret: vi.mocked(brain?.interpret ?? vi.fn()),
     mockBrainReply: vi.mocked(brain?.reply ?? vi.fn()),
@@ -354,6 +360,70 @@ describe("payload schemas (v2)", () => {
         type: "REAL",
         category: "Cafe",
         saveToken: "zz",
+      }).success,
+    ).toBe(false);
+  });
+
+  it("decodes a legacy preview payload without the savings field (D5: absent = no override)", () => {
+    const result = previewPayloadSchema.safeParse({
+      amount: 1000,
+      note: "sueldo",
+      type: "INGRESO",
+      category: "Sueldo",
+      saveToken: "a1b2c3d4",
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.savings).toBeUndefined();
+    }
+  });
+
+  it("decodes a preview payload with the savings disabled override", () => {
+    const result = previewPayloadSchema.safeParse({
+      amount: 1000,
+      note: "sueldo",
+      type: "INGRESO",
+      category: "Sueldo",
+      saveToken: "a1b2c3d4",
+      savings: { kind: "disabled" },
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.savings).toEqual({ kind: "disabled" });
+    }
+  });
+
+  it("decodes a preview payload with a percent override and rejects out-of-range percents", () => {
+    const valid = previewPayloadSchema.safeParse({
+      amount: 1000,
+      note: "sueldo",
+      type: "INGRESO",
+      category: "Sueldo",
+      saveToken: "a1b2c3d4",
+      savings: { kind: "percent", percent: 15 },
+    });
+    expect(valid.success).toBe(true);
+    if (valid.success) {
+      expect(valid.data.savings).toEqual({ kind: "percent", percent: 15 });
+    }
+    expect(
+      previewPayloadSchema.safeParse({
+        amount: 1000,
+        note: "sueldo",
+        type: "INGRESO",
+        category: "Sueldo",
+        saveToken: "a1b2c3d4",
+        savings: { kind: "percent", percent: 0 },
+      }).success,
+    ).toBe(false);
+    expect(
+      previewPayloadSchema.safeParse({
+        amount: 1000,
+        note: "sueldo",
+        type: "INGRESO",
+        category: "Sueldo",
+        saveToken: "a1b2c3d4",
+        savings: { kind: "percent", percent: 150 },
       }).success,
     ).toBe(false);
   });
@@ -811,6 +881,33 @@ describe("TelegramService movement type mapping (v2)", () => {
       expect.objectContaining({ amount: 1000, note: "cobro sueldo de entrenuts", category: "Cafe", type: "INCOME" }),
       ownerId,
       { visibility: "INDIVIDUAL" },
+    );
+  });
+
+  it("a manual percent override in the preview payload supersedes the rule via savePreview (D5)", async () => {
+    h.mockResolveSplit.mockResolvedValue({ kind: "split", percent: 15 });
+    await seedAwaitingCapture(h, "INGRESO");
+    await h.service.handleUpdate(textUpdate({ text: "cobro sueldo de entrenuts 1000", messageId: 2 }), h.reply);
+
+    const state = await h.botStateRepository.get(ownerId);
+    const payload = previewPayloadSchema.parse(JSON.parse(state?.pendingNote ?? "{}"));
+    const withOverride = { ...payload, savings: { kind: "percent", percent: 15 } };
+    await h.botStateRepository.set({
+      ownerId,
+      state: "awaiting_preview",
+      pendingMovementId: null,
+      pendingNote: JSON.stringify(withOverride),
+    } as BotStateRecord);
+
+    await h.service.handleCallback(callbackUpdate({ data: "cat:c0", messageId: 90 }), h.reply);
+    await h.service.handleCallback(callbackUpdate({ data: `pv:save:${payload.saveToken}` }), h.reply);
+
+    expect(h.mockResolveSplit).toHaveBeenCalledWith(ownerId, "cobro sueldo de entrenuts", {
+      kind: "percent",
+      percent: 15,
+    });
+    expect(h.mockCreateIncomeWithSavings).toHaveBeenCalledWith(
+      expect.objectContaining({ netCategory: "Cafe", savingsCategory: "ahorro", percent: 15 }),
     );
   });
 

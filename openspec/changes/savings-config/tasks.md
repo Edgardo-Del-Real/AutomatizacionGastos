@@ -29,12 +29,12 @@ Chain strategy: pending
 
 ## Phase 1: Parser + Service
 
-- [ ] 1.1 RED `telegram.commands.test.ts`: `listar ahorros`/`borrar ahorro:`/percent input
-- [ ] 1.2 GREEN `telegram.commands.ts`: types/regexes/parser
-- [ ] 1.3 RED `savings.service.test.ts`: `listRules`/`deleteRule`
-- [ ] 1.4 GREEN `savings.service.ts`: both fns
-- [ ] 1.5 RED `reply-text.test.ts`: 11 replies, split reply(+netCategory)
-- [ ] 1.6 GREEN `reply-text.ts`: `SavingsChoice` + replies
+- [x] 1.1 RED `telegram.commands.test.ts`: `listar ahorros`/`borrar ahorro:`/percent input
+- [x] 1.2 GREEN `telegram.commands.ts`: types/regexes/parser
+- [x] 1.3 RED `savings.service.test.ts`: `listRules`/`deleteRule`
+- [x] 1.4 GREEN `savings.service.ts`: both fns
+- [x] 1.5 RED `reply-text.test.ts`: 11 replies, split reply(+netCategory)
+- [x] 1.6 GREEN `reply-text.ts`: `SavingsChoice` + replies
 
 ## Phase 2: Repository + Split Categories
 

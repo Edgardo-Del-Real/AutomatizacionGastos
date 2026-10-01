@@ -100,17 +100,17 @@ export function buildCallbackData(parts: string[]): string {
 }
 
 /**
- * AD6 — the `compartido:` prefix is parsed ONCE at arrival and is
- * authoritative: it works without the bot brain and wins over the brain's
- * `shared` flag by construction (the stripped text the brain sees never
- * carries the prefix). Strips the prefix (case-insensitive) and trims the rest.
+ * v2 — pure capture parser (spec quick-capture "Deterministic Capture Parser"):
+ * extracts `{amount, note}` via the shared amount parsers and NEVER resolves,
+ * infers or matches a category — the category is chosen by button at the
+ * preview. Text with no parseable amount yields null. Never calls the LLM,
+ * never writes state. Replaces `quickCaptureParse` once the service stops
+ * consuming keyword rules (the keyword data stays intact for the dashboard).
  */
-export function parseSharedPrefix(text: string): { text: string; shared: boolean } {
-  const match = /^compartido\s*:\s*/i.exec(text);
-  if (match === null) {
-    return { text, shared: false };
-  }
-  return { text: text.slice(match[0].length).trim(), shared: true };
+export type CaptureParse = { amount: number; note: string | null };
+
+export function captureParse(text: string): CaptureParse | null {
+  return parseAmountAndNote(text);
 }
 
 /**
@@ -163,6 +163,34 @@ export type SavingsOverrideParseResult =
 
 const SIN_AHORRO_RE = /^sin ahorro\s*:?\s*/i;
 const CON_PERCENT_RE = /^con\s+(-?\d+(?:[.,]\d+)?)\s*%/i;
+const COMPARTIDO_PREFIX_RE = /^compartido\s*:\s*/i;
+const PREVISTO_PREFIX_RE = /^(?:gasto\s+fijo\s+|gasto\s+)?previsto\s*:?\s+/i;
+
+/**
+ * v2 — detection-only legacy-prefix classifier (design D8, spec
+ * bot-free-text-routing "Legacy Prefix Redirect"): classifies the legacy
+ * `previsto:`, `compartido:` and savings-override ("sin ahorro" / "con X%")
+ * text surfaces so idle routing can reply with the matching educational
+ * redirect. Never strips, never parses amounts, never changes state, never
+ * calls the LLM. The "previsto" marker requires trailing content (a lone
+ * "previsto" / "previsto:" is not a legacy message); "compartido" requires
+ * the colon; a plain "gasto fijo" without the previsto word is not a prefix
+ * (the brake, mirroring the legacy arrival-parser semantics).
+ */
+export type LegacyPrefixKind = "previsto" | "compartido" | "savings-override";
+
+export function legacyPrefixKind(text: string): LegacyPrefixKind | null {
+  if (COMPARTIDO_PREFIX_RE.test(text)) {
+    return "compartido";
+  }
+  if (PREVISTO_PREFIX_RE.test(text)) {
+    return "previsto";
+  }
+  if (SIN_AHORRO_RE.test(text) || CON_PERCENT_RE.test(text)) {
+    return "savings-override";
+  }
+  return null;
+}
 
 /**
  * D6 — deterministic savings overrides parsed ONCE at arrival, right after the

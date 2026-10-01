@@ -2,11 +2,12 @@ import { describe, expect, it } from "vitest";
 import type { KeywordRule } from "../categories/matcher";
 import {
   buildCallbackData,
+  captureParse,
+  legacyPrefixKind,
   normalizeTelegramCallback,
   normalizeTelegramMessage,
   parseArrivalPrefixes,
   parseSavingsOverride,
-  parseSharedPrefix,
   quickCaptureParse,
 } from "./telegram.parser";
 import type { TelegramMessage } from "./telegram.types";
@@ -105,19 +106,65 @@ describe("normalizeTelegramMessage", () => {
   });
 });
 
-describe("parseSharedPrefix", () => {
-  it("detects the compartido: prefix case-insensitively and strips it, trimming the rest", () => {
-    expect(parseSharedPrefix("compartido: $2000 super")).toEqual({ text: "$2000 super", shared: true });
-    expect(parseSharedPrefix("COMPARTIDO: $2000 super")).toEqual({ text: "$2000 super", shared: true });
-    expect(parseSharedPrefix("Compartido:   $2000  super  ")).toEqual({ text: "$2000  super", shared: true });
+describe("captureParse (v2 pure parser)", () => {
+  it("extracts amount and note without resolving any category", () => {
+    expect(captureParse("30000 gym")).toEqual({ amount: 30000, note: "gym" });
   });
 
-  it("returns the text untouched with shared=false when the prefix is absent", () => {
-    expect(parseSharedPrefix("$2000 super")).toEqual({ text: "$2000 super", shared: false });
+  it("parses a multi-word note and keeps it whole", () => {
+    expect(captureParse("1500 cafe con leche")).toEqual({ amount: 1500, note: "cafe con leche" });
   });
 
-  it("does not treat plain words starting with 'compartido' without the colon as a prefix", () => {
-    expect(parseSharedPrefix("compartido el gasto")).toEqual({ text: "compartido el gasto", shared: false });
+  it("yields null when no amount is present", () => {
+    expect(captureParse("gym")).toBeNull();
+  });
+
+  it("yields null on empty or whitespace text", () => {
+    expect(captureParse("")).toBeNull();
+    expect(captureParse("   ")).toBeNull();
+  });
+
+  it("never infers a category: the result carries no category key", () => {
+    const result = captureParse("30000 alquiler");
+    expect(result).toEqual({ amount: 30000, note: "alquiler" });
+    expect(result).not.toHaveProperty("category");
+  });
+});
+
+describe("legacyPrefixKind (v2 detection-only)", () => {
+  it("detects the previsto: prefix", () => {
+    expect(legacyPrefixKind("previsto: 2500 alquiler")).toBe("previsto");
+  });
+
+  it("detects the 'gasto previsto' and 'gasto fijo previsto' markers with or without the colon", () => {
+    expect(legacyPrefixKind("gasto previsto alquiler 2500")).toBe("previsto");
+    expect(legacyPrefixKind("gasto fijo previsto: alquiler 2500")).toBe("previsto");
+  });
+
+  it("detects the compartido: prefix", () => {
+    expect(legacyPrefixKind("compartido: 2000 super")).toBe("compartido");
+  });
+
+  it("detects savings-override text (sin ahorro / con X%)", () => {
+    expect(legacyPrefixKind("sin ahorro cobro sueldo de entrenuts 1000")).toBe("savings-override");
+    expect(legacyPrefixKind("con 5% cobro 1000")).toBe("savings-override");
+  });
+
+  it("returns null for plain capture-shaped text", () => {
+    expect(legacyPrefixKind("2500 alquiler")).toBeNull();
+  });
+
+  it("does not match a lone previsto marker without trailing content", () => {
+    expect(legacyPrefixKind("previsto")).toBeNull();
+    expect(legacyPrefixKind("previsto:")).toBeNull();
+  });
+
+  it("does not match compartido without the colon", () => {
+    expect(legacyPrefixKind("compartido el gasto")).toBeNull();
+  });
+
+  it("keeps the brake: a plain 'gasto fijo' without the previsto signal is not planned", () => {
+    expect(legacyPrefixKind("gasto fijo alquiler 2500")).toBeNull();
   });
 });
 

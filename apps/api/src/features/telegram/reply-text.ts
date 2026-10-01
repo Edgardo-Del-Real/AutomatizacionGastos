@@ -536,6 +536,51 @@ export function deletePickListReply(candidates: LifecycleAskCandidate[]): string
   return `¿Cuál querés borrar?\n${movementCandidatesList(candidates)}`;
 }
 
+/**
+ * v2 — correction pick-list ask (spec movement-correction "Movement Reference
+ * Matching"): the 10 recent non-PENDING movements render as buttons; the text
+ * echoes the numbered candidates for accessibility.
+ */
+export function correctionPickListReply(candidates: LifecycleAskCandidate[]): string {
+  return `¿Qué movimiento querés corregir?\n${movementCandidatesList(candidates)}`;
+}
+
+/**
+ * v2 — category-admin pick asks (spec bot-manage-categories): the NORMAL
+ * categories render as buttons; the text asks which category to rename/delete.
+ */
+export function categoryRenamePickReply(): string {
+  return "¿Qué categoría querés renombrar?";
+}
+
+export function categoryDeletePickReply(): string {
+  return "¿Qué categoría querés borrar?";
+}
+
+/**
+ * v2 — correction reassign ask (spec movement-correction "Button-pick
+ * correction reassigns"): the owner picks the new NORMAL category by button.
+ */
+export function reassignCategoryReply(): string {
+  return "Elegí la categoría nueva para el movimiento:";
+}
+
+/**
+ * v2 — correction empty-window reply (spec movement-correction "No expenses
+ * to correct"): the correction window has no non-PENDING movements.
+ */
+export function correctionEmptyReply(): string {
+  return "No hay gastos para corregir.";
+}
+
+/**
+ * v2 — category-gone reply for a stale admin pick (design D6: retry-after-
+ * delete → honest NotFound reply): the picked category no longer exists.
+ */
+export function categoryGoneReply(): string {
+  return "Esa categoría ya no existe.";
+}
+
 /** Phantom-guard abandon: nothing was resolved, nothing was reprocessed. */
 export function questionDroppedReply(): string {
   return "Ojo: dejé la pregunta anterior sin responder. No registré ni modifiqué nada.";

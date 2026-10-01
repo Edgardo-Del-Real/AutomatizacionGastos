@@ -7,13 +7,14 @@ import type { HouseholdService } from "../household/household.service";
 import type { ViewerScope } from "../movements/movements.types";
 import type { SavingsRuleService } from "../savings/savings.service";
 import { isUniqueConstraintViolation, type ProcessedMessageRepository } from "../messages/message.repository";
-import { NotFoundError, ValidationFailedError } from "../../infra/errors";
+import { NotFoundError, SavingsForbiddenError, ValidationFailedError } from "../../infra/errors";
 import type { MovementService } from "../movements/movements.service";
 import { BOT_STATES, type BotStateRepository } from "./bot-state.repository";
 import { type BotBrain, type ConversationEnvelope, type ExecutionResult } from "./bot-brain";
 import { MovementLifecycleExecutor } from "./movement-lifecycle-executor";
+import { MovementCorrector } from "./movement-corrector";
 import { QueryExecutor } from "./query-executor";
-import { deriveQueryType, type QueryExecutionResult } from "./query.types";
+import { deriveQueryType, type QueryExecutionResult, type QueryType } from "./query.types";
 import { parseCommand, parseLegacyCategoryCrud, parseSetupBatchCommand, type TelegramCommand } from "./telegram.commands";
 import {
   normalizeTelegramMessage,
@@ -33,9 +34,15 @@ import {
   captureShapedRedirectReply,
   categoryAdminReply,
   categoryCrudRedirectReply,
+  categoryDeleteConfirmReply,
+  categoryDeletePickReply,
+  categoryGoneReply,
   categoryListReply,
   categoryNamePromptReply,
+  categoryRenamePickReply,
   compartidoPrefixRedirectReply,
+  correctionEmptyReply,
+  correctionPickListReply,
   deleteCancelledReply,
   deleteConfirmReply,
   deletePickListReply,
@@ -43,9 +50,15 @@ import {
   duplicateCategoryReply,
   expenseAdminReply,
   greetingReply,
+  markPaidAlreadyReply,
+  markPaidAskReply,
+  markPaidReply,
   menuReply,
+  movementCorrectionDoneReply,
   movementMissingReply,
+  nothingPendingReply,
   nothingToDeleteReply,
+  formatARS,
   plannedReply,
   previewAskCategoryReply,
   previewReply,
@@ -53,6 +66,7 @@ import {
   queryRedirectReply,
   queryReplyTemplate,
   questionDroppedReply,
+  reassignCategoryReply,
   reportsMenuReply,
   reservedCategoryReply,
   savingsOverrideRedirectReply,
@@ -65,6 +79,12 @@ import {
   successReply,
   successSplitReply,
   unresolvableReply,
+  categoryCreatedReply,
+  categoryDeletedReply,
+  categoryRenamedReply,
+  missingCategoryReply,
+  otroDeleteForbiddenReply,
+  savingsForbiddenReply,
 } from "./reply-text";
 
 /**
@@ -174,6 +194,22 @@ export const lifecycleSelectionPayloadSchema = z.object({
 export type LifecycleSelectionPayload = z.infer<typeof lifecycleSelectionPayloadSchema>;
 
 /**
+ * Stored payload of `awaiting_category_selection` (design D6): the movement
+ * picked for a correction reassign (`mc:<id>` pick). The `cc:<catId>` callback
+ * reassigns this movement to the picked category via `updateMovement`.
+ */
+export const categorySelectionPayloadSchema = z.object({
+  movement: z.object({
+    id: z.string().min(1),
+    amount: z.number().positive(),
+    note: z.string().nullable(),
+    date: z.string().min(1),
+  }),
+});
+
+export type CategorySelectionPayload = z.infer<typeof categorySelectionPayloadSchema>;
+
+/**
  * Stored payload of an open delete-confirmation gate
  * (`awaiting_delete_confirmation`, unchanged from v1). Lives in `pendingNote`
  * so it survives restarts. The persisted `target` is the ONLY movement a
@@ -195,6 +231,7 @@ export type DeleteConfirmPayload = z.infer<typeof deleteConfirmPayloadSchema>;
 export class TelegramService {
   private readonly queryExecutor: QueryExecutor;
   private readonly movementLifecycleExecutor: MovementLifecycleExecutor;
+  private readonly movementCorrector: MovementCorrector;
 
   constructor(private readonly deps: TelegramServiceDeps) {
     this.queryExecutor = new QueryExecutor(deps.movementService, deps.categoryService);
@@ -202,6 +239,7 @@ export class TelegramService {
       movementService: deps.movementService,
       expenseService: deps.expenseService,
     });
+    this.movementCorrector = new MovementCorrector(deps.movementService);
   }
 
   /**
@@ -342,9 +380,27 @@ export class TelegramService {
       case "dk":
         await this.handleDeletePickCallback(callback, ownerId, reply);
         return;
+      case "am":
+        await this.handleAdminExpenseCallback(callback, ownerId, reply);
+        return;
+      case "ac":
+        await this.handleAdminCategoryCallback(callback, ownerId, reply);
+        return;
+      case "rep":
+        await this.handleReportsCallback(callback, ownerId, reply);
+        return;
+      case "mc":
+        await this.handleCorrectionPickCallback(callback, ownerId, reply);
+        return;
+      case "mp":
+        await this.handleMarkPaidPickCallback(callback, ownerId, reply);
+        return;
+      case "cc":
+        await this.handleReassignCallback(callback, ownerId, reply);
+        return;
       default:
-        // Unknown action prefix (incl. the Phase 6 sub-menu families am:*/ac:*/rep:*/mc:*/mp:*/cc:*):
-        // honest reply, no state change (spec "Unknown action replied honestly").
+        // Unknown action prefix: honest reply, no state change (spec
+        // "Unknown action replied honestly").
         await this.safeReply(reply, callbackUnavailableReply());
     }
   }
@@ -681,6 +737,26 @@ export class TelegramService {
         await this.safeReply(reply, previewReply(payload.amount, payload.note, payload.type), await this.previewKeyboard(ownerId, payload, page), callback.messageId);
         return;
       }
+      if (state?.state === AWAITING_MOVEMENT_SELECTION) {
+        const lifecycle = this.decodeLifecycleSelectionPayload(state.pendingNote);
+        if (lifecycle === null) {
+          await this.deps.botStateRepository.set({ ownerId, state: IDLE, pendingMovementId: null, pendingNote: null });
+          await this.safeReply(reply, questionDroppedReply());
+          return;
+        }
+        await this.renderMovementPickList(ownerId, lifecycle, page, reply);
+        return;
+      }
+      if (state?.state === AWAITING_CATEGORY_SELECTION) {
+        const payload = this.decodeCategorySelectionPayload(state.pendingNote);
+        if (payload === null) {
+          await this.deps.botStateRepository.set({ ownerId, state: IDLE, pendingMovementId: null, pendingNote: null });
+          await this.safeReply(reply, questionDroppedReply());
+          return;
+        }
+        await this.safeReply(reply, reassignCategoryReply(), await this.categoryPickKeyboard(ownerId, "cc", page), undefined);
+        return;
+      }
       await this.safeReply(reply, callbackUnavailableReply());
       return;
     }
@@ -734,8 +810,67 @@ export class TelegramService {
       return;
     }
 
+    if (payload.flow === "admin_create") {
+      try {
+        const created = await this.deps.categoryService.createCategory(ownerId, body);
+        await this.deps.botStateRepository.set({ ownerId, state: IDLE, pendingMovementId: null, pendingNote: null });
+        await this.safeReply(reply, categoryCreatedReply(created.name));
+        await this.sendMenu(reply);
+        return;
+      } catch (error) {
+        if (error instanceof ReservedCategoryError) {
+          await this.deps.botStateRepository.set({ ownerId, state: IDLE, pendingMovementId: null, pendingNote: null });
+          await this.safeReply(reply, reservedCategoryReply(body, error.concept));
+          await this.sendMenu(reply);
+          return;
+        }
+        if (error instanceof ValidationFailedError) {
+          await this.deps.botStateRepository.set({ ownerId, state: IDLE, pendingMovementId: null, pendingNote: null });
+          await this.safeReply(reply, duplicateCategoryReply(body));
+          await this.sendMenu(reply);
+          return;
+        }
+        throw error;
+      }
+    }
+
+    if (payload.flow === "admin_rename" && payload.categoryId !== undefined) {
+      const categories = await this.deps.categoryService.listCategories(ownerId);
+      const from = categories.find((candidate) => candidate.id === payload.categoryId);
+      if (from === undefined) {
+        await this.deps.botStateRepository.set({ ownerId, state: IDLE, pendingMovementId: null, pendingNote: null });
+        await this.safeReply(reply, categoryGoneReply());
+        await this.sendMenu(reply);
+        return;
+      }
+      try {
+        const renamed = await this.deps.categoryService.renameCategory(ownerId, from.name, body);
+        await this.deps.botStateRepository.set({ ownerId, state: IDLE, pendingMovementId: null, pendingNote: null });
+        if (renamed === null) {
+          await this.safeReply(reply, missingCategoryReply(from.name));
+        } else {
+          await this.safeReply(reply, categoryRenamedReply(from.name, renamed.name));
+        }
+        await this.sendMenu(reply);
+        return;
+      } catch (error) {
+        await this.deps.botStateRepository.set({ ownerId, state: IDLE, pendingMovementId: null, pendingNote: null });
+        if (error instanceof ReservedCategoryError) {
+          await this.safeReply(reply, reservedCategoryReply(body, error.concept));
+        } else if (error instanceof ValidationFailedError) {
+          await this.safeReply(reply, duplicateCategoryReply(body));
+        } else if (error instanceof SavingsForbiddenError) {
+          await this.safeReply(reply, savingsForbiddenReply());
+        } else {
+          throw error;
+        }
+        await this.sendMenu(reply);
+        return;
+      }
+    }
+
     if (payload.flow !== "preview" || payload.preview === undefined) {
-      // admin_create / admin_rename arrive in Phase 6.
+      // Unknown/unsupported admin flow: recover to idle.
       await this.deps.botStateRepository.set({ ownerId, state: IDLE, pendingMovementId: null, pendingNote: null });
       await this.safeReply(reply, questionDroppedReply());
       return;
@@ -1162,7 +1297,7 @@ export class TelegramService {
         pendingMovementId: null,
         pendingNote: JSON.stringify(updated),
       });
-      await this.safeReply(reply, deletePickListReply(window));
+      await this.renderMovementPickList(ownerId, updated, 0, reply);
       return;
     }
 
@@ -1187,6 +1322,441 @@ export class TelegramService {
       ],
       undefined,
     );
+  }
+
+  /**
+   * am:* expense-admin chains (spec bot-manage-expenses): `am:del` reuses the
+   * delete window → `dk` pick → gate (as-is); `am:cor` opens the correction
+   * window (10 recent non-PENDING) → `mc` pick → awaiting_category_selection →
+   * `cc` reassign; `am:pay` opens the PENDING window → `mp` pick →
+   * markPaidById. Every pick list paginates at 7 rows/page (design D9, ≤8).
+   */
+  private async handleAdminExpenseCallback(callback: TelegramCallback, ownerId: string, reply?: ReplyPort): Promise<void> {
+    const [, sub] = callback.data.split(":");
+    switch (sub) {
+      case "del": {
+        const window = await this.movementLifecycleExecutor.deleteWindow(ownerId);
+        if (window.length === 0) {
+          await this.safeReply(reply, nothingToDeleteReply());
+          await this.sendMenu(reply);
+          return;
+        }
+        const payload: LifecycleSelectionPayload = {
+          action: "delete_expense",
+          candidates: window.map((candidate) => ({
+            id: candidate.id,
+            amount: candidate.amount,
+            note: candidate.note,
+            date: candidate.date,
+          })),
+        };
+        await this.deps.botStateRepository.set({
+          ownerId,
+          state: AWAITING_MOVEMENT_SELECTION,
+          pendingMovementId: null,
+          pendingNote: JSON.stringify(payload),
+        });
+        await this.renderMovementPickList(ownerId, payload, 0, reply);
+        return;
+      }
+      case "cor": {
+        const window = await this.movementCorrector.correctionWindow(ownerId);
+        if (window.length === 0) {
+          await this.safeReply(reply, correctionEmptyReply());
+          await this.sendMenu(reply);
+          return;
+        }
+        const payload: LifecycleSelectionPayload = {
+          action: "correct_category",
+          candidates: window.map((candidate) => ({
+            id: candidate.id,
+            amount: candidate.amount,
+            note: candidate.note,
+            date: candidate.date,
+          })),
+        };
+        await this.deps.botStateRepository.set({
+          ownerId,
+          state: AWAITING_MOVEMENT_SELECTION,
+          pendingMovementId: null,
+          pendingNote: JSON.stringify(payload),
+        });
+        await this.renderMovementPickList(ownerId, payload, 0, reply);
+        return;
+      }
+      case "pay": {
+        const window = await this.movementLifecycleExecutor.pendingWindow(ownerId);
+        if (window.length === 0) {
+          await this.safeReply(reply, nothingPendingReply());
+          await this.sendMenu(reply);
+          return;
+        }
+        const payload: LifecycleSelectionPayload = {
+          action: "mark_paid",
+          candidates: window.map((candidate) => ({
+            id: candidate.id,
+            amount: candidate.amount,
+            note: candidate.note,
+            date: candidate.date,
+          })),
+        };
+        await this.deps.botStateRepository.set({
+          ownerId,
+          state: AWAITING_MOVEMENT_SELECTION,
+          pendingMovementId: null,
+          pendingNote: JSON.stringify(payload),
+        });
+        await this.renderMovementPickList(ownerId, payload, 0, reply);
+        return;
+      }
+      default:
+        await this.safeReply(reply, callbackUnavailableReply());
+    }
+  }
+
+  /**
+   * ac:* category-admin chains (spec bot-manage-categories): `ac:new` prompts
+   * a name (awaiting_category_name admin_create); `ac:ren` renders the NORMAL
+   * categories as `ac:rn:<id>` picks → awaiting_category_name admin_rename;
+   * `ac:del` renders `ac:dl:<id>` picks → stateless `ac:ok:<id>`/`ac:no:<id>`
+   * confirm → guarded deleteCategory. Pick lists exclude "otro"/"ahorro".
+   */
+  private async handleAdminCategoryCallback(callback: TelegramCallback, ownerId: string, reply?: ReplyPort): Promise<void> {
+    const [, sub, value] = callback.data.split(":");
+    switch (sub) {
+      case "new": {
+        const payload: CategoryNamePayload = { flow: "admin_create" };
+        await this.deps.botStateRepository.set({
+          ownerId,
+          state: AWAITING_CATEGORY_NAME,
+          pendingMovementId: null,
+          pendingNote: JSON.stringify(payload),
+        });
+        await this.safeReply(reply, categoryNamePromptReply("admin_create"));
+        return;
+      }
+      case "ren": {
+        await this.safeReply(reply, categoryRenamePickReply(), await this.categoryPickKeyboard(ownerId, "ac:rn", 0), undefined);
+        return;
+      }
+      case "rn": {
+        if (value === undefined) {
+          await this.safeReply(reply, callbackUnavailableReply());
+          return;
+        }
+        const payload: CategoryNamePayload = { flow: "admin_rename", categoryId: value };
+        await this.deps.botStateRepository.set({
+          ownerId,
+          state: AWAITING_CATEGORY_NAME,
+          pendingMovementId: null,
+          pendingNote: JSON.stringify(payload),
+        });
+        await this.safeReply(reply, categoryNamePromptReply("admin_rename"));
+        return;
+      }
+      case "del": {
+        await this.safeReply(reply, categoryDeletePickReply(), await this.categoryPickKeyboard(ownerId, "ac:dl", 0), undefined);
+        return;
+      }
+      case "dl": {
+        if (value === undefined) {
+          await this.safeReply(reply, callbackUnavailableReply());
+          return;
+        }
+        const categories = await this.deps.categoryService.listCategories(ownerId);
+        const category = categories.find((candidate) => candidate.id === value);
+        if (category === undefined) {
+          await this.safeReply(reply, categoryGoneReply());
+          return;
+        }
+        // Stateless confirmation (design D6): the guarded service re-validates.
+        await this.safeReply(
+          reply,
+          categoryDeleteConfirmReply(category.name),
+          [
+            [
+              { text: "❌ No", callback_data: buildCallbackData(["ac", "no", value]) },
+              { text: "✅ Borrar", callback_data: buildCallbackData(["ac", "ok", value]) },
+            ],
+          ],
+          undefined,
+        );
+        return;
+      }
+      case "ok": {
+        if (value === undefined) {
+          await this.safeReply(reply, callbackUnavailableReply());
+          return;
+        }
+        const categories = await this.deps.categoryService.listCategories(ownerId);
+        const category = categories.find((candidate) => candidate.id === value);
+        if (category === undefined) {
+          // Retry-after-delete (or a stale button): honest NotFound reply.
+          await this.safeReply(reply, categoryGoneReply());
+          await this.sendMenu(reply);
+          return;
+        }
+        try {
+          await this.deps.categoryService.deleteCategory(ownerId, category.name);
+        } catch (error) {
+          if (error instanceof NotFoundError) {
+            await this.safeReply(reply, missingCategoryReply(category.name));
+            await this.sendMenu(reply);
+            return;
+          }
+          if (error instanceof ValidationFailedError) {
+            await this.safeReply(reply, otroDeleteForbiddenReply());
+            await this.sendMenu(reply);
+            return;
+          }
+          if (error instanceof SavingsForbiddenError) {
+            await this.safeReply(reply, savingsForbiddenReply());
+            await this.sendMenu(reply);
+            return;
+          }
+          throw error;
+        }
+        await this.safeReply(reply, categoryDeletedReply(category.name));
+        await this.sendMenu(reply);
+        return;
+      }
+      case "no": {
+        await this.safeReply(reply, deleteCancelledReply());
+        await this.sendMenu(reply);
+        return;
+      }
+      default:
+        await this.safeReply(reply, callbackUnavailableReply());
+    }
+  }
+
+  /**
+   * rep:* reports (spec bot-reports-menu): each button executes its
+   * QueryExecutor type from real data with the fixed template; failures
+   * redirect honestly; every answer ends with the menu. No state is persisted.
+   */
+  private async handleReportsCallback(callback: TelegramCallback, ownerId: string, reply?: ReplyPort): Promise<void> {
+    const parts = callback.data.split(":");
+    const sub = parts[1];
+    if (sub === undefined) {
+      await this.safeReply(reply, callbackUnavailableReply());
+      return;
+    }
+    const mapping: Record<string, QueryType> = {
+      recent: "recent",
+      balance: "balance",
+      month: "month",
+      savings: "savings",
+      planned: "planned",
+    };
+    const queryType = mapping[sub];
+    if (queryType === undefined) {
+      await this.safeReply(reply, callbackUnavailableReply());
+      return;
+    }
+    const envelope: ConversationEnvelope = { intent: "query", amount: null, note: null, query_type: queryType };
+    await this.executeQuery(envelope, ownerId, reply);
+    await this.sendMenu(reply);
+  }
+
+  /**
+   * mc:<id> — correction pick (spec movement-correction "Button-pick
+   * correction reassigns"): persists the picked movement into
+   * `awaiting_category_selection` and renders the NORMAL category `cc:` row.
+   */
+  private async handleCorrectionPickCallback(callback: TelegramCallback, ownerId: string, reply?: ReplyPort): Promise<void> {
+    const [, targetId] = callback.data.split(":");
+    if (targetId === undefined) {
+      await this.safeReply(reply, callbackUnavailableReply());
+      return;
+    }
+    const state = await this.deps.botStateRepository.get(ownerId);
+    const lifecycle = this.decodeLifecycleSelectionPayload(state?.pendingNote ?? null);
+
+    if (state?.state !== AWAITING_MOVEMENT_SELECTION || lifecycle === null || lifecycle.action !== "correct_category") {
+      await this.safeReply(reply, alreadyProcessedReply());
+      return;
+    }
+
+    const picked = lifecycle.candidates.find((candidate) => candidate.id === targetId);
+    if (picked === undefined) {
+      // Stale button: re-render the correction list honestly.
+      await this.renderMovementPickList(ownerId, lifecycle, 0, reply);
+      return;
+    }
+
+    const payload: CategorySelectionPayload = { movement: picked };
+    await this.deps.botStateRepository.set({
+      ownerId,
+      state: AWAITING_CATEGORY_SELECTION,
+      pendingMovementId: null,
+      pendingNote: JSON.stringify(payload),
+    });
+    await this.safeReply(reply, reassignCategoryReply(), await this.categoryPickKeyboard(ownerId, "cc", 0), undefined);
+  }
+
+  /**
+   * cc:<catId> — reassign the picked movement to the picked NORMAL category
+   * (spec movement-correction): resolves the category name at callback time,
+   * updates via `updateMovement`, confirms with the movement facts and returns
+   * to the menu. A deleted movement replies honestly.
+   */
+  private async handleReassignCallback(callback: TelegramCallback, ownerId: string, reply?: ReplyPort): Promise<void> {
+    const [, catId] = callback.data.split(":");
+    if (catId === undefined) {
+      await this.safeReply(reply, callbackUnavailableReply());
+      return;
+    }
+    const state = await this.deps.botStateRepository.get(ownerId);
+    const payload = this.decodeCategorySelectionPayload(state?.pendingNote ?? null);
+
+    if (state?.state !== AWAITING_CATEGORY_SELECTION || payload === null) {
+      await this.safeReply(reply, alreadyProcessedReply());
+      return;
+    }
+
+    const categories = await this.deps.categoryService.listCategories(ownerId);
+    const category = categories.find((candidate) => candidate.id === catId);
+    if (category === undefined) {
+      // Stale button: re-render the category row.
+      await this.safeReply(reply, reassignCategoryReply(), await this.categoryPickKeyboard(ownerId, "cc", 0), undefined);
+      return;
+    }
+
+    try {
+      await this.deps.movementService.updateMovement(ownerId, payload.movement.id, { category: category.name });
+    } catch (error) {
+      await this.deps.botStateRepository.set({ ownerId, state: IDLE, pendingMovementId: null, pendingNote: null });
+      if (error instanceof NotFoundError) {
+        await this.safeReply(reply, movementMissingReply());
+      } else {
+        throw error;
+      }
+      await this.sendMenu(reply);
+      return;
+    }
+
+    await this.deps.botStateRepository.set({ ownerId, state: IDLE, pendingMovementId: null, pendingNote: null });
+    await this.safeReply(
+      reply,
+      movementCorrectionDoneReply(category.name, payload.movement.amount, payload.movement.note),
+    );
+    await this.sendMenu(reply);
+  }
+
+  /**
+   * mp:<id> — mark-paid pick (spec bot-manage-expenses "Mark-Paid Chain"):
+   * executes `markPaidById`; an already-PAID pick replies the 409 conflict.
+   */
+  private async handleMarkPaidPickCallback(callback: TelegramCallback, ownerId: string, reply?: ReplyPort): Promise<void> {
+    const [, targetId] = callback.data.split(":");
+    if (targetId === undefined) {
+      await this.safeReply(reply, callbackUnavailableReply());
+      return;
+    }
+    const state = await this.deps.botStateRepository.get(ownerId);
+    const lifecycle = this.decodeLifecycleSelectionPayload(state?.pendingNote ?? null);
+
+    if (state?.state !== AWAITING_MOVEMENT_SELECTION || lifecycle === null || lifecycle.action !== "mark_paid") {
+      await this.safeReply(reply, alreadyProcessedReply());
+      return;
+    }
+
+    const picked = lifecycle.candidates.find((candidate) => candidate.id === targetId);
+    if (picked === undefined) {
+      await this.renderMovementPickList(ownerId, lifecycle, 0, reply);
+      return;
+    }
+
+    await this.deps.botStateRepository.set({ ownerId, state: IDLE, pendingMovementId: null, pendingNote: null });
+    const candidate = { ...picked, category: "", occurredAtMs: 0 };
+    const result = await this.movementLifecycleExecutor.markPaidById(ownerId, candidate);
+    if (result.status === "executed") {
+      await this.safeReply(reply, markPaidReply(result.movement.amount, result.movement.note, null));
+    } else if (result.status === "already_paid") {
+      await this.safeReply(reply, markPaidAlreadyReply());
+    } else {
+      await this.safeReply(reply, movementMissingReply());
+    }
+    await this.sendMenu(reply);
+  }
+
+  /** Movement pick buttons: `<action>:<id>` rows, 7 per page + `cp:` nav (design D9 ≤8 rows). */
+  private movementPickKeyboard(
+    candidates: { id: string; amount: number; note: string | null; date: string }[],
+    action: string,
+    page: number,
+  ): InlineKeyboard {
+    const pageSize = 7;
+    const pageItems = candidates.slice(page * pageSize, page * pageSize + pageSize);
+    const rows: InlineButton[][] = pageItems.map((candidate) => [
+      { text: `${candidate.date} · ${formatARS(candidate.amount)}`, callback_data: buildCallbackData([action, candidate.id]) },
+    ]);
+    if (candidates.length > pageSize) {
+      const totalPages = Math.ceil(candidates.length / pageSize);
+      rows.push([
+        { text: "◀️", callback_data: buildCallbackData(["cp", String(Math.max(0, page - 1))]) },
+        { text: `${page + 1}/${totalPages}`, callback_data: buildCallbackData(["cp", String(page)]) },
+        { text: "▶️", callback_data: buildCallbackData(["cp", String(Math.min(totalPages - 1, page + 1))]) },
+      ]);
+    }
+    return rows;
+  }
+
+  /** Renders a movement pick list (ask text + paginated buttons) for the open selection payload. */
+  private async renderMovementPickList(
+    ownerId: string,
+    payload: LifecycleSelectionPayload,
+    page: number,
+    reply?: ReplyPort,
+  ): Promise<void> {
+    const ask =
+      payload.action === "mark_paid"
+        ? markPaidAskReply(payload.candidates)
+        : payload.action === "correct_category"
+          ? correctionPickListReply(payload.candidates)
+          : deletePickListReply(payload.candidates);
+    const prefix = payload.action === "mark_paid" ? "mp" : payload.action === "correct_category" ? "mc" : "dk";
+    await this.safeReply(reply, ask, this.movementPickKeyboard(payload.candidates, prefix, page), undefined);
+  }
+
+  /**
+   * NORMAL-category buttons: `<prefix>:<id>` rows, 7 per page + `cp:` nav
+   * (design D9). Excludes "otro" (legacy reserved) and "ahorro" (SAVINGS) —
+   * spec movement-categories / bot-manage-categories pick lists.
+   */
+  private async categoryPickKeyboard(ownerId: string, prefix: string, page: number): Promise<InlineKeyboard> {
+    const categories = await this.deps.categoryService.listCategories(ownerId);
+    const normal = categories
+      .filter((category) => category.type === "NORMAL" && normalizeForMatch(category.name) !== "otro")
+      .sort((a, b) => a.name.localeCompare(b.name));
+    const pageSize = 7;
+    const pageItems = normal.slice(page * pageSize, page * pageSize + pageSize);
+    const rows: InlineButton[][] = pageItems.map((category) => [
+      { text: category.name, callback_data: buildCallbackData([prefix, category.id]) },
+    ]);
+    if (normal.length > pageSize) {
+      const totalPages = Math.ceil(normal.length / pageSize);
+      rows.push([
+        { text: "◀️", callback_data: buildCallbackData(["cp", String(Math.max(0, page - 1))]) },
+        { text: `${page + 1}/${totalPages}`, callback_data: buildCallbackData(["cp", String(page)]) },
+        { text: "▶️", callback_data: buildCallbackData(["cp", String(Math.min(totalPages - 1, page + 1))]) },
+      ]);
+    }
+    return rows;
+  }
+
+  /** Decodes a persisted `awaiting_category_selection` payload; corrupt JSON yields null. */
+  private decodeCategorySelectionPayload(pendingNote: string | null): CategorySelectionPayload | null {
+    if (pendingNote === null) {
+      return null;
+    }
+    try {
+      const parsed = categorySelectionPayloadSchema.safeParse(JSON.parse(pendingNote));
+      return parsed.success ? parsed.data : null;
+    } catch {
+      return null;
+    }
   }
 
   /** Decodes a persisted lifecycle-selection payload; corrupt JSON yields null. */

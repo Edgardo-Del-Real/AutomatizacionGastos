@@ -437,4 +437,74 @@ describe("TelegramService (integration v2)", () => {
     const payload = capturePayloadSchema.parse(JSON.parse(state?.pendingNote ?? "{}"));
     expect(payload.type).toBe("PENDING");
   });
+
+  it("sub-menu e2e: am:cor → mc pick → cc reassign updates the movement and returns to the menu", async () => {
+    await seedCategories(["Cafe", "Transporte"]);
+    const { reply } = replyCollector();
+    const preview = await openPreview("REAL", "2500 cafe");
+    await service.handleCallback(callbackUpdate(`cat:${await categoryIdFor("Cafe")}`), reply);
+    await service.handleCallback(callbackUpdate(`pv:save:${preview.saveToken}`), reply);
+
+    const movements = await prisma.expense.findMany({ where: { ownerId } });
+    expect(movements).toHaveLength(1);
+    const target = movements[0]!;
+    const transporteId = await categoryIdFor("Transporte");
+
+    await service.handleCallback(callbackUpdate("am:cor"), reply);
+    await service.handleCallback(callbackUpdate(`mc:${target.id}`), reply);
+    await service.handleCallback(callbackUpdate(`cc:${transporteId}`), reply);
+
+    const after = await prisma.expense.findUnique({ where: { id: target.id } });
+    expect(after?.category).toBe("Transporte");
+    expect(reply).toBeDefined();
+  });
+
+  it("sub-menu e2e: am:pay → mp pick marks the PENDING expense paid", async () => {
+    await seedCategories(["Cafe"]);
+    const { reply } = replyCollector();
+    const preview = await openPreview("PENDING", "3000 gym");
+    await service.handleCallback(callbackUpdate(`cat:${await categoryIdFor("Cafe")}`), reply);
+    await service.handleCallback(callbackUpdate(`pv:save:${preview.saveToken}`), reply);
+
+    const movements = await prisma.expense.findMany({ where: { ownerId } });
+    expect(movements[0]?.status).toBe("PENDING");
+    const target = movements[0]!;
+
+    await service.handleCallback(callbackUpdate("am:pay"), reply);
+    await service.handleCallback(callbackUpdate(`mp:${target.id}`), reply);
+
+    const after = await prisma.expense.findUnique({ where: { id: target.id } });
+    expect(after?.status).toBe("PAID");
+  });
+
+  it("sub-menu e2e: ac:new creates a real category; ac:del deletes it through the guarded service", async () => {
+    await seedCategories(["Cafe"]);
+    const { reply } = replyCollector();
+
+    await service.handleCallback(callbackUpdate("ac:new"), reply);
+    await service.handleUpdate(textUpdate({ messageId: 2, text: "Gimnasio" }), reply);
+    const created = await categoryService.listCategories(ownerId);
+    const gym = created.find((category) => category.name === "Gimnasio");
+    expect(gym).toBeDefined();
+
+    await service.handleCallback(callbackUpdate("ac:del"), reply);
+    await service.handleCallback(callbackUpdate(`ac:dl:${gym!.id}`), reply);
+    await service.handleCallback(callbackUpdate(`ac:ok:${gym!.id}`), reply);
+
+    const after = await categoryService.listCategories(ownerId);
+    expect(after.some((category) => category.name === "Gimnasio")).toBe(false);
+  });
+
+  it("sub-menu e2e: rep:balance answers from real data and returns to the menu", async () => {
+    await seedCategories(["Cafe"]);
+    const { replies, reply } = replyCollector();
+    const preview = await openPreview("REAL", "2500 cafe");
+    await service.handleCallback(callbackUpdate(`cat:${await categoryIdFor("Cafe")}`), reply);
+    await service.handleCallback(callbackUpdate(`pv:save:${preview.saveToken}`), reply);
+
+    await service.handleCallback(callbackUpdate("rep:balance"), reply);
+
+    expect(replies.at(-2)).toContain("2.500");
+    expect(replies.at(-1)).toBe(menuReply());
+  });
 });

@@ -10,11 +10,16 @@ import {
   categoryCrudRedirectReply,
   categoryCreatedReply,
   categoryDeleteConfirmReply,
+  categoryDeletePickReply,
   categoryDeletedReply,
+  categoryGoneReply,
   categoryListReply,
   categoryNamePromptReply,
   categoryRenamedReply,
+  categoryRenamePickReply,
   compartidoPrefixRedirectReply,
+  correctionEmptyReply,
+  correctionPickListReply,
   deletedMovementReply,
   deleteAskReply,
   deleteCancelledReply,
@@ -43,6 +48,7 @@ import {
   previstoPrefixRedirectReply,
   queryRedirectReply,
   queryReplyTemplate,
+  reassignCategoryReply,
   recentQueryReply,
   reportsMenuReply,
   reservedCategoryReply,
@@ -339,6 +345,30 @@ describe("v2 redirect and flow templates (bot-free-text-routing / quick-capture)
     expect(expenseAdminReply()).toContain("Administrar gastos");
     expect(categoryAdminReply()).toContain("Administrar categorías");
     expect(reportsMenuReply()).toContain("Reportes");
+  });
+
+  it("builds the correction pick-list ask with the numbered candidates", () => {
+    const text = correctionPickListReply([{ amount: 2500, note: "alquiler", date: "2026-09-19" }]);
+
+    expect(text).toContain("¿Qué movimiento querés corregir?");
+    expect(text).toContain("1) 19/09 · $\u00A02.500,00 · alquiler");
+  });
+
+  it("builds the correction empty-window reply", () => {
+    expect(correctionEmptyReply()).toContain("No hay gastos para corregir");
+  });
+
+  it("builds the category admin pick asks", () => {
+    expect(categoryRenamePickReply()).toContain("renombrar");
+    expect(categoryDeletePickReply()).toContain("borrar");
+  });
+
+  it("builds the reassign ask", () => {
+    expect(reassignCategoryReply()).toContain("categoría nueva");
+  });
+
+  it("builds the category-gone reply for a stale admin pick", () => {
+    expect(categoryGoneReply()).toContain("ya no existe");
   });
 });
 

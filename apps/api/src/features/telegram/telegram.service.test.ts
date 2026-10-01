@@ -8,7 +8,7 @@ import type { HouseholdService } from "../household/household.service";
 import type { BotStateRepository, BotStateRecord } from "./bot-state.repository";
 import type { ConversationEnvelope } from "./bot-brain";
 import type { InlineKeyboard } from "./telegram.parser";
-import { NotFoundError, ValidationFailedError } from "../../infra/errors";
+import { ConflictError, NotFoundError, ValidationFailedError } from "../../infra/errors";
 import { ReservedCategoryError } from "../categories/reserved";
 import {
   alreadyProcessedReply,
@@ -17,17 +17,27 @@ import {
   capturePromptReply,
   captureShapedRedirectReply,
   categoryAdminReply,
+  categoryCreatedReply,
   categoryCrudRedirectReply,
+  categoryDeleteConfirmReply,
+  categoryDeletedReply,
+  categoryGoneReply,
   categoryNamePromptReply,
+  categoryRenamedReply,
   compartidoPrefixRedirectReply,
+  correctionEmptyReply,
   deleteCancelledReply,
   deleteConfirmReply,
   deletedMovementReply,
   duplicateCategoryReply,
   expenseAdminReply,
   greetingReply,
+  markPaidAlreadyReply,
+  markPaidReply,
   menuReply,
+  movementCorrectionDoneReply,
   movementMissingReply,
+  nothingToDeleteReply,
   plannedReply,
   previewAskCategoryReply,
   previewReply,
@@ -1209,6 +1219,301 @@ describe("TelegramService commands (v2 surface)", () => {
 
     expect(h.mockDefineRule).not.toHaveBeenCalled();
     expect(h.replies.at(-1)).toContain("0");
+  });
+});
+
+describe("TelegramService expense admin chains (am:*)", () => {
+  let h: Harness;
+
+  beforeEach(() => {
+    h = makeHarness();
+    seedHarnessCategories(h, ["Cafe", "Transporte"]);
+    h.mockListMovements.mockResolvedValue([
+      { id: "m1", ownerId, amount: 2500, currency: "ARS", category: "Cafe", note: "alquiler", occurredAt: new Date("2026-09-19T12:00:00Z"), createdAt: new Date(), type: "EXPENSE", status: "PAID" },
+      { id: "m2", ownerId, amount: 3000, currency: "ARS", category: "Cafe", note: "gym", occurredAt: new Date("2026-09-18T12:00:00Z"), createdAt: new Date(), type: "EXPENSE", status: "PENDING" },
+    ]);
+  });
+
+  it("am:del renders the delete window as dk buttons and persists the pick payload", async () => {
+    await h.service.handleCallback(callbackUpdate({ data: "am:del" }), h.reply);
+
+    const state = await h.botStateRepository.get(ownerId);
+    expect(state?.state).toBe("awaiting_movement_selection");
+    const payload = JSON.parse(state?.pendingNote ?? "{}") as { action: string };
+    expect(payload.action).toBe("delete_expense");
+    const kb = h.keyboards.at(-1) as InlineKeyboard;
+    expect(kb[0]?.[0]?.text).toContain("2026-09-19");
+    expect(kb[0]?.[0]?.callback_data).toBe("dk:m1");
+  });
+
+  it("am:del with an empty window replies clearly and returns to the menu", async () => {
+    h.mockListMovements.mockResolvedValue([]);
+
+    await h.service.handleCallback(callbackUpdate({ data: "am:del" }), h.reply);
+
+    expect(h.replies.at(-2)).toBe(nothingToDeleteReply());
+    expect(h.replies.at(-1)).toBe(menuReply());
+  });
+
+  it("am:cor renders the correction window as mc buttons (PENDING excluded)", async () => {
+    await h.service.handleCallback(callbackUpdate({ data: "am:cor" }), h.reply);
+
+    const state = await h.botStateRepository.get(ownerId);
+    const payload = JSON.parse(state?.pendingNote ?? "{}") as { action: string; candidates: { id: string }[] };
+    expect(payload.action).toBe("correct_category");
+    // Only the PAID row appears in the correction window (PENDING excluded).
+    expect(payload.candidates.map((candidate) => candidate.id)).toEqual(["m1"]);
+    const kb = h.keyboards.at(-1) as InlineKeyboard;
+    expect(kb[0]?.[0]?.callback_data).toBe("mc:m1");
+  });
+
+  it("am:cor with no correctable movements replies clearly and returns to the menu", async () => {
+    h.mockListMovements.mockResolvedValue([
+      { id: "m2", ownerId, amount: 3000, currency: "ARS", category: "Cafe", note: "gym", occurredAt: new Date("2026-09-18T12:00:00Z"), createdAt: new Date(), type: "EXPENSE", status: "PENDING" },
+    ]);
+
+    await h.service.handleCallback(callbackUpdate({ data: "am:cor" }), h.reply);
+
+    expect(h.replies.at(-2)).toBe(correctionEmptyReply());
+    expect(h.replies.at(-1)).toBe(menuReply());
+  });
+
+  it("am:pay renders the PENDING window as mp buttons", async () => {
+    await h.service.handleCallback(callbackUpdate({ data: "am:pay" }), h.reply);
+
+    const state = await h.botStateRepository.get(ownerId);
+    const payload = JSON.parse(state?.pendingNote ?? "{}") as { action: string; candidates: { id: string }[] };
+    expect(payload.action).toBe("mark_paid");
+    expect(payload.candidates.map((candidate) => candidate.id)).toEqual(["m2"]);
+    const kb = h.keyboards.at(-1) as InlineKeyboard;
+    expect(kb[0]?.[0]?.callback_data).toBe("mp:m2");
+  });
+
+  it("movement pick lists paginate at 7 rows per page with cp: navigation (design D9)", async () => {
+    const rows = Array.from({ length: 12 }, (_, index) => ({
+      id: `m${index}`,
+      ownerId,
+      amount: 100 + index,
+      currency: "ARS",
+      category: "Cafe",
+      note: null,
+      occurredAt: new Date(Date.UTC(2026, 8, 19, 12) - index * 60_000),
+      createdAt: new Date(),
+      type: "EXPENSE" as const,
+      status: "PAID" as const,
+    }));
+    h.mockListMovements.mockResolvedValue(rows);
+
+    await h.service.handleCallback(callbackUpdate({ data: "am:del" }), h.reply);
+
+    const kb = h.keyboards.at(-1) as InlineKeyboard;
+    // 7 candidate rows + 1 nav row = 8 rows ≤ 8.
+    expect(kb).toHaveLength(8);
+    expect(kb[7]?.[0]?.callback_data).toBe("cp:0");
+    expect(kb[7]?.[2]?.callback_data).toBe("cp:1");
+  });
+});
+
+describe("TelegramService correction chain (mc → cc)", () => {
+  let h: Harness;
+
+  beforeEach(() => {
+    h = makeHarness();
+    seedHarnessCategories(h, ["Cafe", "Transporte"]);
+    h.mockListMovements.mockResolvedValue([
+      { id: "m1", ownerId, amount: 2500, currency: "ARS", category: "Cafe", note: "alquiler", occurredAt: new Date("2026-09-19T12:00:00Z"), createdAt: new Date(), type: "EXPENSE", status: "PAID" },
+    ]);
+  });
+
+  async function openCorrectionPick(): Promise<void> {
+    await h.service.handleCallback(callbackUpdate({ data: "am:cor" }), h.reply);
+  }
+
+  it("mc:<id> enters awaiting_category_selection and renders the cc category row", async () => {
+    await openCorrectionPick();
+
+    await h.service.handleCallback(callbackUpdate({ data: "mc:m1" }), h.reply);
+
+    const state = await h.botStateRepository.get(ownerId);
+    expect(state?.state).toBe("awaiting_category_selection");
+    const payload = JSON.parse(state?.pendingNote ?? "{}") as { movement: { id: string } };
+    expect(payload.movement.id).toBe("m1");
+    const kb = h.keyboards.at(-1) as InlineKeyboard;
+    expect(kb.map((row) => row[0]?.callback_data)).toEqual(["cc:c0", "cc:c1"]);
+  });
+
+  it("cc:<catId> reassigns via updateMovement and returns to the menu", async () => {
+    await openCorrectionPick();
+    await h.service.handleCallback(callbackUpdate({ data: "mc:m1" }), h.reply);
+
+    await h.service.handleCallback(callbackUpdate({ data: "cc:c0" }), h.reply);
+
+    expect(h.mockUpdateMovement).toHaveBeenCalledWith(ownerId, "m1", { category: "Cafe" });
+    expect(h.replies.at(-2)).toBe(movementCorrectionDoneReply("Cafe", 2500, "alquiler"));
+    expect(h.replies.at(-1)).toBe(menuReply());
+    const state = await h.botStateRepository.get(ownerId);
+    expect(state?.state).toBe("idle");
+  });
+
+  it("mc on a stale/closed pick replies already processed", async () => {
+    await h.service.handleCallback(callbackUpdate({ data: "mc:m1" }), h.reply);
+
+    expect(h.replies.at(-1)).toBe(alreadyProcessedReply());
+  });
+});
+
+describe("TelegramService mark-paid chain (mp)", () => {
+  let h: Harness;
+
+  beforeEach(() => {
+    h = makeHarness();
+    seedHarnessCategories(h, ["Cafe"]);
+    h.mockListMovements.mockResolvedValue([
+      { id: "m2", ownerId, amount: 3000, currency: "ARS", category: "Cafe", note: "gym", occurredAt: new Date("2026-09-18T12:00:00Z"), createdAt: new Date(), type: "EXPENSE", status: "PENDING" },
+    ]);
+  });
+
+  it("mp:<id> marks the picked PENDING expense paid and returns to the menu", async () => {
+    await h.service.handleCallback(callbackUpdate({ data: "am:pay" }), h.reply);
+
+    await h.service.handleCallback(callbackUpdate({ data: "mp:m2" }), h.reply);
+
+    expect(h.mockMarkMovementPaid).toHaveBeenCalledWith(ownerId, "m2");
+    expect(h.replies.at(-2)).toBe(markPaidReply(3000, "gym", null));
+    expect(h.replies.at(-1)).toBe(menuReply());
+    const state = await h.botStateRepository.get(ownerId);
+    expect(state?.state).toBe("idle");
+  });
+
+  it("an already-PAID pick replies the 409 conflict notice", async () => {
+    h.mockMarkMovementPaid.mockRejectedValue(new ConflictError("Movement m2 is not a PENDING EXPENSE"));
+    await h.service.handleCallback(callbackUpdate({ data: "am:pay" }), h.reply);
+
+    await h.service.handleCallback(callbackUpdate({ data: "mp:m2" }), h.reply);
+
+    expect(h.replies.at(-2)).toBe(markPaidAlreadyReply());
+    expect(h.replies.at(-1)).toBe(menuReply());
+  });
+});
+
+describe("TelegramService category admin chains (ac:*)", () => {
+  let h: Harness;
+
+  beforeEach(() => {
+    h = makeHarness();
+    seedHarnessCategories(h, ["Cafe", "otro", "Transporte"]);
+  });
+
+  it("ac:new prompts for a name and creates the category through the guarded service", async () => {
+    await h.service.handleCallback(callbackUpdate({ data: "ac:new" }), h.reply);
+
+    const state = await h.botStateRepository.get(ownerId);
+    expect(state?.state).toBe("awaiting_category_name");
+    expect(h.replies.at(-1)).toBe(categoryNamePromptReply("admin_create"));
+
+    await h.service.handleUpdate(textUpdate({ text: "Gimnasio", messageId: 2 }), h.reply);
+
+    expect(h.mockCreateCategory).toHaveBeenCalledWith(ownerId, "Gimnasio");
+    expect(h.replies.at(-2)).toBe(categoryCreatedReply("Gimnasio"));
+    expect(h.replies.at(-1)).toBe(menuReply());
+  });
+
+  it("ac:ren renders only NORMAL categories (no otro/ahorro) as ac:rn picks", async () => {
+    await h.service.handleCallback(callbackUpdate({ data: "ac:ren" }), h.reply);
+
+    const kb = h.keyboards.at(-1) as InlineKeyboard;
+    const buttons = kb.map((row) => row[0]?.text);
+    expect(buttons).toEqual(["Cafe", "Transporte"]);
+    expect(buttons).not.toContain("otro");
+    expect(kb[0]?.[0]?.callback_data).toBe("ac:rn:c0");
+  });
+
+  it("ac:rn:<id> prompts for the new name and renames with the cascade", async () => {
+    await h.service.handleCallback(callbackUpdate({ data: "ac:rn:c0" }), h.reply);
+
+    const state = await h.botStateRepository.get(ownerId);
+    expect(state?.state).toBe("awaiting_category_name");
+    expect(h.replies.at(-1)).toBe(categoryNamePromptReply("admin_rename"));
+
+    await h.service.handleUpdate(textUpdate({ text: "Cafeteria", messageId: 2 }), h.reply);
+
+    expect(h.mockRenameCategory).toHaveBeenCalledWith(ownerId, "Cafe", "Cafeteria");
+    expect(h.replies.at(-2)).toBe(categoryRenamedReply("Cafe", "Cafeteria"));
+    expect(h.replies.at(-1)).toBe(menuReply());
+  });
+
+  it("ac:del renders ac:dl picks; the confirm deletes through the guarded service", async () => {
+    await h.service.handleCallback(callbackUpdate({ data: "ac:del" }), h.reply);
+
+    const kb = h.keyboards.at(-1) as InlineKeyboard;
+    expect(kb[0]?.[0]?.callback_data).toBe("ac:dl:c0");
+
+    await h.service.handleCallback(callbackUpdate({ data: "ac:dl:c0" }), h.reply);
+
+    expect(h.replies.at(-1)).toBe(categoryDeleteConfirmReply("Cafe"));
+    const confirmKb = h.keyboards.at(-1) as InlineKeyboard;
+    expect(confirmKb[0]?.[0]?.callback_data).toBe("ac:no:c0");
+    expect(confirmKb[0]?.[1]?.callback_data).toBe("ac:ok:c0");
+
+    await h.service.handleCallback(callbackUpdate({ data: "ac:ok:c0" }), h.reply);
+
+    expect(h.mockDeleteCategory).toHaveBeenCalledWith(ownerId, "Cafe");
+    expect(h.replies.at(-2)).toBe(categoryDeletedReply("Cafe"));
+    expect(h.replies.at(-1)).toBe(menuReply());
+  });
+
+  it("ac:no cancels the category delete and returns to the menu", async () => {
+    await h.service.handleCallback(callbackUpdate({ data: "ac:del" }), h.reply);
+    await h.service.handleCallback(callbackUpdate({ data: "ac:dl:c0" }), h.reply);
+
+    await h.service.handleCallback(callbackUpdate({ data: "ac:no:c0" }), h.reply);
+
+    expect(h.mockDeleteCategory).not.toHaveBeenCalled();
+    expect(h.replies.at(-2)).toBe(deleteCancelledReply());
+    expect(h.replies.at(-1)).toBe(menuReply());
+  });
+
+  it("a stale ac:ok after the category disappeared replies the honest gone notice", async () => {
+    await h.service.handleCallback(callbackUpdate({ data: "ac:del" }), h.reply);
+    h.mockListCategories.mockResolvedValue([]);
+
+    await h.service.handleCallback(callbackUpdate({ data: "ac:ok:c0" }), h.reply);
+
+    expect(h.mockDeleteCategory).not.toHaveBeenCalled();
+    expect(h.replies.at(-2)).toBe(categoryGoneReply());
+    expect(h.replies.at(-1)).toBe(menuReply());
+  });
+});
+
+describe("TelegramService reports sub-menu (rep:*)", () => {
+  let h: Harness;
+
+  beforeEach(() => {
+    h = makeHarness();
+    seedHarnessCategories(h, ["Cafe"]);
+  });
+
+  it.each([
+    ["rep:recent", "recent", "Todavía no tenés movimientos"],
+    ["rep:balance", "balance", "balance"],
+    ["rep:month", "month", "En "],
+    ["rep:savings", "savings", "ahorraste"],
+    ["rep:planned", "planned", "previsto"],
+  ] as const)("%s answers from the executed %s query and returns to the menu", async (data, _type, expected) => {
+    await h.service.handleCallback(callbackUpdate({ data }), h.reply);
+
+    expect(h.replies.at(-2)).toContain(expected);
+    expect(h.replies.at(-1)).toBe(menuReply());
+  });
+
+  it("free text after opening the reports sub-menu is answered from real data", async () => {
+    await h.service.handleCallback(callbackUpdate({ data: "m:rep" }), h.reply);
+    h.mockBrainInterpret.mockResolvedValue({ intent: "query", amount: null, note: null, query_type: "savings" } satisfies ConversationEnvelope);
+
+    await h.service.handleUpdate(textUpdate({ text: "cuánto ahorré este mes", messageId: 2 }), h.reply);
+
+    expect(h.replies.at(-2)).toContain("ahorraste");
+    expect(h.replies.at(-1)).toBe(menuReply());
   });
 });
 

@@ -47,13 +47,14 @@ type Harness = {
   mockEnsureAhorro: ReturnType<typeof vi.fn>;
   botStateRepository: BotStateRepository;
   replies: string[];
-  reply: (text: string, keyboard?: InlineKeyboard, editMessageId?: number) => Promise<void>;
+  reply: (text: string, keyboard?: InlineKeyboard, editMessageId?: number) => Promise<number | undefined>;
 };
 
 function makeHarness(): Harness {
   const replies: string[] = [];
-  const reply = async (text: string): Promise<void> => {
+  const reply = async (text: string): Promise<number | undefined> => {
     replies.push(text);
+    return undefined;
   };
   let storedState: BotStateRecord | null = null;
   const messageRepository = { recordProcessed: vi.fn() } as unknown as ProcessedMessageRepository;

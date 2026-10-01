@@ -174,6 +174,7 @@ describe("TelegramService household multi-chat (spec: Owner Filtering / Dedup / 
       textUpdate({ fromId: UNKNOWN_CHAT, messageId: 1, text: "1000 cafe" }),
       async (text) => {
         replies.push(text);
+        return undefined;
       },
     );
 
@@ -222,6 +223,7 @@ describe("TelegramService household multi-chat (spec: Owner Filtering / Dedup / 
       textUpdate({ fromId: RITA_CHAT, messageId: 1, text: "compartido: 2000 super" }),
       async (text) => {
         replies.push(text);
+        return undefined;
       },
     );
 
@@ -257,6 +259,7 @@ describe("TelegramService household multi-chat (spec: Owner Filtering / Dedup / 
       textUpdate({ fromId: RITA_CHAT, messageId: 1, text: "5000" }),
       async (text) => {
         replies.push(text);
+        return undefined;
       },
     );
 
@@ -282,6 +285,7 @@ describe("TelegramService household multi-chat (spec: Owner Filtering / Dedup / 
       textUpdate({ fromId: RITA_CHAT, messageId: 1, text: "quiero registrar un gasto" }),
       async (text) => {
         replies.push(text);
+        return undefined;
       },
     );
 

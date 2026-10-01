@@ -132,10 +132,11 @@ describe("TelegramService (integration v2)", () => {
     await categoryService.ensureOtro(ownerId);
   }
 
-  function replyCollector(): { replies: string[]; reply: (text: string) => Promise<void> } {
+  function replyCollector(): { replies: string[]; reply: (text: string) => Promise<number | undefined> } {
     const replies: string[] = [];
-    const reply = async (text: string): Promise<void> => {
+    const reply = async (text: string): Promise<number | undefined> => {
       replies.push(text);
+      return undefined;
     };
     return { replies, reply };
   }
@@ -198,6 +199,10 @@ describe("TelegramService (integration v2)", () => {
     const preview = await openPreview("REAL", "14000 pasaje");
     await service.handleCallback(callbackUpdate(`cat:${await categoryIdFor("Cafe")}`), reply);
     await service.handleCallback(callbackUpdate(`pv:save:${preview.saveToken}`), reply);
+
+    // Two-step e2e: the category tap sent a confirmation message with the data.
+    expect(replies[0]).toContain("Confirmá");
+    expect(replies[0]).toContain("Cafe");
 
     const movements = await prisma.expense.findMany({ where: { ownerId } });
     expect(movements).toHaveLength(1);
@@ -287,6 +292,9 @@ describe("TelegramService (integration v2)", () => {
     const state = await prisma.botState.findUnique({ where: { ownerId } });
     const updated = previewPayloadSchema.parse(JSON.parse(state?.pendingNote ?? "{}"));
     expect(updated.category).toBe("Gimnasio");
+    // The created category is selected and the step-2 confirmation is shown.
+    expect(replies.at(-1)).toContain("Confirmá");
+    expect(replies.at(-1)).toContain("Gimnasio");
 
     await service.handleCallback(callbackUpdate(`pv:save:${preview.saveToken}`), reply);
     const movements = await prisma.expense.findMany({ where: { ownerId } });

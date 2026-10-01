@@ -61,6 +61,7 @@ import {
   formatARS,
   plannedReply,
   previewAskCategoryReply,
+  previewConfirmReply,
   previewReply,
   previstoPrefixRedirectReply,
   queryRedirectReply,
@@ -90,9 +91,12 @@ import {
 /**
  * D2 — injectable reply port: sends a text message back to the sender chat,
  * optionally with an inline keyboard, and edits an existing message when
- * `editMessageId` is present. Keyboards are plain DTOs (never grammy types).
+ * `editMessageId` is present. Returns the message id of a NEWLY SENT message
+ * (undefined when editing, when no reply port exists, or when the send
+ * failed) — the two-step preview uses it to track the confirmation message.
+ * Keyboards are plain DTOs (never grammy types).
  */
-export type ReplyPort = (text: string, keyboard?: InlineKeyboard, editMessageId?: number) => Promise<void>;
+export type ReplyPort = (text: string, keyboard?: InlineKeyboard, editMessageId?: number) => Promise<number | undefined>;
 
 /** Brain-written branch sender: sends the LLM reply when active, else the fixed template. */
 export type Sender = (result: ExecutionResult, fixed: string) => Promise<void>;
@@ -142,8 +146,11 @@ export type CapturePayload = z.infer<typeof capturePayloadSchema>;
 /**
  * Stored payload of `awaiting_preview` (spec quick-capture "Capture Preview
  * with Save/Correct"): the parsed facts, the menu-chosen type, the
- * button-chosen category (null until a `cat:<id>` pick) and the saveToken
- * gating Guardar idempotency. Lives in `pendingNote` — no Prisma migration.
+ * button-chosen category (null until a `cat:<id>` pick), the saveToken
+ * gating Guardar idempotency and — once the two-step confirmation exists —
+ * the message id of that confirmation (so a different-category tap edits the
+ * confirmation, never the preview). Lives in `pendingNote` — no Prisma
+ * migration.
  */
 export const previewPayloadSchema = z.object({
   amount: z.number().positive(),
@@ -151,6 +158,7 @@ export const previewPayloadSchema = z.object({
   type: z.enum(["REAL", "PENDING", "INGRESO", "COMPARTIDO"]),
   category: z.string().min(1).nullable(),
   saveToken: z.string().regex(/^[0-9a-f]{8}$/),
+  confirmMessageId: z.number().int().positive().optional(),
 });
 
 export type PreviewPayload = z.infer<typeof previewPayloadSchema>;
@@ -572,11 +580,13 @@ export class TelegramService {
   }
 
   /**
-   * Enters the capture preview: persists `{amount, note, type, category: null,
-   * saveToken}` and renders the v2 preview keyboard — 5 NORMAL category
-   * buttons per page (no "otro"/"ahorro"), `cp:` navigation when the set
-   * exceeds 5, ➕ Crear categoría, and [✅ Guardar] [✏️ Corregir]. The keyboard
-   * stays within 8 rows / 64 bytes per callback (spec bot-inline-interactions).
+   * Enters the capture preview (two-step flow): persists `{amount, note,
+   * type, category: null, saveToken}` and renders the v2 preview keyboard —
+   * 5 NORMAL category buttons per page (no "otro"/"ahorro"), `cp:`
+   * navigation when the set exceeds 5 and ➕ Crear categoría. The
+   * [✅ Guardar] [✏️ Corregir] rows are NOT here: they only appear on the
+   * confirmation message sent after a category is chosen. The keyboard stays
+   * within 8 rows / 64 bytes per callback (spec bot-inline-interactions).
    */
   private async enterPreview(
     amount: number,
@@ -599,7 +609,8 @@ export class TelegramService {
    * The v2 preview keyboard (spec quick-capture "Capture Preview with
    * Save/Correct"; movement-categories "Preview Category Selection"): NORMAL
    * categories only (`type === "NORMAL"` and name ≠ "otro"), 5 per page, with
-   * `cp:<page>` navigation, the ➕ create row and the Guardar/Corregir row.
+   * `cp:<page>` navigation and the ➕ create row. NO Guardar/Corregir rows —
+   * they live only on the confirmation keyboard (`previewConfirmKeyboard`).
    */
   private async previewKeyboard(ownerId: string, payload: PreviewPayload, page: number): Promise<InlineKeyboard> {
     const categories = await this.deps.categoryService.listCategories(ownerId);
@@ -620,11 +631,21 @@ export class TelegramService {
       ]);
     }
     rows.push([{ text: "➕ Crear categoría", callback_data: buildCallbackData(["pv", "catnew", payload.saveToken]) }]);
-    rows.push([
-      { text: "✅ Guardar", callback_data: buildCallbackData(["pv", "save", payload.saveToken]) },
-      { text: "✏️ Corregir", callback_data: buildCallbackData(["pv", "edit", payload.saveToken]) },
-    ]);
     return rows;
+  }
+
+  /**
+   * Two-step confirmation keyboard: the [✅ Guardar] [✏️ Corregir] rows ONLY
+   * (same callback tokens as the removed preview rows) — rendered on the
+   * confirmation message that follows a category pick.
+   */
+  private previewConfirmKeyboard(saveToken: string): InlineKeyboard {
+    return [
+      [
+        { text: "✅ Guardar", callback_data: buildCallbackData(["pv", "save", saveToken]) },
+        { text: "✏️ Corregir", callback_data: buildCallbackData(["pv", "edit", saveToken]) },
+      ],
+    ];
   }
 
   /** Decodes a persisted preview payload; corrupt JSON yields null (spec "Corrupt preview payload recovers"). */
@@ -716,10 +737,11 @@ export class TelegramService {
   }
 
   /**
-   * v2 category picks: `cat:<id>` selects the category on an open preview
-   * (re-render selected via message edit); `cp:<page>` re-renders the preview
-   * page without touching state. Reassignment picks (`cc:`) arrive with the
-   * Phase 6 correction chain.
+   * v2 category picks: `cat:<id>` selects the category on an open preview and
+   * (two-step flow) sends/edits the CONFIRMATION message — the preview is
+   * never edited by a category tap; `cp:<page>` re-renders the preview page
+   * without touching state. Reassignment picks (`cc:`) arrive with the Phase
+   * 6 correction chain.
    */
   private async handleCategoryPickCallback(callback: TelegramCallback, ownerId: string, reply?: ReplyPort): Promise<void> {
     const [action, value] = callback.data.split(":");
@@ -775,17 +797,50 @@ export class TelegramService {
         return;
       }
       if (category === undefined) {
+        // The picked category was deleted meanwhile: keep the preview open
+        // WITHOUT a selection (same as today) — nothing registers.
         await this.safeReply(reply, previewReply(payload.amount, payload.note, payload.type), await this.previewKeyboard(ownerId, payload, 0), callback.messageId);
         return;
       }
       const updated: PreviewPayload = { ...payload, category: category.name };
+      if (payload.category === null) {
+        // Two-step flow, step 1 → 2: the FIRST category pick sends a NEW
+        // confirmation message (the preview is never edited) showing the full
+        // data; its message id is persisted so a later different-category tap
+        // edits the confirmation itself.
+        const confirmId = await this.safeReply(
+          reply,
+          previewConfirmReply(payload.amount, payload.note, payload.type, category.name),
+          this.previewConfirmKeyboard(payload.saveToken),
+          undefined,
+        );
+        updated.confirmMessageId = confirmId;
+      } else if (payload.confirmMessageId !== undefined) {
+        // Different category on an already-confirmed preview: edit the
+        // confirmation message with the new category (never the preview).
+        await this.safeReply(
+          reply,
+          previewConfirmReply(payload.amount, payload.note, payload.type, category.name),
+          this.previewConfirmKeyboard(payload.saveToken),
+          payload.confirmMessageId,
+        );
+      } else {
+        // Defensive fallback when the confirmation id is unknown (e.g. the
+        // first send failed): send a new confirmation and track it.
+        const confirmId = await this.safeReply(
+          reply,
+          previewConfirmReply(payload.amount, payload.note, payload.type, category.name),
+          this.previewConfirmKeyboard(payload.saveToken),
+          undefined,
+        );
+        updated.confirmMessageId = confirmId;
+      }
       await this.deps.botStateRepository.set({
         ownerId,
         state: AWAITING_PREVIEW,
         pendingMovementId: null,
         pendingNote: JSON.stringify(updated),
       });
-      await this.safeReply(reply, previewReply(payload.amount, payload.note, payload.type), await this.previewKeyboard(ownerId, updated, 0), callback.messageId);
       return;
     }
 
@@ -880,13 +935,21 @@ export class TelegramService {
     try {
       const created = await this.deps.categoryService.createCategory(ownerId, body);
       const updated: PreviewPayload = { ...preview, category: created.name };
+      // Two-step flow, step 2: the created category is selected and the
+      // confirmation message is shown (with Guardar/Corregir), not the preview.
+      const confirmId = await this.safeReply(
+        reply,
+        previewConfirmReply(updated.amount, updated.note, updated.type, created.name),
+        this.previewConfirmKeyboard(updated.saveToken),
+        undefined,
+      );
+      updated.confirmMessageId = confirmId;
       await this.deps.botStateRepository.set({
         ownerId,
         state: AWAITING_PREVIEW,
         pendingMovementId: null,
         pendingNote: JSON.stringify(updated),
       });
-      await this.safeReply(reply, previewReply(updated.amount, updated.note, updated.type), await this.previewKeyboard(ownerId, updated, 0), undefined);
       return;
     } catch (error) {
       if (error instanceof ReservedCategoryError) {
@@ -1940,19 +2003,26 @@ export class TelegramService {
     return { viewerId: ownerId, partnerId: this.deps.household.partnerOf(ownerId), visibility: "all" };
   }
 
+  /**
+   * Sends (or edits) a reply through the port, tolerating port failures.
+   * Returns the message id of a NEWLY SENT message (undefined when editing,
+   * when no port exists, or when the send failed) — the two-step preview
+   * persists it to track the confirmation message.
+   */
   private async safeReply(
     reply: ReplyPort | undefined,
     text: string,
     keyboard?: InlineKeyboard,
     editMessageId?: number,
-  ): Promise<void> {
+  ): Promise<number | undefined> {
     if (reply === undefined) {
-      return;
+      return undefined;
     }
     try {
-      await reply(text, keyboard, editMessageId);
+      return await reply(text, keyboard, editMessageId);
     } catch (error) {
       this.deps.logger?.(`Telegram: reply failed: ${String(error)}`);
+      return undefined;
     }
   }
 

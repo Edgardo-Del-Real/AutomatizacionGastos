@@ -46,21 +46,24 @@ export const BOT_COMMANDS = [
  * edits the existing message (falling back to a NEW message with the same
  * content when the edit fails because the original message is gone — spec
  * bot-inline-interactions "Edit failure falls back to a new message").
+ * Returns the message id of a newly sent message (undefined when editing) so
+ * the service can track the two-step confirmation message.
  */
-function buildReplyPort(ctx: Context): (text: string, keyboard?: InlineKeyboard, editMessageId?: number) => Promise<void> {
+function buildReplyPort(ctx: Context): (text: string, keyboard?: InlineKeyboard, editMessageId?: number) => Promise<number | undefined> {
   return async (text, keyboard, editMessageId) => {
     const replyMarkup =
       keyboard === undefined ? undefined : { inline_keyboard: keyboard.map((row) => row.map((button) => ({ ...button }))) };
     if (editMessageId !== undefined && ctx.chat !== undefined) {
       try {
         await ctx.api.editMessageText(ctx.chat.id, editMessageId, text, { reply_markup: replyMarkup });
-        return;
+        return undefined;
       } catch {
         // The original message is gone: fall back to a new message with the
         // same text and keyboard (the failure never propagates to the caller).
       }
     }
-    await ctx.reply(text, { reply_markup: replyMarkup });
+    const sent = await ctx.reply(text, { reply_markup: replyMarkup });
+    return sent.message_id;
   };
 }
 

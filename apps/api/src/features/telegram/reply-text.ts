@@ -21,14 +21,19 @@ export function truncateNote(note: string): string {
   return `${note.slice(0, NOTE_MAX_LENGTH - 1)}…`;
 }
 
+/** v2 capture-type label for the preview/confirmation texts (menu-chosen type). */
+function captureTypeLabel(type: "REAL" | "PENDING" | "INGRESO" | "COMPARTIDO"): string {
+  return type === "PENDING" ? "previsto" : type === "INGRESO" ? "ingreso" : type === "COMPARTIDO" ? "compartido" : "real";
+}
+
 export function successReply(amount: number, note: string | null, category: string): string {
   const notePart = note === null ? "" : ` (${truncateNote(note)})`;
-  return `Registrado: ${formatARS(amount)}${notePart} — Categoría: ${category}`;
+  return `✅ Guardado: ${formatARS(amount)}${notePart} — Categoría: ${category}`;
 }
 
 /** Split confirmation (D7): reports gross, net and the saved amount. */
 export function successSplitReply(gross: number, net: number, savings: number): string {
-  return `Registrado: ingreso neto ${formatARS(net)} de ${formatARS(gross)} — Ahorrado: ${formatARS(savings)} (categoría ahorro)`;
+  return `✅ Guardado: ingreso neto ${formatARS(net)} de ${formatARS(gross)} — Ahorrado: ${formatARS(savings)} (categoría ahorro)`;
 }
 
 /**
@@ -37,7 +42,7 @@ export function successSplitReply(gross: number, net: number, savings: number): 
  */
 export function plannedReply(amount: number, note: string | null, category: string): string {
   const notePart = note === null ? "" : ` (${truncateNote(note)})`;
-  return `Registrado como previsto: ${formatARS(amount)}${notePart} — Categoría: ${category}. Se suma cuando lo marques pagado.`;
+  return `✅ Registrado como previsto: ${formatARS(amount)}${notePart} — Categoría: ${category}. Se suma cuando lo marques pagado.`;
 }
 
 /**
@@ -54,8 +59,23 @@ export function previewReply(
   type: "REAL" | "PENDING" | "INGRESO" | "COMPARTIDO",
 ): string {
   const notePart = note === null ? "" : ` (${truncateNote(note)})`;
-  const typeLabel = type === "PENDING" ? "previsto" : type === "INGRESO" ? "ingreso" : type === "COMPARTIDO" ? "compartido" : "real";
-  return `¿Guardamos? ${formatARS(amount)}${notePart} — Tipo: ${typeLabel}`;
+  return `¿Guardamos? ${formatARS(amount)}${notePart} — Tipo: ${captureTypeLabel(type)}`;
+}
+
+/**
+ * v2 two-step confirmation (two-step preview flow): rendered as a NEW message
+ * after a category is chosen on the preview — the full capture data including
+ * the selected category, with the [✅ Guardar] [✏️ Corregir] rows that ONLY
+ * exist on this confirmation (the initial preview asks for the category).
+ */
+export function previewConfirmReply(
+  amount: number,
+  note: string | null,
+  type: "REAL" | "PENDING" | "INGRESO" | "COMPARTIDO",
+  category: string,
+): string {
+  const notePart = note === null ? "" : ` (${truncateNote(note)})`;
+  return `Confirmá: ${formatARS(amount)}${notePart} — Tipo: ${captureTypeLabel(type)} — Categoría: ${category}`;
 }
 
 /**

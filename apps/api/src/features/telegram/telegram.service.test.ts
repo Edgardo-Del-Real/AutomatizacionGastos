@@ -40,6 +40,7 @@ import {
   nothingToDeleteReply,
   plannedReply,
   previewAskCategoryReply,
+  previewConfirmReply,
   previewReply,
   previstoPrefixRedirectReply,
   queryRedirectReply,
@@ -121,17 +122,27 @@ type Harness = {
   replies: string[];
   keyboards: (InlineKeyboard | undefined)[];
   edits: (number | undefined)[];
-  reply: (text: string, keyboard?: InlineKeyboard, editMessageId?: number) => Promise<void>;
+  sentIds: number[];
+  reply: (text: string, keyboard?: InlineKeyboard, editMessageId?: number) => Promise<number | undefined>;
 };
 
 function makeHarness(options?: { noBrain?: boolean }): Harness {
   const replies: string[] = [];
   const keyboards: (InlineKeyboard | undefined)[] = [];
   const edits: (number | undefined)[] = [];
-  const reply = async (text: string, keyboard?: InlineKeyboard, editMessageId?: number): Promise<void> => {
+  const sentIds: number[] = [];
+  // New messages get a monotonic id (1001, 1002, ...); edits return undefined.
+  let nextMessageId = 1000;
+  const reply = async (text: string, keyboard?: InlineKeyboard, editMessageId?: number): Promise<number | undefined> => {
     replies.push(text);
     keyboards.push(keyboard);
     edits.push(editMessageId);
+    if (editMessageId === undefined) {
+      const id = ++nextMessageId;
+      sentIds.push(id);
+      return id;
+    }
+    return undefined;
   };
 
   let storedState: BotStateRecord | null = null;
@@ -275,6 +286,7 @@ function makeHarness(options?: { noBrain?: boolean }): Harness {
     replies,
     keyboards,
     edits,
+    sentIds,
     reply,
   };
 }
@@ -532,8 +544,12 @@ describe("TelegramService capture chain (awaiting_capture → awaiting_preview)"
     expect(kb[0]?.[0]?.text).toBe("Cafe");
     expect(kb[1]?.[0]?.text).toBe("Transporte");
     expect(kb[2]?.[0]?.text).toBe("➕ Crear categoría");
-    expect(kb[3]?.[0]?.text).toBe("✅ Guardar");
-    expect(kb[3]?.[1]?.text).toBe("✏️ Corregir");
+    // Two-step flow: the initial preview has NO Guardar/Corregir rows — those
+    // live ONLY on the confirmation message that follows a category tap.
+    expect(kb).toHaveLength(3);
+    const previewLabels = kb.flat().map((button) => button.text);
+    expect(previewLabels).not.toContain("✅ Guardar");
+    expect(previewLabels).not.toContain("✏️ Corregir");
   });
 
   it("carries the PENDING type from the 📅 tap into the preview", async () => {
@@ -593,7 +609,7 @@ describe("TelegramService preview callbacks (v2)", () => {
     return { token: payload.saveToken };
   }
 
-  it("selects a category via cat:<id> and re-renders the preview", async () => {
+  it("selects a category via cat:<id> and sends a NEW confirmation message", async () => {
     await openPreview();
     h.mockSetState.mockClear();
 
@@ -603,8 +619,31 @@ describe("TelegramService preview callbacks (v2)", () => {
     expect(lastCall.state).toBe("awaiting_preview");
     const payload = previewPayloadSchema.parse(JSON.parse(lastCall.pendingNote ?? "{}"));
     expect(payload.category).toBe("Cafe");
-    expect(h.replies.at(-1)).toBe(previewReply(30000, "gym", "REAL"));
-    expect(h.edits.at(-1)).toBe(90);
+    // The confirmation's message id is persisted (the id the port returned
+    // for the NEW confirmation message).
+    expect(payload.confirmMessageId).toBe(h.sentIds.at(-1));
+    // Two-step flow: the tap sends a NEW confirmation message (no preview edit)
+    // with the full data and the Guardar/Corregir rows.
+    expect(h.replies.at(-1)).toBe(previewConfirmReply(30000, "gym", "REAL", "Cafe"));
+    expect(h.edits.at(-1)).toBeUndefined();
+    const kb = h.keyboards.at(-1) as InlineKeyboard;
+    expect(kb[0]?.[0]?.text).toBe("✅ Guardar");
+    expect(kb[0]?.[1]?.text).toBe("✏️ Corregir");
+  });
+
+  it("a different category tap edits the CONFIRMATION message with the new category", async () => {
+    await openPreview();
+    await h.service.handleCallback(callbackUpdate({ data: "cat:c0", messageId: 90 }), h.reply);
+
+    await h.service.handleCallback(callbackUpdate({ data: "cat:c1", messageId: 91 }), h.reply);
+
+    const lastCall = h.mockSetState.mock.calls.at(-1)?.[0] as BotStateRecord;
+    const payload = previewPayloadSchema.parse(JSON.parse(lastCall.pendingNote ?? "{}"));
+    expect(payload.category).toBe("Transporte");
+    expect(payload.confirmMessageId).toBe(h.sentIds.at(-1));
+    // The confirmation message is edited (not the preview) to the new category.
+    expect(h.replies.at(-1)).toBe(previewConfirmReply(30000, "gym", "REAL", "Transporte"));
+    expect(h.edits.at(-1)).toBe(payload.confirmMessageId);
   });
 
   it("gates Guardar until a category is selected: nothing registers and the preview asks", async () => {
@@ -674,7 +713,7 @@ describe("TelegramService preview callbacks (v2)", () => {
     expect(h.replies.at(-1)).toBe(categoryNamePromptReply("preview"));
   });
 
-  it("creates the category from the preview name and re-renders the preview with it selected", async () => {
+  it("creates the category from the preview name and shows the confirmation with it selected", async () => {
     const { token } = await openPreview();
     await h.service.handleCallback(callbackUpdate({ data: `pv:catnew:${token}` }), h.reply);
 
@@ -685,7 +724,9 @@ describe("TelegramService preview callbacks (v2)", () => {
     expect(lastCall.state).toBe("awaiting_preview");
     const payload = previewPayloadSchema.parse(JSON.parse(lastCall.pendingNote ?? "{}"));
     expect(payload.category).toBe("Gimnasio");
-    expect(h.replies.at(-1)).toBe(previewReply(30000, "gym", "REAL"));
+    // Step 2: the created category is selected and the confirmation shows.
+    expect(h.replies.at(-1)).toBe(previewConfirmReply(30000, "gym", "REAL", "Gimnasio"));
+    expect(h.edits.at(-1)).toBeUndefined();
   });
 
   it("rejects a reserved name: redirect, nothing created, preview stays without a selection", async () => {

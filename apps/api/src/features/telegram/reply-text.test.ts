@@ -44,6 +44,7 @@ import {
   plannedQueryReply,
   plannedReply,
   previewAskCategoryReply,
+  previewConfirmReply,
   previewReply,
   previstoPrefixRedirectReply,
   queryRedirectReply,
@@ -97,13 +98,13 @@ describe("truncateNote", () => {
 describe("reply builders", () => {
   it("builds a success confirmation with amount, note and category", () => {
     expect(successReply(2500, "cafe", "Cafe")).toBe(
-      "Registrado: $\u00A02.500,00 (cafe) — Categoría: Cafe",
+      "✅ Guardado: $\u00A02.500,00 (cafe) — Categoría: Cafe",
     );
   });
 
   it("builds a success confirmation without a note", () => {
     expect(successReply(8000, null, "otro")).toBe(
-      "Registrado: $\u00A08.000,00 — Categoría: otro",
+      "✅ Guardado: $\u00A08.000,00 — Categoría: otro",
     );
   });
 
@@ -115,8 +116,9 @@ describe("reply builders", () => {
   });
 
   it("builds the split confirmation reporting gross, net and savings", () => {
-    expect(successSplitReply(1000, 900, 100)).toContain("900");
-    expect(successSplitReply(1000, 900, 100)).toContain("100");
+    expect(successSplitReply(1000, 900, 100)).toBe(
+      "✅ Guardado: ingreso neto $\u00A0900,00 de $\u00A01.000,00 — Ahorrado: $\u00A0100,00 (categoría ahorro)",
+    );
   });
 
   it("builds the planned registration confirmation without claiming the balance", () => {
@@ -126,6 +128,7 @@ describe("reply builders", () => {
     expect(text).toContain("previsto");
     expect(text).toContain("alquiler");
     expect(text).toContain("Categoría: Vivienda");
+    expect(text).toContain("✅");
   });
 
   it("redirects legacy text category CRUD to the 🗂 button flow", () => {
@@ -517,6 +520,34 @@ describe("quick-capture preview templates (v2)", () => {
     const text = previewReply(30000, "gym", "REAL");
 
     expect(text).not.toContain("Categoría");
+  });
+
+  it("builds the two-step confirmation with amount, note, type and category", () => {
+    const text = previewConfirmReply(30000, "gym", "REAL", "Cafe");
+
+    expect(text).toContain("Confirmá:");
+    expect(text).toContain(formatARS(30000));
+    expect(text).toContain("gym");
+    expect(text).toContain("real");
+    expect(text).toContain("Categoría: Cafe");
+  });
+
+  it("labels a PENDING confirmation as previsto", () => {
+    const text = previewConfirmReply(2500, "alquiler", "PENDING", "Alquiler");
+
+    expect(text).toContain("Confirmá:");
+    expect(text).toContain(formatARS(2500));
+    expect(text).toContain("alquiler");
+    expect(text).toContain("previsto");
+    expect(text).toContain("Categoría: Alquiler");
+  });
+
+  it("confirms an INGRESO without a note", () => {
+    const text = previewConfirmReply(1000, null, "INGRESO", "Cafe");
+
+    expect(text).toContain("ingreso");
+    expect(text).toContain("Categoría: Cafe");
+    expect(text).not.toContain("(");
   });
 
   it("builds the capture prompt asking for a short amount+note text", () => {

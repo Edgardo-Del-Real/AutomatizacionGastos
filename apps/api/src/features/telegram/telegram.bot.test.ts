@@ -425,7 +425,7 @@ describe("createTelegramBot callback wiring (D4)", () => {
 });
 
 describe("startTelegramBot (D12)", () => {
-  it("registers exactly the four owner-visible commands, never the text CRUD commands", async () => {
+  it("registers exactly the seven owner-visible commands, never the text CRUD commands", async () => {
     const recorded: RecordedApiCall[] = [];
     const service = {
       handleUpdate: async () => undefined,
@@ -439,7 +439,15 @@ describe("startTelegramBot (D12)", () => {
 
     expect(setMyCommandsSpy).toHaveBeenCalledWith([...BOT_COMMANDS]);
     const commands = (setMyCommandsSpy.mock.calls[0]?.[0] as unknown as { command: string }[]).map((entry) => entry.command);
-    expect(commands).toEqual(["menu", "ayuda", "listar_categorias", "configurar_categorias"]);
+    expect(commands).toEqual([
+      "menu",
+      "ayuda",
+      "listar_categorias",
+      "configurar_categorias",
+      "registrar_ahorro",
+      "listar_ahorros",
+      "borrar_ahorro",
+    ]);
     // Text category CRUD commands are NOT registered (button-driven admin).
     expect(commands).not.toContain("registrar categoria:");
     expect(commands).not.toContain("renombrar categoria:");

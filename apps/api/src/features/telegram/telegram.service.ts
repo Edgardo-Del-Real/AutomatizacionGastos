@@ -571,11 +571,21 @@ export class TelegramService {
       }
       case "help":
         // Ayuda: static help, zero LLM calls (spec "Ayuda replies offline").
-        await this.safeReply(reply, ayudaReply());
+        // The reply carries the 💰 Ahorro sub-menu entry (design D1).
+        await this.safeReply(reply, ayudaReply(), this.ayudaKeyboard(), undefined);
         return;
       default:
         await this.safeReply(reply, callbackUnavailableReply());
     }
+  }
+
+  /**
+   * Ayuda reply keyboard (design D1): the 💰 Ahorro button opens the
+   * savings-rule sub-menu (`sa:menu`). The main menu stays at exactly eight
+   * buttons — the sub-menu is entered from the help reply only.
+   */
+  private ayudaKeyboard(): InlineKeyboard {
+    return [[{ text: "💰 Ahorro", callback_data: buildCallbackData(["sa", "menu"]) }]];
   }
 
   /**
@@ -1509,7 +1519,7 @@ export class TelegramService {
         await this.sendMenu(reply);
         return;
       case "help":
-        await this.safeReply(reply, ayudaReply());
+        await this.safeReply(reply, ayudaReply(), this.ayudaKeyboard(), undefined);
         await this.sendMenu(reply);
         return;
       case "off_topic":
@@ -2305,8 +2315,9 @@ export class TelegramService {
       }
 
       case "ayuda": {
-        // Static help, works with GROQ_API_KEY unset.
-        await this.safeReply(reply, ayudaReply());
+        // Static help, works with GROQ_API_KEY unset; carries the 💰 Ahorro
+        // sub-menu entry (design D1, spec bot-main-menu "Static Help").
+        await this.safeReply(reply, ayudaReply(), this.ayudaKeyboard(), undefined);
         return;
       }
 

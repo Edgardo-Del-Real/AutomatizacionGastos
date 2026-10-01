@@ -61,8 +61,8 @@ Chain strategy: pending
 
 ## Phase 6: Commands + Help
 
-- [ ] 6.1 RED `telegram.bot.test.ts:428`: four→seven; ayuda 💰 Ahorro
-- [ ] 6.2 GREEN `telegram.bot.ts` +3; ayuda + `[💰 Ahorro]`→`sa:menu`
+- [x] 6.1 RED `telegram.bot.test.ts:428`: four→seven; ayuda 💰 Ahorro
+- [x] 6.2 GREEN `telegram.bot.ts` +3; ayuda + `[💰 Ahorro]`→`sa:menu`
 
 ## Phase 7: Integration + Blast Radius
 

@@ -504,9 +504,10 @@ export function ayudaReply(): string {
     "- 🗂 Administrar categorías — creá, renombrá y borrá categorías.\n" +
     "- 🧾 Administrar gastos — borrá gastos, corregí categorías y marcá previstos como pagados.\n" +
     "- 📊 Reportes — consultá movimientos, saldo y resúmenes.\n" +
+    "- 💰 Ahorro — configurá tus reglas de ahorro automático (también con \"registrar ahorro: <palabra> al <X>%\", \"listar ahorros\" y \"borrar ahorro: <palabra>\").\n" +
     "- ❓ Ayuda — mostrá esta ayuda.\n" +
     "Los montos escritos directo en el chat no se cargan: usá ➕ Nuevo gasto.\n" +
-    "Comandos: menu, ayuda, listar categorias, configurar categorias."
+    "Comandos: menu, ayuda, listar categorias, configurar categorias, registrar_ahorro, listar_ahorros, borrar_ahorro."
   );
 }
 

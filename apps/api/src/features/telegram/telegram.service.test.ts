@@ -599,9 +599,12 @@ describe("TelegramService menu taps (v2 capture type memory)", () => {
     ]);
   });
 
-  it("sends the static help for m:help", async () => {
+  it("sends the static help for m:help with the 💰 Ahorro sub-menu button", async () => {
     await h.service.handleCallback(callbackUpdate({ data: "m:help" }), h.reply);
     expect(h.replies.at(-1)).toBe(ayudaReply());
+    const kb = h.keyboards.at(-1) as InlineKeyboard;
+    const ahorroButton = kb.flat().find((button) => button.text === "💰 Ahorro");
+    expect(ahorroButton?.callback_data).toBe("sa:menu");
   });
 });
 

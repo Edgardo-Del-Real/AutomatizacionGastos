@@ -486,6 +486,15 @@ describe("main menu and help templates", () => {
     expect(text).not.toContain("compartido:");
   });
 
+  it("mentions the savings rule command and the 💰 Ahorro sub-menu entry (savings-config)", () => {
+    const text = ayudaReply();
+
+    expect(text).toContain("registrar ahorro:");
+    expect(text).toContain("💰 Ahorro");
+    expect(text).toContain("listar ahorros");
+    expect(text).toContain("borrar ahorro:");
+  });
+
   it("greets warmly and expense-scoped, pointing to the menu", () => {
     const text = greetingReply();
 

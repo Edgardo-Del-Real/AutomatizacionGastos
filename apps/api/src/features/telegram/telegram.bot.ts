@@ -38,6 +38,11 @@ export const BOT_COMMANDS = [
   { command: "ayuda", description: "Ayuda y ejemplos de captura" },
   { command: "listar_categorias", description: "Listá tus categorías" },
   { command: "configurar_categorias", description: "Creá, borrá y renombrá categorías" },
+  // savings-config (design D10): the parser normalizes `_` → space, so the
+  // descriptions teach the full syntax the owner types.
+  { command: "registrar_ahorro", description: "Registrá una regla: registrar ahorro: <palabra> al <X>%" },
+  { command: "listar_ahorros", description: "Listá tus reglas de ahorro" },
+  { command: "borrar_ahorro", description: "Borrá una regla: borrar ahorro: <palabra>" },
 ] as const;
 
 /**

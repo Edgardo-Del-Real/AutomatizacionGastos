@@ -52,15 +52,112 @@ export function plannedSharedRejectedReply(): string {
 }
 
 /**
- * Quick-capture preview (D4): shows the parsed facts — amount, note and
- * category — plus the chosen type, which the buttons can toggle. The
- * keyboard carries `[✅ Guardar] [✏️ Corregir]` and the Real/Previsto type
- * row; the type is a button decision, never a brain inference.
+ * v2 quick-capture preview (spec quick-capture "Capture Preview with
+ * Save/Correct"): shows "¿Guardamos? $ {amount} ({note})" with the type label
+ * chosen at the menu tap. The category is NOT in the text anymore — it is
+ * chosen by the preview buttons (a pre-resolved category is never shown).
+ * The type comes ONLY from the menu tap (REAL/PENDING/INGRESO/COMPARTIDO);
+ * there is no type toggle in the preview.
  */
-export function previewReply(amount: number, note: string | null, category: string, type: "REAL" | "PENDING"): string {
+export function previewReply(
+  amount: number,
+  note: string | null,
+  type: "REAL" | "PENDING" | "INGRESO" | "COMPARTIDO",
+): string {
   const notePart = note === null ? "" : ` (${truncateNote(note)})`;
-  const typeLabel = type === "PENDING" ? "previsto" : "real";
-  return `¿Confirmás? ${formatARS(amount)}${notePart} — Categoría: ${category} · Tipo: ${typeLabel}`;
+  const typeLabel = type === "PENDING" ? "previsto" : type === "INGRESO" ? "ingreso" : type === "COMPARTIDO" ? "compartido" : "real";
+  return `¿Guardamos? ${formatARS(amount)}${notePart} — Tipo: ${typeLabel}`;
+}
+
+/**
+ * v2 — fixed ask-category reply when `✅ Guardar` is tapped on a preview with
+ * no category selected: nothing registers and the preview asks for a category
+ * (spec quick-capture "Guardar is gated until a category is chosen").
+ */
+export function previewAskCategoryReply(): string {
+  return "El botón ✅ Guardar recién funciona cuando elegís una categoría: tocá una de abajo o creala con ➕ Crear categoría.";
+}
+
+/**
+ * v2 — educational redirect for capture-shaped free text in `idle` (spec
+ * bot-free-text-routing "Educational Redirect for Capture-Shaped Text"): an
+ * amount with or without a note is never captured from the chat; the owner is
+ * taught to tap ➕ Nuevo gasto.
+ */
+export function captureShapedRedirectReply(): string {
+  return "Los montos no se cargan desde el chat: mandalo desde ➕ Nuevo gasto del menú.";
+}
+
+/**
+ * v2 — educational redirect for the legacy `previsto:` prefix (spec
+ * planned-fixed-expenses / bot-free-text-routing "Legacy Prefix Redirect"):
+ * planned expenses register only through the 📅 Gasto previsto button.
+ */
+export function previstoPrefixRedirectReply(): string {
+  return "Para registrar un gasto previsto tocá 📅 Gasto previsto en el menú y mandá el monto con la nota.";
+}
+
+/**
+ * v2 — educational redirect for the legacy `compartido:` prefix (spec
+ * bot-free-text-routing "Legacy Prefix Redirect"): shared captures use the
+ * 👥 Compartido menu button with type COMPARTIDO.
+ */
+export function compartidoPrefixRedirectReply(): string {
+  return "Para registrar un gasto compartido tocá 👥 Compartido en el menú y mandá el monto con la nota.";
+}
+
+/**
+ * v2 — educational redirect for legacy savings-override text ("sin ahorro" /
+ * "con X%"): the split is automatic on every income per the owner's rule;
+ * there is no per-message override anymore (spec savings "Deterministic
+ * Overrides" REMOVED).
+ */
+export function savingsOverrideRedirectReply(): string {
+  return "El ahorro se aplica automáticamente a tus ingresos según tu regla (registrar ahorro: palabra al X%): no hace falta indicarlo en el mensaje.";
+}
+
+/**
+ * v2 — the unresolvable idle fallback (spec bot-free-text-routing
+ * "Unresolvable Fallback"): the message is neither query, greeting,
+ * capture-shaped nor a legacy prefix; the reply is never general chat.
+ */
+export function unresolvableReply(): string {
+  return "No puedo resolver eso. Elegí una opción del menú.";
+}
+
+/**
+ * v2 — category-name prompt for the `awaiting_category_name` state (design
+ * D5): one state, three flows — the preview ➕ create, the 🗂 admin create and
+ * the 🗂 admin rename. The flow is persisted so the next text routes to the
+ * right guarded operation.
+ */
+export function categoryNamePromptReply(flow: "preview" | "admin_create" | "admin_rename"): string {
+  switch (flow) {
+    case "preview":
+      return "¿Cómo se llama la categoría nueva? La creo y la dejo seleccionada en la vista previa.";
+    case "admin_create":
+      return "¿Cómo se llama la categoría que querés crear?";
+    case "admin_rename":
+      return "¿Cómo se llama el nombre nuevo de la categoría?";
+  }
+}
+
+/**
+ * v2 — stateless category-delete confirmation (design D6): the picked id rides
+ * in the callback (`ac:ok:<id>`/`ac:no:<id>`) and the guarded service
+ * re-validates; only the expense-admin movement delete uses the persisted gate.
+ */
+export function categoryDeleteConfirmReply(name: string): string {
+  return `¿Borrar la categoría "${name}"? Confirmá abajo.`;
+}
+
+/**
+ * v2 — pick abandonment reply (spec movement-correction "Ambiguity
+ * Resolution"): a menu tap or an unrelated message during a pick abandons it,
+ * leaving every movement unchanged and returning to the menu.
+ */
+export function selectionAbandonedReply(): string {
+  return "Dale, abandoné la selección: no cambié nada.";
 }
 
 /** Capture prompt after Corregir (D4): reopens text capture with the short format. */
@@ -351,22 +448,24 @@ export function menuReply(): string {
 }
 
 /**
- * Static help (D12): works with GROQ_API_KEY unset — capture examples, the
- * `previsto:` prefix, the category commands and the delete-always-confirms
- * note (spec bot-main-menu "Static Help").
+ * v2 static help (spec bot-main-menu "Static Help"): explains the eight-button
+ * menu with real capture examples, works with GROQ_API_KEY unset, and states
+ * that amounts typed directly in chat are not captured (they redirect to ➕
+ * Nuevo gasto). Never teaches prefixes or text category commands.
  */
 export function ayudaReply(): string {
   return (
-    "Bot de gastos. Mandá el monto con una nota, por ejemplo: 30000 gym.\n" +
-    "Gastos previstos: usá el prefijo 'previsto:' (ej: previsto: 2500 alquiler) o el botón Previsto de la vista previa.\n" +
-    "Comandos:\n" +
-    "- menu\n" +
-    "- listar categorias\n" +
-    "- configurar categorias\n" +
-    "- registrar categoria: X\n" +
-    "- renombrar categoria: X a: Y\n" +
-    "- asociar palabra: P a categoria: X\n" +
-    "Borrar un gasto siempre pide confirmación antes de ejecutarse."
+    "Bot de gastos e ingresos.\n" +
+    "- ➕ Nuevo gasto — tocá el botón y mandá el monto con la nota (ej: 30000 gym).\n" +
+    "- 📅 Gasto previsto — tocá el botón y mandá monto + nota (ej: 2500 alquiler).\n" +
+    "- ➕ Ingreso — tocá el botón y mandá monto + nota (ej: 1000 entrenuts).\n" +
+    "- 👥 Compartido — tocá el botón y mandá monto + nota.\n" +
+    "- 🗂 Administrar categorías — creá, renombrá y borrá categorías.\n" +
+    "- 🧾 Administrar gastos — borrá gastos, corregí categorías y marcá previstos como pagados.\n" +
+    "- 📊 Reportes — consultá movimientos, saldo y resúmenes.\n" +
+    "- ❓ Ayuda — mostrá esta ayuda.\n" +
+    "Los montos escritos directo en el chat no se cargan: usá ➕ Nuevo gasto.\n" +
+    "Comandos: menu, ayuda, listar categorias, configurar categorias."
   );
 }
 
@@ -408,9 +507,13 @@ export function collectAbandonedReply(): string {
   return "Dale, cancelé el registro. No guardé nada.";
 }
 
-/** Warm, expense-scoped greeting for the `greeting` intent (dialogs stay open). */
+/**
+ * v2 warm, expense-scoped greeting for the `greeting` intent (spec
+ * telegram-bot "Success and Help Reply Content"): greets and points to the
+ * menu; it never teaches free-text capture and never starts a flow.
+ */
 export function greetingReply(): string {
-  return "¡Hola! Estoy para tus gastos: mandame un monto con una nota (ej: $2500 supermercado) y lo cargo al toque.";
+  return "¡Hola! Estoy listo para tus gastos e ingresos. Elegí una opción del menú o preguntame por tus números.";
 }
 
 export function categoryCreatedReply(name: string): string {

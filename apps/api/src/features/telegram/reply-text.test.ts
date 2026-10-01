@@ -10,18 +10,22 @@ import {
   balanceQueryReply,
   capabilitiesSummaryReply,
   capturePromptReply,
+  captureShapedRedirectReply,
   categoriesQueryReply,
   categoryCommandReplyTemplate,
   categoryCreatedReassignedReply,
   categoryCreatedReply,
   categoryCrudRedirectReply,
+  categoryDeleteConfirmReply,
   categoryDeletedReply,
   categoryErrorReply,
   categoryFollowUpReply,
   categoryListReply,
+  categoryNamePromptReply,
   categoryNotFoundReply,
   categoryRenamedReply,
   collectAbandonedReply,
+  compartidoPrefixRedirectReply,
   correctionAbandonedReply,
   correctionDoneReply,
   correctionOfferReply,
@@ -59,11 +63,15 @@ import {
   plannedQueryReply,
   plannedReply,
   plannedSharedRejectedReply,
+  previewAskCategoryReply,
   previewReply,
+  previstoPrefixRedirectReply,
   queryReplyTemplate,
   questionDroppedReply,
   recentQueryReply,
   reservedCategoryReply,
+  savingsOverrideRedirectReply,
+  selectionAbandonedReply,
   setupBatchDoneReply,
   setupDoneReply,
   setupDoneWithRedirectsReply,
@@ -71,6 +79,7 @@ import {
   setupRetryReply,
   successReply,
   truncateNote,
+  unresolvableReply,
 } from "./reply-text";
 
 describe("formatARS", () => {
@@ -573,12 +582,12 @@ describe("registration collection reply templates", () => {
     expect(text).toContain("No guardé nada");
   });
 
-it("greets warmly and expense-scoped, with a registration example", () => {
+it("greets warmly and expense-scoped, pointing to the menu", () => {
     const text = greetingReply();
 
     expect(text).toContain("¡Hola!");
     expect(text).toContain("gastos");
-    expect(text).toContain("2500 supermercado");
+    expect(text).toContain("menú");
   });
 });
 
@@ -699,13 +708,16 @@ describe("main menu and help templates (D8/D12)", () => {
     expect(text.length).toBeGreaterThan(0);
   });
 
-  it("builds the static help with capture examples, the previsto prefix and the delete confirmation note (spec: Static Help)", () => {
+  it("builds the static help explaining the eight buttons with examples and never teaching prefixes (spec: Static Help)", () => {
     const text = ayudaReply();
 
+    expect(text).toContain("Nuevo gasto");
     expect(text).toContain("30000 gym");
-    expect(text).toContain("previsto:");
+    expect(text).toContain("Administrar categorías");
+    expect(text).toContain("no se cargan");
     expect(text).toContain("listar categorias");
-    expect(text).toContain("confirmación");
+    expect(text).not.toContain("previsto:");
+    expect(text).not.toContain("compartido:");
   });
 });
 
@@ -734,23 +746,43 @@ describe("delete confirmation gate templates (D6)", () => {
   });
 });
 
-describe("quick-capture preview templates (D4)", () => {
-  it("builds the preview with amount, note, category and the chosen type", () => {
-    const text = previewReply(30000, "gym", "Gimnasio", "REAL");
+describe("quick-capture preview templates (D4 v2)", () => {
+  it("builds the v2 preview asking Guardamos with amount, note and the real type label", () => {
+    const text = previewReply(30000, "gym", "REAL");
 
+    expect(text).toContain("¿Guardamos?");
     expect(text).toContain(formatARS(30000));
     expect(text).toContain("gym");
-    expect(text).toContain("Gimnasio");
     expect(text).toContain("real");
   });
 
   it("marks a PENDING preview as previsto", () => {
-    const text = previewReply(2500, "alquiler", "Vivienda", "PENDING");
+    const text = previewReply(2500, "alquiler", "PENDING");
 
+    expect(text).toContain("¿Guardamos?");
     expect(text).toContain(formatARS(2500));
     expect(text).toContain("alquiler");
-    expect(text).toContain("Vivienda");
     expect(text).toContain("previsto");
+  });
+
+  it("labels an INGRESO preview as ingreso", () => {
+    const text = previewReply(1000, null, "INGRESO");
+
+    expect(text).toContain("¿Guardamos?");
+    expect(text).toContain(formatARS(1000));
+    expect(text).toContain("ingreso");
+  });
+
+  it("labels a COMPARTIDO preview as compartido", () => {
+    const text = previewReply(2000, "super", "COMPARTIDO");
+
+    expect(text).toContain("compartido");
+  });
+
+  it("never renders a pre-resolved category in the v2 preview text", () => {
+    const text = previewReply(30000, "gym", "REAL");
+
+    expect(text).not.toContain("Categoría");
   });
 
   it("builds the capture prompt asking for a short amount+note text", () => {
@@ -769,5 +801,79 @@ describe("quick-capture preview templates (D4)", () => {
 
   it("builds the already-processed reply for a retried callback", () => {
     expect(alreadyProcessedReply()).toContain("ya fue procesada");
+  });
+});
+
+describe("v2 redirect and flow templates (bot-free-text-routing / quick-capture)", () => {
+  it("asks for a category when Guardar is tapped without a selection", () => {
+    const text = previewAskCategoryReply();
+
+    expect(text).toContain("categoría");
+    expect(text).toContain("Guardar");
+  });
+
+  it("redirects capture-shaped text to the ➕ Nuevo gasto button", () => {
+    const text = captureShapedRedirectReply();
+
+    expect(text).toContain("➕ Nuevo gasto");
+    expect(text).toContain("mandalo");
+  });
+
+  it("redirects the previsto: prefix to the 📅 Gasto previsto button", () => {
+    const text = previstoPrefixRedirectReply();
+
+    expect(text).toContain("📅 Gasto previsto");
+    expect(text).toContain("previsto");
+  });
+
+  it("redirects the compartido: prefix to the 👥 Compartido button", () => {
+    const text = compartidoPrefixRedirectReply();
+
+    expect(text).toContain("👥 Compartido");
+  });
+
+  it("redirects savings-override text to the automatic rule", () => {
+    const text = savingsOverrideRedirectReply();
+
+    expect(text).toContain("ahorro");
+    expect(text).toContain("automáticamente");
+  });
+
+  it("replies the unresolvable fallback", () => {
+    const text = unresolvableReply();
+
+    expect(text.toLowerCase()).toContain("no puedo resolver eso");
+  });
+
+  it("prompts for a category name in the preview flow", () => {
+    const text = categoryNamePromptReply("preview");
+
+    expect(text).toContain("categoría");
+  });
+
+  it("prompts for a category name in the admin create flow", () => {
+    const text = categoryNamePromptReply("admin_create");
+
+    expect(text).toContain("crear");
+  });
+
+  it("prompts for a category name in the admin rename flow", () => {
+    const text = categoryNamePromptReply("admin_rename");
+
+    expect(text).toContain("nombre");
+  });
+
+  it("asks for the category-delete confirmation naming the category", () => {
+    const text = categoryDeleteConfirmReply("Viajes");
+
+    expect(text).toContain("Viajes");
+    expect(text).toContain("Borrar");
+  });
+
+  it("reports the pick abandonment without claiming changes", () => {
+    const text = selectionAbandonedReply();
+
+    expect(text).toContain("abandoné");
+    expect(text).toContain("no cambié nada");
   });
 });

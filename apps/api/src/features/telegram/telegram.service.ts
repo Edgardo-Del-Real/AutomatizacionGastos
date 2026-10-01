@@ -650,7 +650,7 @@ export class TelegramService {
           pendingMovementId: null,
           pendingNote: JSON.stringify(updated),
         });
-        await this.safeReply(reply, previewReply(payload.amount, payload.note, payload.category, type), this.previewKeyboard(updated), callback.messageId);
+        await this.safeReply(reply, previewReply(payload.amount, payload.note, type), this.previewKeyboard(updated), callback.messageId);
         return;
       }
       default:
@@ -686,7 +686,7 @@ export class TelegramService {
       pendingMovementId: null,
       pendingNote: JSON.stringify(payload),
     });
-    await this.safeReply(reply, previewReply(payload.amount, payload.note, payload.category, payload.type), this.previewKeyboard(payload), undefined);
+    await this.safeReply(reply, previewReply(payload.amount, payload.note, payload.type), this.previewKeyboard(payload), undefined);
   }
 
   /** D4 — the preview keyboard: actions row (Guardar/Corregir) + type row (Real/Previsto), ids never names. */

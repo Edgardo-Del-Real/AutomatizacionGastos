@@ -598,7 +598,10 @@ describe("TelegramService quick-capture preview (awaiting_preview, D4)", () => {
     expect(h.mockBrainInterpret).not.toHaveBeenCalled();
     expect(h.replies.at(-1)).toContain(formatARS(30000));
     expect(h.replies.at(-1)).toContain("gym");
-    expect(h.replies.at(-1)).toContain("Gimnasio");
+    // v2 preview text never shows a pre-resolved category: the category is
+    // chosen by the preview buttons (spec quick-capture "Category is never
+    // inferred").
+    expect(h.replies.at(-1)).not.toContain("Gimnasio");
     const lastCall = h.mockSetState.mock.calls.at(-1)?.[0] as BotStateRecord;
     expect(lastCall.state).toBe("awaiting_preview");
     const payload = quickCapturePreviewPayloadSchema.parse(JSON.parse(lastCall.pendingNote ?? "{}"));

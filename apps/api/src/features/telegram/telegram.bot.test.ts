@@ -201,59 +201,69 @@ describe("createTelegramBot (offline reply recording)", () => {
     h = makeBotHarness();
   });
 
-  it("records the reply payload offline instead of throwing (D9 bundle)", async () => {
-    // "hola" has no amount -> help reply flows through ctx.reply -> bot.api.sendMessage.
+  it("records the unresolvable reply offline for idle text with no brain", async () => {
+    // "hola" has no amount and no brain → the unresolvable fallback flows
+    // through ctx.reply → bot.api.sendMessage.
     await expect(h.bot.handleUpdate(textUpdate({ text: "hola" }))).resolves.toBeUndefined();
 
     expect(h.recorded.some((call) => call.method === "sendMessage")).toBe(true);
     const sendMessage = h.recorded.find((call) => call.method === "sendMessage");
     expect(String(sendMessage?.payload?.chat_id)).toBe(String(OWNER_CHAT_ID));
-    expect(String(sendMessage?.payload?.text)).toContain("No entendí");
+    expect(String(sendMessage?.payload?.text).toLowerCase()).toContain("no puedo resolver eso");
   });
 
-  it("records the correction question when a movement falls back to 'otro'", async () => {
+  it("records the capture-shaped redirect for a free-text amount (never capture from idle)", async () => {
     await expect(h.bot.handleUpdate(textUpdate({ text: "$2000 supermercado" }))).resolves.toBeUndefined();
 
-    expect(h.mockCreateExpense).toHaveBeenCalledTimes(1);
+    expect(h.mockCreateExpense).not.toHaveBeenCalled();
     const sendMessage = h.recorded.find((call) => call.method === "sendMessage");
     expect(sendMessage).toBeDefined();
-    expect(String(sendMessage?.payload?.text)).toContain("supermercado");
+    expect(String(sendMessage?.payload?.text)).toContain("➕ Nuevo gasto");
   });
 
-  it("attaches the five-button inline keyboard to /start (D2 message reply port)", async () => {
+  it("attaches the eight-button inline keyboard to /start (D2 message reply port)", async () => {
     await expect(h.bot.handleUpdate(textUpdate({ text: "/start" }))).resolves.toBeUndefined();
 
     const sendMessage = h.recorded.find((call) => call.method === "sendMessage");
     expect(sendMessage).toBeDefined();
     const markup = sendMessage?.payload?.reply_markup as { inline_keyboard: { text: string; callback_data: string }[][] };
-    expect(markup?.inline_keyboard).toHaveLength(5);
+    expect(markup?.inline_keyboard).toHaveLength(8);
     expect(markup?.inline_keyboard.map((row) => row[0]?.text)).toEqual([
-      "Nuevo gasto",
-      "Gasto previsto",
-      "Borrar",
-      "Reporte",
-      "Ayuda",
+      "➕ Nuevo gasto",
+      "📅 Gasto previsto",
+      "➕ Ingreso",
+      "👥 Compartido",
+      "🗂 Administrar categorías",
+      "🧾 Administrar gastos",
+      "📊 Reportes",
+      "❓ Ayuda",
     ]);
-    expect(markup?.inline_keyboard.map((row) => row[0]?.callback_data)).toEqual(["m:new", "m:prev", "m:del", "m:rep", "m:help"]);
+    expect(markup?.inline_keyboard.map((row) => row[0]?.callback_data)).toEqual([
+      "m:new",
+      "m:prev",
+      "m:inc",
+      "m:shr",
+      "m:cats",
+      "m:adm",
+      "m:rep",
+      "m:help",
+    ]);
   });
 
   it("processes an owner text update with zero network calls", async () => {
     await expect(h.bot.handleUpdate(textUpdate())).resolves.toBeUndefined();
 
     expect(h.mockRecord).toHaveBeenCalledWith("123456789", "42", ownerId);
-    expect(h.mockCreateExpense).toHaveBeenCalledTimes(1);
-    expect(h.mockCreateExpense).toHaveBeenCalledWith(
-      expect.objectContaining({ amount: 2500, currency: "ARS", note: "café", category: "otro" }),
-      ownerId,
-      { visibility: "INDIVIDUAL" },
-    );
+    // "café 2500" is capture-shaped in idle: it redirects, never registers.
+    expect(h.mockCreateExpense).not.toHaveBeenCalled();
   });
 
   it("processes the same update with a different chat id as a distinct message", async () => {
     await h.bot.handleUpdate(textUpdate({ messageId: 777, chatId: 111111111, text: "pan 100" }));
     await h.bot.handleUpdate(textUpdate({ messageId: 777, chatId: 222222222, text: "leche 200" }));
 
-    expect(h.mockCreateExpense).toHaveBeenCalledTimes(2);
+    expect(h.mockRecord).toHaveBeenCalledTimes(2);
+    expect(h.mockCreateExpense).not.toHaveBeenCalled();
   });
 
   it("does nothing for an edited_message update", async () => {

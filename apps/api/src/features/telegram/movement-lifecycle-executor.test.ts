@@ -73,273 +73,55 @@ function makeExecutor(overrides?: {
 }
 
 const RECENT = new Date("2026-09-19T12:00:00.000Z");
-const OLDER = new Date("2026-09-10T12:00:00.000Z");
 
-describe("MovementLifecycleExecutor.markPaid", () => {
-  it("marks the unique PENDING expense that matches a category cue, replying once with the executed facts", async () => {
-    const { executor, markMovementPaid } = makeExecutor({
-      movements: [movement("m1", 2500, "alquiler", RECENT, "alquiler", "PENDING")],
-    });
-
-    const result = await executor.markPaid(ownerId, { category: "alquiler", amount: null });
-
-    expect(markMovementPaid).toHaveBeenCalledWith(ownerId, "m1");
-    expect(result).toMatchObject({ status: "executed", action: "marked_paid" });
-    if (result.status === "executed") {
-      expect(result.movement.id).toBe("m1");
-      expect(result.movement.amount).toBe(2500);
-      expect(result.movement.category).toBe("alquiler");
-    }
-  });
-
-  it("marks the unique PENDING expense that matches an amount cue", async () => {
-    const { executor, markMovementPaid } = makeExecutor({
-      movements: [movement("m1", 2500, "alquiler", RECENT, "alquiler", "PENDING")],
-    });
-
-    const result = await executor.markPaid(ownerId, { category: null, amount: 2500 });
-
-    expect(markMovementPaid).toHaveBeenCalledWith(ownerId, "m1");
-    expect(result).toMatchObject({ status: "executed", action: "marked_paid" });
-  });
-
-  it("resolves a folded category cue: 'alquileres' matches the PENDING 'alquiler' expense", async () => {
-    const { executor, markMovementPaid } = makeExecutor({
-      movements: [movement("m1", 2500, "alquiler", RECENT, "Alquiler", "PENDING")],
-    });
-
-    const result = await executor.markPaid(ownerId, { category: "alquileres", amount: null });
-
-    expect(markMovementPaid).toHaveBeenCalledWith(ownerId, "m1");
-    expect(result).toMatchObject({ status: "executed", action: "marked_paid" });
-  });
-
-  it("uses the unique most-recent PENDING expense when no cues are given ('ya lo pagué')", async () => {
-    const { executor, markMovementPaid } = makeExecutor({
-      movements: [
-        movement("m1", 2500, "alquiler", RECENT, "alquiler", "PENDING"),
-        movement("m2", 3000, "gym", OLDER, "gym", "PENDING"),
-      ],
-    });
-
-    const result = await executor.markPaid(ownerId, { category: null, amount: null });
-
-    expect(markMovementPaid).toHaveBeenCalledWith(ownerId, "m1");
-    expect(result).toMatchObject({ status: "executed", action: "marked_paid" });
-  });
-
-  it("asks which PENDING expense was paid when two share the same category cue (recency never breaks a cue tie)", async () => {
-    const { executor, markMovementPaid } = makeExecutor({
-      movements: [
-        movement("m1", 2500, "alquiler", RECENT, "alquiler", "PENDING"),
-        movement("m2", 2500, "expensas", OLDER, "alquiler", "PENDING"),
-      ],
-    });
-
-    const result = await executor.markPaid(ownerId, { category: "alquiler", amount: null });
-
-    expect(markMovementPaid).not.toHaveBeenCalled();
-    expect(result).toMatchObject({ status: "ask" });
-    if (result.status === "ask") {
-      expect(result.candidates.map((candidate) => candidate.id)).toEqual(["m1", "m2"]);
-    }
-  });
-
-  it("asks which PENDING expense was paid when two share the same amount cue", async () => {
-    const { executor, markMovementPaid } = makeExecutor({
-      movements: [
-        movement("m1", 2500, "alquiler", RECENT, "alquiler", "PENDING"),
-        movement("m2", 2500, "expensas", OLDER, "expensas", "PENDING"),
-      ],
-    });
-
-    const result = await executor.markPaid(ownerId, { category: null, amount: 2500 });
-
-    expect(markMovementPaid).not.toHaveBeenCalled();
-    expect(result).toMatchObject({ status: "ask" });
-  });
-
-  it("asks when the two most-recent PENDING expenses tie on occurredAt with no cues", async () => {
-    const { executor, markMovementPaid } = makeExecutor({
-      movements: [
-        movement("m1", 2500, "alquiler", RECENT, "alquiler", "PENDING"),
-        movement("m2", 3000, "gym", RECENT, "gym", "PENDING"),
-      ],
-    });
-
-    const result = await executor.markPaid(ownerId, { category: null, amount: null });
-
-    expect(markMovementPaid).not.toHaveBeenCalled();
-    expect(result).toMatchObject({ status: "ask" });
-  });
-
-  it("replies nothing_pending when no PENDING expense exists and no paid fallback matches", async () => {
-    const { executor, markMovementPaid } = makeExecutor({ movements: [] });
-
-    const result = await executor.markPaid(ownerId, { category: "alquiler", amount: null });
-
-    expect(markMovementPaid).not.toHaveBeenCalled();
-    expect(result.status).toBe("nothing_pending");
-  });
-
-  it("reports already_paid when the unique PENDING match is raced by a 409 (already marked)", async () => {
-    const { executor } = makeExecutor({
-      movements: [movement("m1", 2500, "alquiler", RECENT, "alquiler", "PENDING")],
-      markMovementPaid: async () => {
-        throw new ConflictError("Movement m1 is not a PENDING EXPENSE");
-      },
-    });
-
-    const result = await executor.markPaid(ownerId, { category: "alquiler", amount: null });
-
-    expect(result).toMatchObject({ status: "already_paid" });
-    if (result.status === "already_paid") {
-      expect(result.movement.id).toBe("m1");
-    }
-  });
-
-  it("reports already_paid via the PAID-window fallback: no PENDING matches, a unique PAID expense does (D4)", async () => {
-    const { executor, markMovementPaid } = makeExecutor({
-      movements: [movement("m1", 2500, "alquiler", RECENT, "alquiler", "PAID")],
-      markMovementPaid: async () => {
-        throw new ConflictError("Movement m1 is not a PENDING EXPENSE");
-      },
-    });
-
-    const result = await executor.markPaid(ownerId, { category: "alquiler", amount: null });
-
-    expect(markMovementPaid).toHaveBeenCalledWith(ownerId, "m1");
-    expect(result).toMatchObject({ status: "already_paid" });
-  });
-
-  it("reports missing when the referenced movement disappeared (404)", async () => {
-    const { executor } = makeExecutor({
-      movements: [movement("m1", 2500, "alquiler", RECENT, "alquiler", "PENDING")],
-      markMovementPaid: async () => {
-        throw new NotFoundError("Movement m1 not found");
-      },
-    });
-
-    const result = await executor.markPaid(ownerId, { category: "alquiler", amount: null });
-
-    expect(result.status).toBe("missing");
-  });
-
-  it("considers only the 10 most recent PENDING expenses, ignoring older matches", async () => {
+describe("MovementLifecycleExecutor.pendingWindow (v2)", () => {
+  it("lists only the owner's PENDING EXPENSE movements, 10 max", async () => {
     const rows = Array.from({ length: 12 }, (_, index) =>
-      movement(`m${index}`, 2500, `nota-${index}`, new Date(RECENT.getTime() - index * 60_000), "alquiler", "PENDING"),
+      movement(
+        `m${index}`,
+        100 + index,
+        `nota-${index}`,
+        new Date(RECENT.getTime() - index * 60_000),
+        "cat",
+        index % 2 === 0 ? "PENDING" : "PAID",
+      ),
     );
-    const { executor, markMovementPaid } = makeExecutor({ movements: rows });
+    const { executor, listMovements } = makeExecutor({ movements: rows });
 
-    // The 12th (oldest) PENDING expense falls outside the 10-row window.
-    const result = await executor.markPaid(ownerId, { category: "alquiler", amount: null });
+    const window = await executor.pendingWindow(ownerId);
 
-    expect(result.status).toBe("ask");
-    if (result.status === "ask") {
-      expect(result.candidates).toHaveLength(10);
-      expect(result.candidates[0]?.id).toBe("m0");
-      expect(result.candidates.some((candidate) => candidate.id === "m11")).toBe(false);
-      expect(markMovementPaid).not.toHaveBeenCalled();
-    }
-  });
-
-  it("scopes the movement list to the owner's own rows (mine-scope, no partner)", async () => {
-    const { executor, listMovements } = makeExecutor({
-      movements: [movement("m1", 2500, "alquiler", RECENT, "alquiler", "PENDING")],
-    });
-
-    await executor.markPaid(ownerId, { category: "alquiler", amount: null });
-
+    // 12 rows, 6 PENDING → only PENDING rows appear.
+    expect(window).toHaveLength(6);
+    expect(window.every((candidate) => Number(candidate.id.slice(1)) % 2 === 0)).toBe(true);
     expect(listMovements).toHaveBeenCalledWith(
       { viewerId: ownerId, partnerId: null, visibility: "mine" },
       {},
     );
   });
 
-  it("excludes PAID and INCOME rows from the PENDING window even when they match the cues", async () => {
-    const { executor, markMovementPaid } = makeExecutor({
-      movements: [
-        movement("m1", 2500, "alquiler", RECENT, "alquiler", "PAID"),
-        movement("m2", 2500, "alquiler", RECENT, "alquiler", "PENDING", "INCOME"),
-      ],
-      markMovementPaid: async () => {
-        throw new ConflictError("Movement m1 is not a PENDING EXPENSE");
-      },
-    });
+  it("caps the pending window at 10 rows", async () => {
+    const rows = Array.from({ length: 14 }, (_, index) =>
+      movement(`m${index}`, 100 + index, `nota-${index}`, new Date(RECENT.getTime() - index * 60_000), "cat", "PENDING"),
+    );
+    const { executor } = makeExecutor({ movements: rows });
 
-    const result = await executor.markPaid(ownerId, { category: "alquiler", amount: null });
+    const window = await executor.pendingWindow(ownerId);
 
-    // Neither row is a PENDING EXPENSE: the PAID-window fallback finds the PAID
-    // row and surfaces the 409 conflict instead of guessing.
-    expect(markMovementPaid).toHaveBeenCalledWith(ownerId, "m1");
-    expect(result).toMatchObject({ status: "already_paid" });
-  });
-});
-
-describe("MovementLifecycleExecutor.delete (D6 resolve-only)", () => {
-  it("resolves the unique most-recent movement to a gated candidate without deleting (spec: Single candidate becomes the gated target)", async () => {
-    const { executor, deleteExpense } = makeExecutor({
-      movements: [movement("m1", 8000, "super", RECENT, "super")],
-    });
-
-    const result = await executor.delete(ownerId, { category: null, amount: null });
-
-    expect(deleteExpense).not.toHaveBeenCalled();
-    expect(result).toMatchObject({ status: "gated" });
-    if (result.status === "gated") {
-      expect(result.candidate.id).toBe("m1");
-      expect(result.candidate.amount).toBe(8000);
-    }
+    expect(window).toHaveLength(10);
+    expect(window[0]?.id).toBe("m0");
   });
 
-  it("resolves the movement matching a category cue to a gated candidate ('borra el de cafe')", async () => {
-    const { executor, deleteExpense } = makeExecutor({
-      movements: [
-        movement("m1", 1500, "cafe", RECENT, "Cafe"),
-        movement("m2", 8000, "super", OLDER, "Supermercado"),
-      ],
-    });
+  it("returns an empty window when nothing is pending", async () => {
+    const { executor } = makeExecutor({ movements: [] });
 
-    const result = await executor.delete(ownerId, { category: "cafe", amount: null });
+    const window = await executor.pendingWindow(ownerId);
 
-    expect(deleteExpense).not.toHaveBeenCalled();
-    expect(result).toMatchObject({ status: "gated" });
-    if (result.status === "gated") {
-      expect(result.candidate.id).toBe("m1");
-    }
-  });
-
-  it("still asks which movement when two match the amount cue", async () => {
-    const { executor, deleteExpense } = makeExecutor({
-      movements: [
-        movement("m1", 8000, "super", RECENT, "super"),
-        movement("m2", 8000, "feria", OLDER, "feria"),
-      ],
-    });
-
-    const result = await executor.delete(ownerId, { category: null, amount: 8000 });
-
-    expect(deleteExpense).not.toHaveBeenCalled();
-    expect(result).toMatchObject({ status: "ask" });
-    if (result.status === "ask") {
-      expect(result.candidates.map((candidate) => candidate.id)).toEqual(["m1", "m2"]);
-    }
-  });
-
-  it("replies no_match when nothing matches the cues and nothing is deleted", async () => {
-    const { executor, deleteExpense } = makeExecutor({
-      movements: [movement("m1", 8000, "super", RECENT, "super")],
-    });
-
-    const result = await executor.delete(ownerId, { category: "no-existe", amount: null });
-
-    expect(deleteExpense).not.toHaveBeenCalled();
-    expect(result.status).toBe("no_match");
+    expect(window).toHaveLength(0);
   });
 });
 
 describe("MovementLifecycleExecutor.deleteWindow (D10)", () => {
-  it("returns the 10-row all-movements window for the menu delete picker", async () => {
+  it("returns the 10-row all-movements window for the delete picker", async () => {
     const rows = Array.from({ length: 12 }, (_, index) =>
       movement(`m${index}`, 100 + index, `nota-${index}`, new Date(RECENT.getTime() - index * 60_000), "cat"),
     );

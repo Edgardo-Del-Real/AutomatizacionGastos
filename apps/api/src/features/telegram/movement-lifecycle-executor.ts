@@ -1,27 +1,16 @@
 import type { Movement } from "@rita/contracts";
 import { ConflictError, NotFoundError } from "../../infra/errors";
-import { normalizeForMatchTolerant } from "../categories/matcher";
 import type { ExpenseService } from "../expenses/expenses.service";
 import type { MovementService } from "../movements/movements.service";
 
 /**
- * Deterministic movement-lifecycle executor (design D3/D4, spec
- * bot-expense-lifecycle): resolves the referenced movement by fixed cue order
- * (category → amount → recency default) and acts through the existing REST
- * services — `MovementService.markMovementPaid` and
- * `ExpenseService.deleteExpense` — with zero duplicated business logic.
- *
- * - `markPaid` considers ONLY the owner's PENDING EXPENSE movements (10 most
- *   recent); with no PENDING cue match it re-filters the PAID EXPENSE window
- *   (D4) so an already-paid reference surfaces the honest 409 conflict.
- * - `delete` scores ALL owner movements in the corrector-style 10-row window.
- * - Ambiguity (multiple matches, or a recency tie with no cues) returns
- *   `ask` with the tied candidates; the controller persists the selection
- *   payload and the owner picks deterministically.
- * - The executor never guesses and never creates anything.
+ * v2 deterministic movement-lifecycle executor (spec bot-manage-expenses): the
+ * cue-driven `markPaid`/`delete` resolvers are REMOVED — every lifecycle
+ * action is button-driven in v2. The windows and by-id executions remain for
+ * the expense-admin chains (Phase 6): `deleteWindow` (10 most recent), the new
+ * `pendingWindow` (PENDING EXPENSE list for mark-paid), `markPaidById` and
+ * `deleteById`.
  */
-export type LifecycleCues = { category: string | null; amount: number | null };
-
 export type LifecycleCandidate = {
   id: string;
   amount: number;
@@ -33,12 +22,8 @@ export type LifecycleCandidate = {
 
 export type LifecycleResult =
   | { status: "executed"; action: "marked_paid" | "deleted_movement"; movement: LifecycleCandidate }
-  | { status: "gated"; candidate: LifecycleCandidate } // delete resolution, awaiting the 🗑 tap
   | { status: "already_paid"; movement: LifecycleCandidate }
-  | { status: "missing" }
-  | { status: "nothing_pending" } // mark_paid only
-  | { status: "no_match" } // delete only
-  | { status: "ask"; candidates: LifecycleCandidate[] };
+  | { status: "missing" };
 
 const WINDOW_SIZE = 10;
 
@@ -53,119 +38,15 @@ function toCandidate(movement: Movement): LifecycleCandidate {
   };
 }
 
-type Resolution =
-  | { kind: "unique"; candidate: LifecycleCandidate }
-  | { kind: "ask"; candidates: LifecycleCandidate[] }
-  | { kind: "none" };
-
-/**
- * D3 resolution: explicit cues are conjunctive filters (category folded on both
- * sides, amount exact) and recency NEVER breaks a cue tie; when both cues are
- * absent the most-recent candidate is the default and a tie asks (spec "two
- * PENDING in same category → ask", "borra ese gasto" → most recent).
- */
-function resolveCueMatch(window: LifecycleCandidate[], cues: LifecycleCues): Resolution {
-  const hasCategory = cues.category !== null;
-  const hasAmount = cues.amount !== null;
-  if (hasCategory || hasAmount) {
-    const filtered = window.filter(
-      (candidate) =>
-        (!hasCategory ||
-          normalizeForMatchTolerant(candidate.category) === normalizeForMatchTolerant(cues.category as string)) &&
-        (!hasAmount || candidate.amount === cues.amount),
-    );
-    if (filtered.length === 1) {
-      return { kind: "unique", candidate: filtered[0] as LifecycleCandidate };
-    }
-    if (filtered.length > 1) {
-      return { kind: "ask", candidates: filtered };
-    }
-    return { kind: "none" };
-  }
-  // No cues: unique most-recent (the window is ordered occurredAt DESC); a
-  // recency tie asks instead of guessing.
-  if (window.length === 0) {
-    return { kind: "none" };
-  }
-  const mostRecentMs = window[0]!.occurredAtMs;
-  const tied = window.filter((candidate) => candidate.occurredAtMs === mostRecentMs);
-  if (tied.length === 1) {
-    return { kind: "unique", candidate: tied[0] as LifecycleCandidate };
-  }
-  return { kind: "ask", candidates: tied };
-}
-
 export class MovementLifecycleExecutor {
   constructor(
     private readonly deps: { movementService: MovementService; expenseService: ExpenseService },
   ) {}
 
   /**
-   * Mark-paid resolution: PENDING EXPENSE window only. A unique match executes;
-   * multiple matches ask; zero PENDING matches fall back to the PAID EXPENSE
-   * window (D4) so an already-paid reference returns the 409 conflict; nothing
-   * anywhere → `nothing_pending`.
-   */
-  async markPaid(ownerId: string, cues: LifecycleCues): Promise<LifecycleResult> {
-    const movements = await this.deps.movementService.listMovements(
-      { viewerId: ownerId, partnerId: null, visibility: "mine" },
-      {},
-    );
-    const window = movements
-      .filter((movement) => movement.type === "EXPENSE" && movement.status === "PENDING")
-      .slice(0, WINDOW_SIZE)
-      .map(toCandidate);
-
-    const resolved = resolveCueMatch(window, cues);
-    if (resolved.kind === "unique") {
-      return this.markPaidById(ownerId, resolved.candidate);
-    }
-    if (resolved.kind === "ask") {
-      return { status: "ask", candidates: resolved.candidates };
-    }
-
-    // D4 fallback: 0 PENDING cue matches → re-filter the EXPENSE non-PENDING
-    // window with the same cues; a unique match calls markMovementPaid which
-    // 409s on the already-PAID row (honest "ya estaba pagado" reply).
-    const paidWindow = movements
-      .filter((movement) => movement.type === "EXPENSE" && movement.status !== "PENDING")
-      .slice(0, WINDOW_SIZE)
-      .map(toCandidate);
-    const fallback = resolveCueMatch(paidWindow, cues);
-    if (fallback.kind === "unique") {
-      return this.markPaidById(ownerId, fallback.candidate);
-    }
-    return { status: "nothing_pending" };
-  }
-
-  /**
-   * Delete resolution (D6, resolve-only): scores ALL owner movements in the
-   * 10-row window and returns `gated` with the unique resolved candidate —
-   * the SERVICE persists the confirmation gate and `dc:ok` calls
-   * `deleteById`. No path from resolution to deletion exists without the
-   * owner's 🗑 tap (fixes bug #1, spec bot-expense-lifecycle).
-   */
-  async delete(ownerId: string, cues: LifecycleCues): Promise<LifecycleResult> {
-    const movements = await this.deps.movementService.listMovements(
-      { viewerId: ownerId, partnerId: null, visibility: "mine" },
-      {},
-    );
-    const window = movements.slice(0, WINDOW_SIZE).map(toCandidate);
-
-    const resolved = resolveCueMatch(window, cues);
-    if (resolved.kind === "unique") {
-      return { status: "gated", candidate: resolved.candidate };
-    }
-    if (resolved.kind === "ask") {
-      return { status: "ask", candidates: resolved.candidates };
-    }
-    return { status: "no_match" };
-  }
-
-  /**
-   * D10 — the delete window for the menu `Borrar` entry: the 10-row
-   * all-movements window, rendered as `dk:<id>` buttons (7 + nav row) so the
-   * owner picks the target BEFORE any gate opens. Never deletes anything.
+   * The delete window for the expense admin (design D9): the 10-row
+   * all-movements window, rendered as `dk:<id>` buttons so the owner picks the
+   * target BEFORE any gate opens. Never deletes anything.
    */
   async deleteWindow(ownerId: string): Promise<LifecycleCandidate[]> {
     const movements = await this.deps.movementService.listMovements(
@@ -175,7 +56,23 @@ export class MovementLifecycleExecutor {
     return movements.slice(0, WINDOW_SIZE).map(toCandidate);
   }
 
-  /** Executes the mark-paid transition for an already-picked candidate (selection pick). */
+  /**
+   * The mark-paid window for the expense admin (design "am:pay →
+   * pendingWindow"): the owner's PENDING EXPENSE movements, rendered as
+   * `mp:<id>` buttons. Never mutates anything.
+   */
+  async pendingWindow(ownerId: string): Promise<LifecycleCandidate[]> {
+    const movements = await this.deps.movementService.listMovements(
+      { viewerId: ownerId, partnerId: null, visibility: "mine" },
+      {},
+    );
+    return movements
+      .filter((movement) => movement.type === "EXPENSE" && movement.status === "PENDING")
+      .slice(0, WINDOW_SIZE)
+      .map(toCandidate);
+  }
+
+  /** Executes the mark-paid transition for an already-picked candidate (mp:<id> pick). */
   async markPaidById(ownerId: string, movement: LifecycleCandidate): Promise<LifecycleResult> {
     try {
       await this.deps.movementService.markMovementPaid(ownerId, movement.id);
@@ -191,7 +88,7 @@ export class MovementLifecycleExecutor {
     return { status: "executed", action: "marked_paid", movement };
   }
 
-  /** Executes the delete for an already-picked candidate (selection pick). */
+  /** Executes the delete for an already-picked candidate (dc:ok gate confirm). */
   async deleteById(ownerId: string, movement: LifecycleCandidate): Promise<LifecycleResult> {
     try {
       await this.deps.expenseService.deleteExpense(movement.id, ownerId);

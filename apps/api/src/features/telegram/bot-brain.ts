@@ -22,117 +22,43 @@ export const BOT_INTENTS = [
 export type BotIntent = (typeof BOT_INTENTS)[number];
 
 /**
- * Transitional intent union: telegram.service.ts and the category executor
- * still consume the removed intents until the Phase 3/8 rewrites land. The
- * runtime contract is the 8-intent `BOT_INTENTS` enum above — a response
- * carrying a legacy intent fails the zod schema and degrades to null; this
- * type only keeps the transitional consumers compiling.
- */
-export type LegacyBotIntent =
-  | BotIntent
-  | "register_expense"
-  | "correct_amount"
-  | "correct_category"
-  | "associate_keyword"
-  | "create_category"
-  | "delete_category"
-  | "rename_category"
-  | "create_savings_rule"
-  | "capabilities"
-  | "mark_paid"
-  | "delete_expense";
-
-/**
- * Transitional conversation-envelope TYPE: the service still consumes the
- * legacy fields (category, dialog_action, then_reassign, shared, new_name)
- * until Phase 3. The runtime contract is `conversationEnvelopeSchema` below —
- * it accepts ONLY `{intent, amount, note, query_type?}` and rejects every
- * legacy key via `z.never()`, so a brain response carrying them degrades to
- * null. This type narrows to the schema shape when the service rewrites.
+ * v2 conversation envelope (spec bot-brain "Interpret Envelope Contract"):
+ * `{intent, amount, note, query_type?}`. The legacy keys (category, new_name,
+ * dialog_action, then_reassign, shared, planned) are schema-rejected and have
+ * no place in the type — the service never consumes them in v2.
  */
 export type ConversationEnvelope = {
-  intent: LegacyBotIntent;
+  intent: BotIntent;
   amount: number | null;
-  category: string | null;
   note: string | null;
   /** Discriminator for the `query` intent; absent for every other intent. */
   query_type?: QueryType | null;
-  /** Target name for `rename_category`; null for every other intent. */
-  new_name?: string | null;
-  /** Dialog-state classification (legacy — schema-rejected in v2). */
-  dialog_action?: "resolve" | "abandon" | null;
-  /** Mixed-intent flag (legacy — schema-rejected in v2). */
-  then_reassign?: boolean;
-  /** SHARED-registration signal (legacy — schema-rejected in v2). */
-  shared?: boolean;
 };
 
-export type BotAction =
-  | "registered"
-  | "asked_amount"
-  | "asked_category"
-  | "asked_registration"
-  | "redirected"
-  | "answered"
-  | "none"
-  | "created"
-  | "deleted"
-  | "renamed"
-  | "capabilities"
-  | "asked_movement"
-  | "created_reassigned"
-  | "marked_paid"
-  | "deleted_movement";
+/**
+ * v2 executed-result actions (design "ExecutionResult shrinks to query/greeting
+ * facts"): answered (query answer), none (greeting/no-op), redirected (honest
+ * failure). The v1 action set (registered, asked_*, created, deleted, ...) is
+ * gone — every non-query outcome uses the fixed reply-text templates.
+ */
+export type BotAction = "answered" | "none" | "redirected";
 
-export type CategoryCommandErrorCode =
-  | "duplicate"
-  | "not_found"
-  | "otro_forbidden"
-  | "savings_forbidden"
-  | "reserved"
-  | "unknown";
-
+/**
+ * v2 executed result (spec bot-brain "Reply-After-Action Contract"): carries
+ * ONLY the executed facts — query answers (query_type + query) and the
+ * ok:false message passthrough. The brain's `reply` asserts nothing absent
+ * from this shape.
+ */
 export type ExecutionResult = {
-  /**
-   * Transitional: the service still emits legacy intents until Phase 3; the
-   * v2 contract narrows this to `BotIntent` when the service rewrites. The
-   * brain's `reply` never invents facts absent from the result.
-   */
-  intent: LegacyBotIntent;
+  intent: BotIntent;
   ok: boolean;
   action: BotAction;
   amount: number | null;
-  category: string | null;
   note: string | null;
   query_type?: QueryType | null;
   query?: QueryExecutionResult | null;
-  new_name?: string | null;
   /** Human-readable error to transmit when ok is false. */
   message?: string | null;
-  /** Machine discriminator for the fixed fallback template when ok is false. */
-  error?: CategoryCommandErrorCode | null;
-  /** Savings-split facts (D7): carried when a registration split applied. */
-  gross_amount?: number | null;
-  net_amount?: number | null;
-  savings_amount?: number | null;
-  /** Planned-query facts (D7): carried when the planned executor answered. */
-  planned_month?: string | null;
-  planned_total?: number | null;
-  /** Planned-registration fact (D11): true when the expense was registered previsto. */
-  planned?: boolean;
-  /**
-   * Registration-collection fact: which field the `asked_registration` action
-   * is asking ("amount" or "category"). The reply MUST ask exactly that field
-   * and never invent the other one.
-   */
-  asked_field?: "amount" | "category" | null;
-  /**
-   * CR-5 merged-reply fact: true when a register-during-dialog message
-   * abandoned an open dialog AND registered the new message in one reply. The
-   * reply MUST confirm both facts in the same message without contradicting
-   * itself.
-   */
-  abandoned_dialog?: boolean;
 };
 
 /**
@@ -386,10 +312,7 @@ export class GroqBotBrain implements BotBrain {
       return null;
     }
     const result = conversationEnvelopeSchema.safeParse(payload);
-    // The narrow schema output is the v2 envelope; the wide transitional type
-    // keeps the service compiling until Phase 3 (the runtime contract is the
-    // schema — legacy keys/intents already degrade to null).
-    return result.success ? (result.data as unknown as ConversationEnvelope) : null;
+    return result.success ? result.data : null;
   }
 
   async reply(result: ExecutionResult): Promise<string | null> {

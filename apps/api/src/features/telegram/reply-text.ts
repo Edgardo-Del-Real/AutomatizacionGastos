@@ -1,6 +1,4 @@
 import type { QueryExecutionResult, RecentMovementResult } from "./query.types";
-import type { ExecutionResult } from "./bot-brain";
-import type { MovementCandidate } from "./movement-corrector";
 import type { ReservedConcept } from "../categories/reserved";
 
 const arsFormatter = new Intl.NumberFormat("es-AR", {
@@ -40,15 +38,6 @@ export function successSplitReply(gross: number, net: number, savings: number): 
 export function plannedReply(amount: number, note: string | null, category: string): string {
   const notePart = note === null ? "" : ` (${truncateNote(note)})`;
   return `Registrado como previsto: ${formatARS(amount)}${notePart} — Categoría: ${category}. Se suma cuando lo marques pagado.`;
-}
-
-/**
- * Educational redirect for combining `compartido:` with `previsto:` (either
- * order): planned expenses are INDIVIDUAL by design, so the combination is
- * rejected and nothing is created.
- */
-export function plannedSharedRejectedReply(): string {
-  return "Los gastos previstos son individuales: no se pueden marcar como compartidos. Usá 'previsto: monto nota' para un gasto previsto, o 'compartido: monto nota' para un gasto normal compartido.";
 }
 
 /**
@@ -160,23 +149,38 @@ export function selectionAbandonedReply(): string {
   return "Dale, abandoné la selección: no cambié nada.";
 }
 
-/** Capture prompt after Corregir (D4): reopens text capture with the short format. */
-export function capturePromptReply(): string {
-  return "Dale, mandame de nuevo el monto con la nota, por ejemplo: 30000 gym.";
+/**
+ * v2 — expense-admin sub-menu entry (spec bot-manage-expenses "Sub-Menu
+ * Entry"): the three button-driven chains (delete / correct / mark-paid).
+ */
+export function expenseAdminReply(): string {
+  return "Administrar gastos: elegí una opción.";
 }
 
-/** Educational prompt for the `m:prev` menu button (D8): teaches the prefix AND the Previsto button. */
-export function pendingCapturePromptReply(): string {
-  return "Para un gasto previsto mandá el monto con la nota usando el prefijo 'previsto:' (ej: previsto: 30000 alquiler), o registralo y tocá el botón Previsto de la vista previa.";
+/**
+ * v2 — category-admin sub-menu entry (spec bot-manage-categories "Sub-Menu
+ * Entry"): the three button-driven operations (create / rename / delete).
+ */
+export function categoryAdminReply(): string {
+  return "Administrar categorías: elegí una opción.";
+}
+
+/**
+ * v2 — reports sub-menu entry (spec bot-reports-menu "Sub-Menu Entry"): the
+ * five query buttons plus the free-text hint.
+ */
+export function reportsMenuReply(): string {
+  return "Reportes: tocá una consulta o mandá tu pregunta por texto.";
+}
+
+/** Capture prompt (D4): asks for the `monto+nota` text after a type tap or Corregir. */
+export function capturePromptReply(): string {
+  return "Dale, mandame de nuevo el monto con la nota, por ejemplo: 30000 gym.";
 }
 
 /** Idempotency reply for a retried callback whose token/state was consumed (D5). */
 export function alreadyProcessedReply(): string {
   return "Esa acción ya fue procesada: no la vuelvo a ejecutar.";
-}
-
-export function savingsRuleRedirectReply(): string {
-  return "Para definir un ahorro automático usá el comando: registrar ahorro: <palabra> al <X>% (por ejemplo: registrar ahorro: entrenuts al 10%).";
 }
 
 export function savingsRuleDefinedReply(keyword: string, percent: number): string {
@@ -185,23 +189,6 @@ export function savingsRuleDefinedReply(keyword: string, percent: number): strin
 
 export function savingsRuleInvalidReply(): string {
   return "El porcentaje de ahorro debe ser mayor a 0 y hasta 100 (ej: al 10%). No guardé nada.";
-}
-
-export function savingsOverrideInvalidReply(percent?: number): string {
-  const value = percent === undefined ? "" : ` (${percent}%)`;
-  return `El porcentaje de ahorro${value} debe ser mayor a 0 y hasta 100. No registré nada.`;
-}
-
-export function helpReply(): string {
-  return (
-    "No entendí el mensaje. Enviá un monto con una nota, por ejemplo: $2500 supermercado.\n" +
-    "Comandos:\n" +
-    "- registrar categoria: X\n" +
-    "- renombrar categoria: X a: Y\n" +
-    "- asociar palabra: P a categoria: X\n" +
-    "- listar categorias\n" +
-    "- configurar categorias"
-  );
 }
 
 export function setupQuestionReply(existing: string[]): string {
@@ -283,60 +270,6 @@ export function reservedCategoryReply(name: string, concept: ReservedConcept): s
   }
 }
 
-export function correctionOfferReply(amount: number, note: string | null, category: string): string {
-  return `${successReply(amount, note, category)}. ¿Querés asignarle otra categoría? Escribí el nombre o "no".`;
-}
-
-/** Follow-up after an affirmation ("si", "dale") to the correction offer: asks the target category. */
-export function categoryFollowUpReply(): string {
-  return 'Dale, ¿a qué categoría lo asigno? Escribí el nombre o "no".';
-}
-
-export function correctionDoneReply(category: string): string {
-  return `Listo, el movimiento quedó en "${category}".`;
-}
-
-export function otroKeptReply(): string {
-  return `Listo, quedó en "otro".`;
-}
-
-export function categoryNotFoundReply(name: string, categories: string[]): string {
-  const quoted = categories.map((category) => `"${category}"`).join(", ");
-  return `No encontré la categoría "${name}". Elegí una de estas: ${quoted}.`;
-}
-
-/**
- * D9 — the closed-set category picker prompt: renders when a dialog answer
- * matches no category (single-token or multi-word). The existing categories
- * render as inline buttons (cat:<id>, "otro" included) and the state stays
- * open — never an auto-create (spec conversational-categories / registration-
- * collection "Dialog Category Answers (Closed Set)").
- */
-export function categoryButtonsReply(): string {
-  return "Elegí una de estas categorías (o tocá una de abajo): incluye 'otro' para dejarlo sin categoría.";
-}
-
-/** D9 — a `cat:` callback on an already-closed dialog: honest, nothing executes. */
-export function dialogClosedReply(): string {
-  return "Ese diálogo ya está cerrado: no cambié nada.";
-}
-
-export function correctionAbandonedReply(): string {
-  return `Ojo: dejé sin asignar la corrección anterior (el movimiento queda en "otro"). Ahora registro el nuevo.`;
-}
-
-export function amountConflictReply(deterministic: number, llm: number): string {
-  return `El monto no me queda claro: parseé ${formatARS(deterministic)} y también ${formatARS(llm)}. Respondé con el monto, o mandá un registro nuevo y lo descarto.`;
-}
-
-export function amountConfirmationAbandonedReply(): string {
-  return "Ojo: dejé sin asignar la pregunta del monto. Ahora registro el mensaje nuevo.";
-}
-
-export function queryRedirectReply(): string {
-  return "No pude consultar los datos ahora. Probá de nuevo en un ratito, o mandá el monto con una nota para registrar un gasto.";
-}
-
 /** Formats a "YYYY-MM-DD" date as "DD/MM" for compact movement lines. */
 function formatDateShort(isoDate: string): string {
   const [year, month, day] = isoDate.split("-");
@@ -344,6 +277,10 @@ function formatDateShort(isoDate: string): string {
     return isoDate;
   }
   return `${day}/${month}`;
+}
+
+export function queryRedirectReply(): string {
+  return "No pude consultar los datos ahora. Probá de nuevo en un ratito, o mandá el monto con una nota para registrar un gasto.";
 }
 
 export function categoriesQueryReply(categories: { name: string; keywords: string[] }[]): string {
@@ -419,10 +356,6 @@ export function queryReplyTemplate(result: QueryExecutionResult): string {
   }
 }
 
-export function associateKeywordRedirectReply(): string {
-  return "Para asociar una palabra a una categoría usá el comando: asociar palabra: P a categoria: X.";
-}
-
 /**
  * v2 — educational redirect for legacy text category-CRUD commands (spec
  * telegram-bot "Bot Commands"): `registrar categoria:`, `renombrar
@@ -434,14 +367,10 @@ export function categoryCrudRedirectReply(): string {
   return "Para crear, renombrar o asociar categorías usá el botón 🗂 Administrar categorías del menú.";
 }
 
-export function offTopicRedirectReply(): string {
-  return "Solo registro gastos e ingresos: mandá el monto con una nota (ej: $2500 supermercado) y lo cargo al toque.";
-}
-
 /**
- * Main-menu text (D8): the five actions render as one-per-row buttons
- * (m:new/m:prev/m:del/m:rep/m:help) — Nuevo gasto, Gasto previsto, Borrar,
- * Reporte, Ayuda (spec bot-main-menu "Main Menu Actions").
+ * Main-menu text (D8): the eight actions render as one-per-row buttons
+ * (m:new/m:prev/m:inc/m:shr/m:adm/m:cats/m:rep/m:help) — spec bot-main-menu
+ * "Main Menu Actions".
  */
 export function menuReply(): string {
   return "Elegí una opción del menú:";
@@ -479,35 +408,6 @@ export function callbackUnavailableReply(): string {
 }
 
 /**
- * Registration-collection questions (spec "asked_registration Reply Action").
- * The collect dialog asks one field at a time: the amount first, then the
- * category. The note is echoed when the collect already carries one.
- */
-
-/** Asks the amount of a registration being collected (open field: amount). */
-export function askAmountReply(note: string | null): string {
-  const notePart = note === null ? "" : ` (${truncateNote(note)})`;
-  return `¿Qué monto tiene el gasto${notePart}? Mandame el número.`;
-}
-
-/** Asks the category of a registration being collected (open field: category). */
-export function askCategoryReply(note: string | null): string {
-  const notePart = note === null ? "" : ` (${truncateNote(note)})`;
-  return `¿En qué categoría lo guardo${notePart}? Mandame el nombre.`;
-}
-
-/** Re-asks the open collect field after a non-answer (never dead-ends). */
-export function keptCollectingReply(field: "amount" | "category"): string {
-  const missing = field === "amount" ? "el monto" : "el nombre de la categoría";
-  return `Sigo con el registro: falta ${missing}. Si querés cancelarlo, mandá "no, dejalo".`;
-}
-
-/** Explicit abandon of the collect: nothing registered, nothing pending. */
-export function collectAbandonedReply(): string {
-  return "Dale, cancelé el registro. No guardé nada.";
-}
-
-/**
  * v2 warm, expense-scoped greeting for the `greeting` intent (spec
  * telegram-bot "Success and Help Reply Content"): greets and points to the
  * menu; it never teaches free-text capture and never starts a flow.
@@ -532,26 +432,8 @@ export function savingsForbiddenReply(): string {
   return 'La categoría de ahorro no se puede borrar ni renombrar: guarda los ahorros automáticos.';
 }
 
-export function capabilitiesSummaryReply(): string {
-  return (
-    "Puedo:\n" +
-    "- registrar gastos e ingresos (monto + nota)\n" +
-    "- corregir el monto o la categoría de un movimiento\n" +
-    "- consultar tus categorías, últimos movimientos, saldo o resumen del mes\n" +
-    "- crear, borrar y renombrar categorías\n" +
-    "- asociar una palabra a una categoría\n" +
-    "- marcar como pagado un gasto previsto\n" +
-    "- borrar un gasto\n" +
-    "- ayudarte (mandá un monto con una nota y lo cargo)"
-  );
-}
-
 export function categoryRenamedReply(from: string, to: string): string {
   return `Categoría renombrada: "${from}" → "${to}".`;
-}
-
-export function keywordAssociatedReply(keyword: string, category: string): string {
-  return `Palabra "${keyword}" asociada a "${category}".`;
 }
 
 export function categoryListReply(categories: { name: string; keywords: string[] }[]): string {
@@ -588,22 +470,11 @@ export function movementCandidatesList(candidates: { amount: number; note: strin
     .join("\n");
 }
 
-export function movementAmbiguousReply(
-  _reference: { amount: number | null; note: string | null },
-  candidates: MovementCandidate[],
-): string {
-  return `¿Cuál de estos movimientos corrijo?\n${movementCandidatesList(candidates)}`;
-}
-
-export function movementNoReferenceReply(candidates: MovementCandidate[]): string {
-  return `¿Qué movimiento querés corregir?\n${movementCandidatesList(candidates)}`;
-}
-
 export function movementNoMatchReply(): string {
   return "No encontré ningún movimiento que coincida con eso.";
 }
 
-/** Lifecycle candidate shape for the ambiguity ask (the executor's `LifecycleCandidate` satisfies it). */
+/** Lifecycle candidate shape for the pick lists (the executor's `LifecycleCandidate` satisfies it). */
 export type LifecycleAskCandidate = { amount: number; note: string | null; date: string };
 
 /** Confirms a marked-paid transition (PENDING → PAID) with the executed facts. */
@@ -665,10 +536,6 @@ export function deletePickListReply(candidates: LifecycleAskCandidate[]): string
   return `¿Cuál querés borrar?\n${movementCandidatesList(candidates)}`;
 }
 
-export function movementSelectionAbandonedReply(): string {
-  return "Dale, dejé la corrección. No cambié ningún movimiento.";
-}
-
 /** Phantom-guard abandon: nothing was resolved, nothing was reprocessed. */
 export function questionDroppedReply(): string {
   return "Ojo: dejé la pregunta anterior sin responder. No registré ni modifiqué nada.";
@@ -677,70 +544,4 @@ export function questionDroppedReply(): string {
 export function movementCorrectionDoneReply(category: string, amount: number, note: string | null): string {
   const notePart = note === null ? "" : ` (${truncateNote(note)})`;
   return `Listo, el movimiento de ${formatARS(amount)}${notePart} quedó en "${category}".`;
-}
-
-export function categoryCreatedReassignedReply(category: string): string {
-  return `Categoría "${category}" creada y el movimiento pendiente quedó guardado ahí.`;
-}
-
-export function categoryErrorReply(message: string): string {
-  return `Error: ${message}`;
-}
-
-/**
- * Fixed fallback for the category CRUD and capabilities execution results.
- * Mirrors `queryReplyTemplate`: renders the same facts the brain reply would.
- */
-export function categoryCommandReplyTemplate(result: ExecutionResult): string {
-  switch (result.intent) {
-    case "create_category":
-      if (result.ok && result.action === "created_reassigned") {
-        return categoryCreatedReassignedReply(result.category ?? "");
-      }
-      if (result.ok) {
-        return categoryCreatedReply(result.category ?? "");
-      }
-      if (result.error === "duplicate") {
-        return duplicateCategoryReply(result.category ?? "");
-      }
-      if (result.error === "reserved") {
-        return result.message ?? categoryErrorReply("no se pudo crear la categoría");
-      }
-      return categoryErrorReply(result.message ?? "no se pudo crear la categoría");
-    case "delete_category":
-      if (result.ok) {
-        return categoryDeletedReply(result.category ?? "");
-      }
-      if (result.error === "not_found") {
-        return missingCategoryReply(result.category ?? "");
-      }
-      if (result.error === "otro_forbidden") {
-        return otroDeleteForbiddenReply();
-      }
-      if (result.error === "savings_forbidden") {
-        return savingsForbiddenReply();
-      }
-      return categoryErrorReply(result.message ?? "no se pudo borrar la categoría");
-    case "rename_category":
-      if (result.ok) {
-        return categoryRenamedReply(result.category ?? "", result.new_name ?? "");
-      }
-      if (result.error === "not_found") {
-        return missingCategoryReply(result.category ?? "");
-      }
-      if (result.error === "duplicate") {
-        return duplicateCategoryReply(result.new_name ?? "");
-      }
-      if (result.error === "reserved") {
-        return result.message ?? categoryErrorReply("no se pudo renombrar la categoría");
-      }
-      if (result.error === "savings_forbidden") {
-        return savingsForbiddenReply();
-      }
-      return categoryErrorReply(result.message ?? "no se pudo renombrar la categoría");
-    case "capabilities":
-      return capabilitiesSummaryReply();
-    default:
-      return helpReply();
-  }
 }

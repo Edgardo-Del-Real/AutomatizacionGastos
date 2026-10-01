@@ -15,6 +15,7 @@ import { PrismaSavingsRuleRepository } from "../savings/savings.repository";
 import { SavingsRuleService } from "../savings/savings.service";
 import type { BotBrain, ConversationEnvelope } from "./bot-brain";
 import { TelegramService } from "./telegram.service";
+import { compartidoPrefixRedirectReply, questionDroppedReply, unresolvableReply } from "./reply-text";
 
 loadDotEnvFromDisk();
 
@@ -47,6 +48,19 @@ function textUpdate(overrides?: { fromId?: number; messageId?: number; text?: st
   };
 }
 
+function callbackUpdate(fromId: number, data: string): unknown {
+  return {
+    update_id: 9100,
+    callback_query: {
+      id: "cb_1",
+      chat_instance: "987654321",
+      from: { id: fromId, is_bot: false, first_name: "Member" },
+      message: { message_id: 77, chat: { id: fromId, type: "private", first_name: "Member" }, date: 1712803046, text: "preview" },
+      data,
+    },
+  };
+}
+
 /** Canned brain with a null interpret by default: deterministic-only unless overridden. */
 function stubBrain(overrides?: {
   interpret?: (message: string) => Promise<ConversationEnvelope | null>;
@@ -57,7 +71,7 @@ function stubBrain(overrides?: {
   };
 }
 
-describe("TelegramService household multi-chat (spec: Owner Filtering / Dedup / Shared Prefix)", () => {
+describe("TelegramService household multi-chat (spec: Owner Filtering / Dedup / v2 capture)", () => {
   const testDatabaseUrl = resolveTestDatabaseUrl();
   let prisma: PrismaClient;
   let categoryService: CategoryService;
@@ -110,17 +124,36 @@ describe("TelegramService household multi-chat (spec: Owner Filtering / Dedup / 
 
   async function seedCategories(ownerId: string, names: string[]): Promise<void> {
     for (const name of names) {
+      if (name === "otro") {
+        continue;
+      }
       await categoryService.createCategory(ownerId, name);
     }
     await categoryService.ensureOtro(ownerId);
   }
 
-  it("attributes a message from Rita's chat under her ownerId and Edgardo's under his (both directions)", async () => {
-    await seedCategories("rita", []);
-    await seedCategories("edgardo", []);
+  /** Registers a REAL capture for a member through the v2 menu-tap chain. */
+  async function capture(chatId: number, messageId: number, text: string): Promise<void> {
+    await service.handleCallback(callbackUpdate(chatId, "m:new"), async () => undefined);
+    await service.handleUpdate(textUpdate({ fromId: chatId, messageId, text }), async () => undefined);
+    const state = await prisma.botState.findUnique({ where: { ownerId: chatId === RITA_CHAT ? "rita" : "edgardo" } });
+    const note = state?.pendingNote ?? "";
+    const preview = JSON.parse(note) as { saveToken: string };
+    const categories = await categoryService.listCategories(chatId === RITA_CHAT ? "rita" : "edgardo");
+    const normal = categories.find((category) => category.name !== "otro");
+    if (normal === undefined) {
+      throw new Error("capture helper needs a NORMAL category seeded");
+    }
+    await service.handleCallback(callbackUpdate(chatId, `cat:${normal.id}`), async () => undefined);
+    await service.handleCallback(callbackUpdate(chatId, `pv:save:${preview.saveToken}`), async () => undefined);
+  }
 
-    await service.handleUpdate(textUpdate({ fromId: RITA_CHAT, messageId: 1, text: "$1000 cafe rita" }), async () => undefined);
-    await service.handleUpdate(textUpdate({ fromId: EDGARDO_CHAT, messageId: 2, text: "$2000 super edgardo" }), async () => undefined);
+  it("attributes a capture from Rita's chat under her ownerId and Edgardo's under his", async () => {
+    await seedCategories("rita", ["Cafe"]);
+    await seedCategories("edgardo", ["Cafe"]);
+
+    await capture(RITA_CHAT, 1, "1000 cafe rita");
+    await capture(EDGARDO_CHAT, 2, "2000 super edgardo");
 
     const ritaMovements = await prisma.expense.findMany({ where: { ownerId: "rita" } });
     const edgardoMovements = await prisma.expense.findMany({ where: { ownerId: "edgardo" } });
@@ -132,13 +165,13 @@ describe("TelegramService household multi-chat (spec: Owner Filtering / Dedup / 
   });
 
   it("ignores an unknown chat silently: no movement, no reply, NOT recorded, and the log line contains no chatId", async () => {
-    await seedCategories("rita", []);
+    await seedCategories("rita", ["Cafe"]);
     const logs: string[] = [];
     const logged = buildService((message) => logs.push(message));
     const replies: string[] = [];
 
     await logged.handleUpdate(
-      textUpdate({ fromId: UNKNOWN_CHAT, messageId: 1, text: "$1000 cafe" }),
+      textUpdate({ fromId: UNKNOWN_CHAT, messageId: 1, text: "1000 cafe" }),
       async (text) => {
         replies.push(text);
       },
@@ -153,124 +186,106 @@ describe("TelegramService household multi-chat (spec: Owner Filtering / Dedup / 
   });
 
   it("processes the same messageId in two different chats (dedup is per chatId+messageId)", async () => {
-    await seedCategories("rita", []);
-    await seedCategories("edgardo", []);
+    await seedCategories("rita", ["Cafe"]);
+    await seedCategories("edgardo", ["Cafe"]);
 
-    await service.handleUpdate(textUpdate({ fromId: RITA_CHAT, messageId: 7, text: "$1000 cafe rita" }), async () => undefined);
-    await service.handleUpdate(textUpdate({ fromId: EDGARDO_CHAT, messageId: 7, text: "$2000 super edgardo" }), async () => undefined);
+    await capture(RITA_CHAT, 7, "1000 cafe rita");
+    await capture(EDGARDO_CHAT, 7, "2000 super edgardo");
 
     expect(await prisma.expense.count()).toBe(2);
     expect(await prisma.processedMessage.count()).toBe(2);
   });
 
-  it("skips a duplicate (chatId, messageId) after the gate without creating or replying", async () => {
-    await seedCategories("rita", []);
+  it("skips a duplicate (chatId, messageId) after the gate without registering twice", async () => {
+    await seedCategories("rita", ["Cafe"]);
+    await service.handleCallback(callbackUpdate(RITA_CHAT, "m:new"), async () => undefined);
+    await service.handleUpdate(textUpdate({ fromId: RITA_CHAT, messageId: 9, text: "1000 cafe rita" }), async () => undefined);
+    const state = await prisma.botState.findUnique({ where: { ownerId: "rita" } });
+    const preview = JSON.parse(state?.pendingNote ?? "{}") as { saveToken: string };
+    const ritaCategories = await categoryService.listCategories("rita");
+    const cafe = ritaCategories.find((category) => category.name === "Cafe");
+    expect(cafe).toBeDefined();
+    await service.handleCallback(callbackUpdate(RITA_CHAT, `cat:${cafe!.id}`), async () => undefined);
+    await service.handleCallback(callbackUpdate(RITA_CHAT, `pv:save:${preview.saveToken}`), async () => undefined);
 
-    await service.handleUpdate(textUpdate({ fromId: RITA_CHAT, messageId: 9, text: "$1000 cafe rita" }), async () => undefined);
-    await service.handleUpdate(textUpdate({ fromId: RITA_CHAT, messageId: 9, text: "$1000 cafe rita" }), async () => undefined);
+    // Same messageId again: dedup skips before any state consumption.
+    await service.handleUpdate(textUpdate({ fromId: RITA_CHAT, messageId: 9, text: "9999 cafe" }), async () => undefined);
 
     expect(await prisma.expense.count()).toBe(1);
   });
 
-  it("registers 'compartido: $2000 super' as SHARED under the sender with the stripped note", async () => {
-    await seedCategories("rita", []);
-
-    await service.handleUpdate(textUpdate({ fromId: RITA_CHAT, messageId: 1, text: "compartido: $2000 super" }), async () => undefined);
-
-    const movements = await prisma.expense.findMany({ where: { ownerId: "rita" } });
-    expect(movements).toHaveLength(1);
-    expect(movements[0]?.visibility).toBe("SHARED");
-    // The prefix is stripped from the stored note (the "$" prefix is the
-    // pre-existing deterministic-parser note format, pinned by the legacy suite).
-    expect(movements[0]?.note).toContain("super");
-    expect(movements[0]?.note).not.toContain("compartido");
-  });
-
-  it("lets the compartido: prefix win over a brain envelope with shared: false", async () => {
-    await seedCategories("rita", []);
-    const stubbed = buildService(
-      () => undefined,
-      stubBrain({
-        interpret: async () => ({
-          intent: "register_expense",
-          amount: 2000,
-          category: null,
-          note: null,
-          shared: false,
-        }),
-      }),
-    );
-
-    await stubbed.handleUpdate(textUpdate({ fromId: RITA_CHAT, messageId: 1, text: "compartido: $2000 super" }), async () => undefined);
-
-    const movements = await prisma.expense.findMany({ where: { ownerId: "rita" } });
-    expect(movements[0]?.visibility).toBe("SHARED");
-  });
-
-  it("registers SHARED from the brain shared flag alone (no prefix)", async () => {
-    await seedCategories("rita", []);
-    const stubbed = buildService(
-      () => undefined,
-      stubBrain({
-        interpret: async () => ({
-          intent: "register_expense",
-          amount: 2000,
-          category: null,
-          note: null,
-          shared: true,
-        }),
-      }),
-    );
-
-    await stubbed.handleUpdate(textUpdate({ fromId: RITA_CHAT, messageId: 1, text: "$2000 super" }), async () => undefined);
-
-    const movements = await prisma.expense.findMany({ where: { ownerId: "rita" } });
-    expect(movements[0]?.visibility).toBe("SHARED");
-  });
-
-  it("registers INDIVIDUAL when neither the prefix nor the brain flag is present", async () => {
-    await seedCategories("rita", []);
-
-    await service.handleUpdate(textUpdate({ fromId: RITA_CHAT, messageId: 1, text: "$2000 super" }), async () => undefined);
-
-    const movements = await prisma.expense.findMany({ where: { ownerId: "rita" } });
-    expect(movements[0]?.visibility).toBe("INDIVIDUAL");
-  });
-
-  it("persists the shared bit through the amount-confirmation dialog (payload carries shared)", async () => {
-    await seedCategories("rita", []);
-    const stubbed = buildService(
-      () => undefined,
-      stubBrain({
-        interpret: async () => ({
-          intent: "register_expense",
-          amount: 5000,
-          category: null,
-          note: null,
-          shared: true,
-        }),
-      }),
-    );
+  it("the legacy compartido: prefix redirects to the 👥 button and never creates a SHARED movement", async () => {
+    await seedCategories("rita", ["Cafe"]);
     const replies: string[] = [];
 
-    // Deterministic parse traps 4800 vs the brain 5000 → asks for confirmation.
-    await stubbed.handleUpdate(
-      textUpdate({ fromId: RITA_CHAT, messageId: 1, text: "compartido: $4800 kiosco" }),
+    await service.handleUpdate(
+      textUpdate({ fromId: RITA_CHAT, messageId: 1, text: "compartido: 2000 super" }),
       async (text) => {
         replies.push(text);
       },
     );
-    expect(await prisma.expense.count()).toBe(0);
-    const state = await prisma.botState.findUnique({ where: { ownerId: "rita" } });
-    expect(state?.state).toBe("awaiting_amount_confirmation");
-    const stored = JSON.parse(state?.pendingNote ?? "{}") as { shared?: boolean };
-    expect(stored.shared).toBe(true);
 
-    // The user picks the brain amount: registers SHARED from the payload bit.
-    await stubbed.handleUpdate(textUpdate({ fromId: RITA_CHAT, messageId: 2, text: "5000" }), async () => undefined);
+    expect(await prisma.expense.count()).toBe(0);
+    expect(replies.at(-2)).toBe(compartidoPrefixRedirectReply());
+  });
+
+  it("a capture from the 👥 menu button registers a SHARED movement under the sender", async () => {
+    await seedCategories("rita", ["Cafe"]);
+    await service.handleCallback(callbackUpdate(RITA_CHAT, "m:shr"), async () => undefined);
+    await service.handleUpdate(textUpdate({ fromId: RITA_CHAT, messageId: 1, text: "2000 super" }), async () => undefined);
+    const state = await prisma.botState.findUnique({ where: { ownerId: "rita" } });
+    const preview = JSON.parse(state?.pendingNote ?? "{}") as { saveToken: string };
+    const ritaCategories = await categoryService.listCategories("rita");
+    const cafe = ritaCategories.find((category) => category.name === "Cafe");
+    expect(cafe).toBeDefined();
+    await service.handleCallback(callbackUpdate(RITA_CHAT, `cat:${cafe!.id}`), async () => undefined);
+    await service.handleCallback(callbackUpdate(RITA_CHAT, `pv:save:${preview.saveToken}`), async () => undefined);
 
     const movements = await prisma.expense.findMany({ where: { ownerId: "rita" } });
     expect(movements).toHaveLength(1);
     expect(movements[0]?.visibility).toBe("SHARED");
+  });
+
+  it("a removed-state payload recovers to idle for the member who owns it", async () => {
+    await seedCategories("rita", ["Cafe"]);
+    await prisma.botState.create({
+      data: { ownerId: "rita", state: "awaiting_amount_confirmation", pendingMovementId: null, pendingNote: "{}" },
+    });
+    const replies: string[] = [];
+
+    await service.handleUpdate(
+      textUpdate({ fromId: RITA_CHAT, messageId: 1, text: "5000" }),
+      async (text) => {
+        replies.push(text);
+      },
+    );
+
+    expect(await prisma.expense.count()).toBe(0);
+    const state = await prisma.botState.findUnique({ where: { ownerId: "rita" } });
+    expect(state?.state).toBe("idle");
+    expect(replies.at(-1)).toBe(questionDroppedReply());
+  });
+
+  it("a register-intent text with no amount degrades to the unresolvable fallback (never registers)", async () => {
+    await seedCategories("rita", ["Cafe"]);
+    const stubbed = buildService(
+      () => undefined,
+      stubBrain({
+        // The v2 brain returns null for register-intent text; the bot never
+        // registers from free text.
+        interpret: async () => null,
+      }),
+    );
+    const replies: string[] = [];
+
+    await stubbed.handleUpdate(
+      textUpdate({ fromId: RITA_CHAT, messageId: 1, text: "quiero registrar un gasto" }),
+      async (text) => {
+        replies.push(text);
+      },
+    );
+
+    expect(await prisma.expense.count()).toBe(0);
+    expect(replies.at(-2)).toBe(unresolvableReply());
   });
 });

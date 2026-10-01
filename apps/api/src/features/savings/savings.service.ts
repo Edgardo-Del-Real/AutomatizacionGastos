@@ -29,6 +29,28 @@ export class SavingsRuleService {
   }
 
   /**
+   * Lists the owner's savings rules oldest-first (D9): the repository already
+   * orders by createdAt ASC; an owner without rules gets an empty list.
+   */
+  async listRules(ownerId: string): Promise<SavingsRuleEntity[]> {
+    return this.repository.listByOwner(ownerId);
+  }
+
+  /**
+   * Deletes the owner's rule by keyword (D9), normalizing the keyword exactly
+   * like `defineRule` so `deleteRule(ownerId, "Entrenuts")` removes the rule
+   * stored as "entrenuts". Returns the deleted rule, or null when the owner
+   * has no rule for that keyword (graceful "no existe", nothing changes).
+   */
+  async deleteRule(ownerId: string, keyword: string): Promise<SavingsRuleEntity | null> {
+    const normalized = normalizeForMatch(keyword.trim());
+    if (normalized.length === 0) {
+      throw new ValidationFailedError("Savings rule keyword must not be empty");
+    }
+    return this.repository.delete(ownerId, normalized);
+  }
+
+  /**
    * Matches a note against the owner's savings rules. Matching is
    * diacritic-insensitive, word-boundary based, oldest-learned wins
    * (repository orders createdAt ASC), and singular/plural variants fold on

@@ -21,6 +21,19 @@ export function truncateNote(note: string): string {
   return `${note.slice(0, NOTE_MAX_LENGTH - 1)}…`;
 }
 
+/**
+ * Savings line state for the INGRESO confirmation (design "Savings line
+ * labels"): "auto" shows the matched rule's suggested percent (or "sin regla"
+ * when null); "percent" and "disabled" are manual choices that win over the
+ * suggestion in both the label and `resolveSplit`.
+ */
+export type SavingsChoice = { kind: "auto"; percent: number | null } | { kind: "percent"; percent: number } | { kind: "disabled" };
+
+/** Formats a percent for the savings texts using the comma decimal separator ("10,5%"). */
+function formatPercent(percent: number): string {
+  return `${String(percent).replace(".", ",")}%`;
+}
+
 /** v2 capture-type label for the preview/confirmation texts (menu-chosen type). */
 function captureTypeLabel(type: "REAL" | "PENDING" | "INGRESO" | "COMPARTIDO"): string {
   return type === "PENDING" ? "previsto" : type === "INGRESO" ? "ingreso" : type === "COMPARTIDO" ? "compartido" : "real";
@@ -31,9 +44,13 @@ export function successReply(amount: number, note: string | null, category: stri
   return `✅ Guardado: ${formatARS(amount)}${notePart} — Categoría: ${category}`;
 }
 
-/** Split confirmation (D7): reports gross, net and the saved amount. */
-export function successSplitReply(gross: number, net: number, savings: number): string {
-  return `✅ Guardado: ingreso neto ${formatARS(net)} de ${formatARS(gross)} — Ahorrado: ${formatARS(savings)} (categoría ahorro)`;
+/**
+ * Split confirmation (D7/D8): reports gross, net and the saved amount, and
+ * names the net INCOME's category — the net income keeps the preview-picked
+ * category, only the SAVINGS movement lands in "ahorro".
+ */
+export function successSplitReply(gross: number, net: number, savings: number, netCategory: string): string {
+  return `✅ Guardado: ingreso neto ${formatARS(net)} de ${formatARS(gross)} — Categoría: ${netCategory} — Ahorrado: ${formatARS(savings)} (categoría ahorro)`;
 }
 
 /**
@@ -209,6 +226,77 @@ export function savingsRuleDefinedReply(keyword: string, percent: number): strin
 
 export function savingsRuleInvalidReply(): string {
   return "El porcentaje de ahorro debe ser mayor a 0 y hasta 100 (ej: al 10%). No guardé nada.";
+}
+
+/** v2 — savings-rule sub-menu entry (design D1, spec bot-manage-savings): the three actions. */
+export function savingsAdminReply(): string {
+  return "Ahorro: elegí una opción.";
+}
+
+/** Savings-rule text prompt after `sa:new` (design D2): parsed by the same syntax as the command. */
+export function savingsRulePromptReply(): string {
+  return "Mandame la regla, por ejemplo: registrar ahorro: entrenuts al 10%.";
+}
+
+/** Lists the owner's savings rules oldest-first with keyword and percent (spec bot-manage-savings "List Rules"). */
+export function savingsRulesListReply(rules: { keyword: string; percent: number }[]): string {
+  if (rules.length === 0) {
+    return "No tenés ahorros configurados.";
+  }
+  const lines = rules.map((rule) => `- "${rule.keyword}" al ${formatPercent(rule.percent)}`);
+  return `Tus reglas de ahorro:\n${lines.join("\n")}`;
+}
+
+/** Delete pick ask for the savings-rule sub-menu (design D3): the rules render as buttons. */
+export function savingsRuleDeletePickReply(rules: { keyword: string; percent: number }[]): string {
+  const lines = rules.map((rule) => `- "${rule.keyword}" al ${formatPercent(rule.percent)}`);
+  return `¿Qué regla querés borrar?\n${lines.join("\n")}`;
+}
+
+/** Savings-rule delete confirmation gate (design D3): nothing is deleted until confirmed. */
+export function savingsRuleDeleteConfirmReply(keyword: string, percent: number): string {
+  return `¿Borrar la regla "${keyword}" (${formatPercent(percent)})? Confirmá abajo.`;
+}
+
+/** Confirms the executed savings-rule delete (spec telegram-bot "Delete a savings rule"). */
+export function savingsRuleDeletedReply(keyword: string): string {
+  return `Regla de ahorro "${keyword}" borrada.`;
+}
+
+/** Graceful "no existe" for deleting a keyword with no stored rule (nothing changes). */
+export function savingsRuleMissingReply(keyword: string): string {
+  return `No existe una regla de ahorro para "${keyword}". No borré nada.`;
+}
+
+/** Stale-pick reply for a rule deleted after the pick button was rendered (design D3). */
+export function savingsRuleGoneReply(): string {
+  return "Esa regla de ahorro ya no existe.";
+}
+
+/** Percent prompt after `[Otro]` in the INGRESO confirmation (design D4). */
+export function savingsPercentPromptReply(): string {
+  return "¿Qué porcentaje querés ahorrar de este ingreso? Mandámelo como número (ej: 15).";
+}
+
+/** Invalid-percent re-prompt: nothing is stored and the override is not set. */
+export function savingsPercentInvalidReply(): string {
+  return "El porcentaje debe ser mayor a 0 y hasta 100. Mandámelo de nuevo (ej: 15).";
+}
+
+/**
+ * Savings line label for the INGRESO confirmation (design "Savings line
+ * labels"): manual percent/disabled choices win over the matched-rule
+ * suggestion in both the label and `resolveSplit`.
+ */
+export function savingsLineLabel(choice: SavingsChoice): string {
+  switch (choice.kind) {
+    case "disabled":
+      return "Ahorro: no apartar nada";
+    case "percent":
+      return `Ahorro: ${formatPercent(choice.percent)}`;
+    case "auto":
+      return choice.percent === null ? "Ahorro: sin regla" : `Ahorro: ${formatPercent(choice.percent)} (regla)`;
+  }
 }
 
 export function setupQuestionReply(existing: string[]): string {

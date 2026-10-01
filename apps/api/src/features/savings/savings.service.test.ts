@@ -30,6 +30,14 @@ function fakeRepository(initial: SavingsRuleEntity[] = []): SavingsRuleRepositor
         .filter((rule) => rule.ownerId === ownerId)
         .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime() || a.keyword.localeCompare(b.keyword));
     },
+    async delete(ownerId: string, keyword: string): Promise<SavingsRuleEntity | null> {
+      const index = rules.findIndex((rule) => rule.ownerId === ownerId && rule.keyword === keyword);
+      if (index === -1) {
+        return null;
+      }
+      const [removed] = rules.splice(index, 1);
+      return removed ?? null;
+    },
   };
 }
 
@@ -239,5 +247,61 @@ describe("SavingsRuleService.resolveSplit", () => {
       kind: "split",
       percent: 5,
     });
+  });
+});
+
+describe("SavingsRuleService.listRules", () => {
+  it("returns the owner's rules oldest-first (no rules → empty list)", async () => {
+    const service = new SavingsRuleService(
+      fakeRepository([
+        { id: "2", ownerId: "owner-1", keyword: "sueldo", percent: 5, createdAt: new Date("2026-09-02T12:00:00.000Z") },
+        { id: "1", ownerId: "owner-1", keyword: "entrenuts", percent: 10, createdAt: new Date("2026-09-01T12:00:00.000Z") },
+        { id: "3", ownerId: "owner-2", keyword: "gym", percent: 7, createdAt: new Date("2026-09-01T12:00:00.000Z") },
+      ]),
+    );
+    const rules = await service.listRules("owner-1");
+    expect(rules.map((rule) => rule.keyword)).toEqual(["entrenuts", "sueldo"]);
+  });
+
+  it("returns an empty list for an owner without rules", async () => {
+    const service = new SavingsRuleService(fakeRepository([]));
+    await expect(service.listRules("owner-1")).resolves.toEqual([]);
+  });
+});
+
+describe("SavingsRuleService.deleteRule", () => {
+  it("deletes a rule by keyword, normalizing it like defineRule", async () => {
+    const repo = fakeRepository([
+      { id: "1", ownerId: "owner-1", keyword: "entrenuts", percent: 10, createdAt: new Date("2026-09-01T12:00:00.000Z") },
+    ]);
+    const service = new SavingsRuleService(repo);
+    const deleted = await service.deleteRule("owner-1", "Entrenuts");
+    expect(deleted?.keyword).toBe("entrenuts");
+    expect(repo.rules).toHaveLength(0);
+  });
+
+  it("returns null when the keyword has no stored rule and changes nothing", async () => {
+    const repo = fakeRepository([
+      { id: "1", ownerId: "owner-1", keyword: "entrenuts", percent: 10, createdAt: new Date("2026-09-01T12:00:00.000Z") },
+    ]);
+    const service = new SavingsRuleService(repo);
+    await expect(service.deleteRule("owner-1", "gym")).resolves.toBeNull();
+    expect(repo.rules).toHaveLength(1);
+  });
+
+  it("scopes the delete per owner: the other owner's rule remains", async () => {
+    const repo = fakeRepository([
+      { id: "1", ownerId: "owner-1", keyword: "sueldo", percent: 10, createdAt: new Date("2026-09-01T12:00:00.000Z") },
+      { id: "2", ownerId: "owner-2", keyword: "sueldo", percent: 20, createdAt: new Date("2026-09-01T12:00:00.000Z") },
+    ]);
+    const service = new SavingsRuleService(repo);
+    await service.deleteRule("owner-1", "sueldo");
+    expect(repo.rules).toHaveLength(1);
+    expect(repo.rules[0]).toMatchObject({ ownerId: "owner-2", keyword: "sueldo", percent: 20 });
+  });
+
+  it("rejects an empty keyword with a validation error", async () => {
+    const service = new SavingsRuleService(fakeRepository([]));
+    await expect(service.deleteRule("owner-1", "   ")).rejects.toBeInstanceOf(ValidationFailedError);
   });
 });

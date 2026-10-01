@@ -186,7 +186,7 @@ describe("TelegramService savings split on INGRESO (v2)", () => {
       occurredAt: expect.any(Date),
     });
     expect(h.mockCreateExpense).not.toHaveBeenCalled();
-    expect(h.replies.at(-2)).toBe(successSplitReply(1000, 900, 100));
+    expect(h.replies.at(-2)).toBe(successSplitReply(1000, 900, 100, "ahorro"));
     expect(h.replies.at(-1)).toBe(menuReply());
   });
 

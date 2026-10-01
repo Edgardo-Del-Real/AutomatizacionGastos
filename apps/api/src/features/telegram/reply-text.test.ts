@@ -53,11 +53,21 @@ import {
   recentQueryReply,
   reportsMenuReply,
   reservedCategoryReply,
+  savingsAdminReply,
   savingsForbiddenReply,
   savingsOverrideRedirectReply,
+  savingsPercentInvalidReply,
+  savingsPercentPromptReply,
   savingsQueryReply,
   savingsRuleDefinedReply,
+  savingsRuleDeletedReply,
+  savingsRuleDeleteConfirmReply,
+  savingsRuleDeletePickReply,
+  savingsRuleGoneReply,
   savingsRuleInvalidReply,
+  savingsRuleMissingReply,
+  savingsRulePromptReply,
+  savingsRulesListReply,
   selectionAbandonedReply,
   setupBatchDoneReply,
   setupDoneReply,
@@ -116,8 +126,8 @@ describe("reply builders", () => {
   });
 
   it("builds the split confirmation reporting gross, net and savings", () => {
-    expect(successSplitReply(1000, 900, 100)).toBe(
-      "✅ Guardado: ingreso neto $\u00A0900,00 de $\u00A01.000,00 — Ahorrado: $\u00A0100,00 (categoría ahorro)",
+    expect(successSplitReply(1000, 900, 100, "Sueldo")).toBe(
+      "✅ Guardado: ingreso neto $\u00A0900,00 de $\u00A01.000,00 — Categoría: Sueldo — Ahorrado: $\u00A0100,00 (categoría ahorro)",
     );
   });
 
@@ -222,6 +232,87 @@ describe("reply builders", () => {
     expect(savingsRuleDefinedReply("entrenuts", 10)).toContain("entrenuts");
     expect(savingsRuleDefinedReply("entrenuts", 10)).toContain("10%");
     expect(savingsRuleInvalidReply()).toContain("0");
+  });
+});
+
+describe("savings admin and manual-choice reply templates (savings-config)", () => {
+  it("builds the savings sub-menu entry with the three actions", () => {
+    const text = savingsAdminReply();
+
+    expect(text).toContain("Ahorro");
+    expect(text).toContain("elegí una opción");
+  });
+
+  it("prompts for the rule text in the savings sub-menu", () => {
+    const text = savingsRulePromptReply();
+
+    expect(text).toContain("registrar ahorro:");
+  });
+
+  it("lists the owner's savings rules with keyword and percent, oldest-first", () => {
+    const text = savingsRulesListReply([
+      { keyword: "entrenuts", percent: 10 },
+      { keyword: "sueldo", percent: 5.5 },
+    ]);
+
+    expect(text).toContain("entrenuts");
+    expect(text).toContain("10%");
+    expect(text).toContain("sueldo");
+    expect(text).toContain("5,5%");
+  });
+
+  it("replies the clear empty list when the owner has no rules", () => {
+    expect(savingsRulesListReply([])).toContain("No tenés ahorros configurados");
+  });
+
+  it("asks which rule to delete listing the rules", () => {
+    const text = savingsRuleDeletePickReply([{ keyword: "entrenuts", percent: 10 }]);
+
+    expect(text).toContain("¿Qué regla querés borrar?");
+    expect(text).toContain("entrenuts");
+    expect(text).toContain("10%");
+  });
+
+  it("confirms the rule delete naming the rule", () => {
+    const text = savingsRuleDeleteConfirmReply("entrenuts", 10);
+
+    expect(text).toContain("Borrar");
+    expect(text).toContain("entrenuts");
+    expect(text).toContain("10%");
+  });
+
+  it("confirms the executed delete", () => {
+    const text = savingsRuleDeletedReply("entrenuts");
+
+    expect(text).toContain("entrenuts");
+    expect(text).toContain("borrada");
+  });
+
+  it("replies missing for an unknown keyword", () => {
+    const text = savingsRuleMissingReply("gym");
+
+    expect(text).toContain("gym");
+    expect(text).toContain("No existe");
+  });
+
+  it("replies gone for a stale pick of an already-deleted rule", () => {
+    const text = savingsRuleGoneReply();
+
+    expect(text).toContain("ya no existe");
+  });
+
+  it("prompts for the percent after [Otro]", () => {
+    const text = savingsPercentPromptReply();
+
+    expect(text).toContain("porcentaje");
+  });
+
+  it("rejects an invalid percent and re-prompts without setting the override", () => {
+    const text = savingsPercentInvalidReply();
+
+    expect(text).toContain("0");
+    expect(text).toContain("100");
+    expect(text).toContain("de nuevo");
   });
 });
 

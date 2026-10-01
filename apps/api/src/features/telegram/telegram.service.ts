@@ -1221,7 +1221,7 @@ export class TelegramService {
     }
     const net = result.net?.amount ?? null;
     const savings = result.savings?.amount ?? null;
-    await this.safeReply(reply, successSplitReply(gross, net ?? 0, savings ?? 0));
+    await this.safeReply(reply, successSplitReply(gross, net ?? 0, savings ?? 0, "ahorro"));
     await this.sendMenu(reply);
     return true;
   }

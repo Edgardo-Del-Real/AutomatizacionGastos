@@ -7,7 +7,9 @@ export type TelegramCommand =
   | { type: "start" }
   | { type: "ayuda" }
   | { type: "savings-rule"; keyword: string; percent: number }
-  | { type: "savings-rule-invalid" };
+  | { type: "savings-rule-invalid" }
+  | { type: "savings-rule-list" }
+  | { type: "savings-rule-delete"; keyword: string };
 
 const REGISTER_RE = /^\s*registrar\s+categoria\s*:\s*(.+?)\s*$/;
 const RENAME_RE = /^\s*renombrar\s+categoria\s*:\s*(.+?)\s+a\s*:\s*(.+?)\s*$/;
@@ -19,6 +21,10 @@ const MENU_RE = /^\s*menu\s*$/;
 const START_RE = /^\s*start\s*$/;
 const AYUDA_RE = /^\s*ayuda\s*$/;
 const SAVINGS_RULE_RE = /^\s*registrar\s+ahorro\s*:\s*(.+?)\s+al\s+(-?\d+(?:[.,]\d+)?)%\s*$/;
+// D10 — savings-rule management commands. The delete regex keyword is
+// "ahorro" (never "categoria"), so it cannot collide with `borrar categoria:`.
+const SAVINGS_RULE_LIST_RE = /^\s*listar\s+ahorros\s*$/;
+const SAVINGS_RULE_DELETE_RE = /^\s*borrar\s+ahorro\s*:\s*(.+?)\s*$/;
 
 /**
  * v2 — detection-only classifier for the legacy text category-CRUD commands
@@ -108,6 +114,19 @@ export function parseCommand(text: string): TelegramCommand | null {
     };
   }
 
+  // D10 — savings-rule management commands (`listar ahorros`, `borrar ahorro:`).
+  if (SAVINGS_RULE_LIST_RE.test(normalized)) {
+    return { type: "savings-rule-list" };
+  }
+
+  const savingsRuleDelete = SAVINGS_RULE_DELETE_RE.exec(normalized);
+  if (savingsRuleDelete !== null && savingsRuleDelete[1] !== undefined && savingsRuleDelete[1].length > 0) {
+    return {
+      type: "savings-rule-delete",
+      keyword: sliceFromOriginal(syntaxNormalized, normalized, savingsRuleDelete[1]),
+    };
+  }
+
   return null;
 }
 
@@ -115,6 +134,24 @@ export function parseCommand(text: string): TelegramCommand | null {
 function sliceFromOriginal(original: string, normalized: string, value: string): string {
   const index = normalized.indexOf(value);
   return original.slice(index, index + value.length);
+}
+
+/**
+ * D10 — parses the free-form percent the owner types after `[Otro]` in the
+ * INGRESO confirmation: an optional `%` suffix and a comma (or dot) decimal
+ * separator are accepted. Returns the percent when `0 < percent <= 100`, or
+ * null when the input is empty, non-numeric, or out of range (nothing stored).
+ */
+export function parseSavingsPercentInput(input: string | number): number | null {
+  const raw = String(input).trim().replace(/%\s*$/, "").replace(",", ".");
+  if (raw.length === 0) {
+    return null;
+  }
+  const percent = Number(raw);
+  if (!Number.isFinite(percent) || percent <= 0 || percent > 100) {
+    return null;
+  }
+  return percent;
 }
 
 /**

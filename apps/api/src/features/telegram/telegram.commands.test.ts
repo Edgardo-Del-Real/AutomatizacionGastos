@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseCommand, parseLegacyCategoryCrud, parseSetupBatchCommand } from "./telegram.commands";
+import { parseCommand, parseLegacyCategoryCrud, parseSavingsPercentInput, parseSetupBatchCommand } from "./telegram.commands";
 
 describe("parseCommand (D12 normalization)", () => {
   it("normalizes a leading slash on the menu command", () => {
@@ -77,6 +77,82 @@ describe("parseCommand", () => {
 
   it("falls through to null for arbitrary text", () => {
     expect(parseCommand("hola que tal")).toBeNull();
+  });
+});
+
+describe("parseCommand savings-rule management (D10)", () => {
+  it("parses 'listar ahorros'", () => {
+    expect(parseCommand("listar ahorros")).toEqual({ type: "savings-rule-list" });
+  });
+
+  it("normalizes a leading slash and underscores on the list command", () => {
+    expect(parseCommand("/listar_ahorros")).toEqual({ type: "savings-rule-list" });
+  });
+
+  it("parses 'borrar ahorro: <palabra>' preserving the original spelling", () => {
+    expect(parseCommand("borrar ahorro: Entrenuts")).toEqual({
+      type: "savings-rule-delete",
+      keyword: "Entrenuts",
+    });
+  });
+
+  it("recognizes the delete command case-insensitively with accents", () => {
+    expect(parseCommand("BORRAR AHORRO: suéldo")).toEqual({
+      type: "savings-rule-delete",
+      keyword: "suéldo",
+    });
+  });
+
+  it("does not collide with 'borrar categoria:' (falls through)", () => {
+    expect(parseCommand("borrar categoria: Salud")).toBeNull();
+  });
+
+  it("falls through to null for an empty keyword value", () => {
+    expect(parseCommand("borrar ahorro:")).toBeNull();
+  });
+});
+
+describe("parseSavingsPercentInput (D10: optional %, comma decimal, 0 < p <= 100)", () => {
+  it("parses a plain integer percent", () => {
+    expect(parseSavingsPercentInput("15")).toBe(15);
+  });
+
+  it("accepts an optional percent sign", () => {
+    expect(parseSavingsPercentInput("15%")).toBe(15);
+  });
+
+  it("accepts a comma decimal separator", () => {
+    expect(parseSavingsPercentInput("15,5")).toBe(15.5);
+  });
+
+  it("accepts a dot decimal separator", () => {
+    expect(parseSavingsPercentInput("10.5%")).toBe(10.5);
+  });
+
+  it("accepts 100 as the inclusive upper bound", () => {
+    expect(parseSavingsPercentInput("100")).toBe(100);
+  });
+
+  it("rejects 0 and 100+ as out of range", () => {
+    expect(parseSavingsPercentInput("0")).toBeNull();
+    expect(parseSavingsPercentInput("150")).toBeNull();
+  });
+
+  it("rejects negative percents", () => {
+    expect(parseSavingsPercentInput("-5")).toBeNull();
+  });
+
+  it("rejects non-numeric text", () => {
+    expect(parseSavingsPercentInput("quince")).toBeNull();
+    expect(parseSavingsPercentInput("15abc")).toBeNull();
+  });
+
+  it("rejects an empty input", () => {
+    expect(parseSavingsPercentInput("")).toBeNull();
+  });
+
+  it("accepts a numeric input value", () => {
+    expect(parseSavingsPercentInput(15)).toBe(15);
   });
 });
 

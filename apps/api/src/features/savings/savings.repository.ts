@@ -7,6 +7,8 @@ export interface SavingsRuleRepository {
   upsert(ownerId: string, keyword: string, percent: number): Promise<SavingsRuleEntity>;
   /** Oldest-learned first (createdAt ASC, keyword ASC) so matchers are deterministic. */
   listByOwner(ownerId: string): Promise<SavingsRuleEntity[]>;
+  /** Deletes on [ownerId, keyword]; null when the rule does not exist. */
+  delete(ownerId: string, keyword: string): Promise<SavingsRuleEntity | null>;
 }
 
 type SavingsRuleRow = {
@@ -45,5 +47,20 @@ export class PrismaSavingsRuleRepository implements SavingsRuleRepository {
       orderBy: [{ createdAt: "asc" }, { keyword: "asc" }],
     });
     return rows.map(mapRuleRow);
+  }
+
+  async delete(ownerId: string, keyword: string): Promise<SavingsRuleEntity | null> {
+    try {
+      const row = await this.prisma.savingsRule.delete({
+        where: { ownerId_keyword: { ownerId, keyword } },
+      });
+      return mapRuleRow(row);
+    } catch (error) {
+      // P2025 = record not found: the owner has no rule for that keyword.
+      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2025") {
+        return null;
+      }
+      throw error;
+    }
   }
 }

@@ -23,8 +23,8 @@ const SECTIONS: ReadonlyArray<{ id: DashboardSection; label: string }> = [
 
 const NAV_BUTTON_CLASS =
   "rounded-full border border-transparent px-3 py-1.5 text-sm font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-soft";
-const NAV_ACTIVE_CLASS = "border-accent/30 bg-accent/10 text-accent";
-const NAV_IDLE_CLASS = "text-ink-soft hover:bg-white/5 hover:text-ink";
+const NAV_ACTIVE_CLASS = "border-accent/20 bg-accent-soft text-accent";
+const NAV_IDLE_CLASS = "text-ink-soft hover:bg-surface-raised hover:text-ink";
 
 function Dashboard() {
   const { viewerId } = useViewer();
@@ -48,13 +48,13 @@ function Dashboard() {
 
   return (
     <main className="min-h-screen bg-canvas text-ink antialiased">
-      <header className="sticky top-0 z-40 border-b border-border bg-canvas/80 backdrop-blur-md">
+      <header className="sticky top-0 z-40 border-b border-border bg-canvas/90 backdrop-blur-md">
         <div className="mx-auto w-full max-w-6xl px-4 py-4 sm:px-6 lg:px-8">
           <div className="flex flex-wrap items-center justify-between gap-x-6 gap-y-3">
             <div className="flex items-center gap-3">
               <div
                 aria-hidden="true"
-                className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-gradient-to-br from-accent to-accent-strong shadow-card"
+                className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-accent shadow-card"
               >
                 <svg
                   viewBox="0 0 24 24"
@@ -72,10 +72,10 @@ function Dashboard() {
               </div>
               <div>
                 <h1 className="text-lg font-bold tracking-tight text-ink sm:text-xl">
-                  Rita Dashboard
+                  Rita
                 </h1>
                 <p className="text-xs text-ink-soft sm:text-sm">
-                  Resumen de ingresos y gastos
+                  Tus finanzas, en orden
                 </p>
               </div>
             </div>
@@ -98,7 +98,7 @@ function Dashboard() {
                       : NAV_IDLE_CLASS
                   }`}
                 >
-                  {section.label}
+                  {section.id === "kpis" ? "Resumen" : section.id === "charts" ? "Análisis" : section.label}
                 </button>
               ))}
             </nav>
@@ -108,6 +108,17 @@ function Dashboard() {
       <div className="mx-auto w-full max-w-6xl px-4 py-8 sm:px-6 lg:px-8">
         {activeSection === "kpis" && (
           <div className="space-y-6">
+            <div className="max-w-2xl">
+              <p className="text-xs font-semibold tracking-[0.18em] text-accent uppercase">
+                Resumen financiero
+              </p>
+              <h2 className="mt-2 text-3xl font-bold tracking-tight text-ink sm:text-4xl">
+                Tomá el control de tu mes.
+              </h2>
+              <p className="mt-2 text-sm leading-6 text-ink-soft">
+                Una vista simple de lo que entra, lo que sale y lo que estás construyendo.
+              </p>
+            </div>
             <SummarySection state={summaryState}>
               {(data) => (
                 <>

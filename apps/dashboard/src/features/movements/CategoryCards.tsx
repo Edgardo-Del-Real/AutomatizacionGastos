@@ -44,16 +44,22 @@ export function CategoryCards({ categories, refreshToken }: CategoryCardsProps) 
     );
 
     return (
-      <section aria-label="Gastos por categoría" className="space-y-4">
+      <section aria-label="Movimientos por categoría" className="space-y-4">
         <h2 className="text-base font-semibold text-ink">
-          Gastos por categoría
+          Movimientos por categoría
         </h2>
         <ul
           aria-label="Categorías"
           className="grid grid-cols-2 gap-4 lg:grid-cols-4"
         >
-          {state.data.map((category) => {
-            const spent = spentByCategory.get(category.name) ?? 0;
+          {state.data
+            .filter((category) => category.type !== "SAVINGS")
+            .map((category) => {
+            const summary = categories.find((item) => item.name === category.name);
+            const isIncome = category.type === "INCOME";
+            const amount = isIncome
+              ? summary?.incomeAmount ?? 0
+              : spentByCategory.get(category.name) ?? 0;
             return (
               <li
                 key={category.name}
@@ -62,12 +68,16 @@ export function CategoryCards({ categories, refreshToken }: CategoryCardsProps) 
                 <h3 className="text-xs font-semibold tracking-wide text-ink-faint uppercase">
                   {category.name}
                 </h3>
-                <p className="mt-2 font-mono text-2xl font-bold tabular-nums text-expense">
-                  {formatARS(spent)}
+                <p
+                  className={`mt-2 font-mono text-2xl font-bold tabular-nums ${
+                    isIncome ? "text-income" : "text-expense"
+                  }`}
+                >
+                  {formatARS(amount)}
                 </p>
               </li>
             );
-          })}
+            })}
         </ul>
       </section>
     );

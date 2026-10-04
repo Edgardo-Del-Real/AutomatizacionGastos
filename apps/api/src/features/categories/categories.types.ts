@@ -1,7 +1,7 @@
 import type { KeywordRule } from "./matcher";
 
-/** Category kind (D9): SAVINGS categories ("ahorro") hold only SAVINGS movements. */
-export type CategoryType = "NORMAL" | "SAVINGS";
+/** Category kind: movement-compatible categories plus the reserved savings category. */
+export type CategoryType = "NORMAL" | "MIXED" | "EXPENSE" | "INCOME" | "SAVINGS";
 
 export type CategoryEntity = {
   id: string;

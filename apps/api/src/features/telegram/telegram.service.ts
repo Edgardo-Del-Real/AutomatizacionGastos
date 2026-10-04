@@ -704,24 +704,35 @@ export class TelegramService {
     await this.safeReply(reply, previewReply(amount, note, type), await this.previewKeyboard(ownerId, payload, 0), undefined);
   }
 
-  /** NORMAL categories only (`type === "NORMAL"` and name ≠ "otro"), sorted alphabetically. */
-  private async normalCategoryList(ownerId: string): Promise<{ id: string; name: string }[]> {
+  /** Categories compatible with the movement type, excluding reserved categories. */
+  private async normalCategoryList(
+    ownerId: string,
+    movementType: "EXPENSE" | "INCOME",
+  ): Promise<{ id: string; name: string }[]> {
     const categories = await this.deps.categoryService.listCategories(ownerId);
     return categories
-      .filter((category) => category.type === "NORMAL" && normalizeForMatch(category.name) !== "otro")
+      .filter(
+        (category) =>
+          normalizeForMatch(category.name) !== "otro" &&
+          category.type !== "SAVINGS" &&
+          (category.type === undefined ||
+            category.type === "NORMAL" ||
+            category.type === "MIXED" ||
+            category.type === movementType),
+      )
       .sort((a, b) => a.name.localeCompare(b.name))
       .map((category) => ({ id: category.id, name: category.name }));
   }
 
   /**
    * The v2 preview keyboard (spec quick-capture "Capture Preview with
-   * Save/Correct"; movement-categories "Preview Category Selection"): NORMAL
-   * categories only (`type === "NORMAL"` and name ≠ "otro"), 5 per page, with
-   * `cp:<page>` navigation and the ➕ create row. NO Guardar/Corregir rows —
-   * they live only on the confirmation keyboard (`previewConfirmKeyboard`).
+   * Save/Correct"; movement-categories "Preview Category Selection"): compatible
+   * categories, 5 per page, with `cp:<page>` navigation and the ➕ create row.
+   * NO Guardar/Corregir rows — they live only on the confirmation keyboard
+   * (`previewConfirmKeyboard`).
    */
   private async previewKeyboard(ownerId: string, payload: PreviewPayload, page: number): Promise<InlineKeyboard> {
-    const normal = await this.normalCategoryList(ownerId);
+    const normal = await this.normalCategoryList(ownerId, payload.type === "INGRESO" ? "INCOME" : "EXPENSE");
     const pageSize = 5;
     const pageItems = normal.slice(page * pageSize, page * pageSize + pageSize);
     const rows: InlineButton[][] = pageItems.map((category) => [
@@ -740,19 +751,15 @@ export class TelegramService {
   }
 
   /**
-   * Two-step confirmation keyboard (design D7): ≤5 NORMAL category rows (no
-   * nav on the confirmation — the preview message keeps pagination) + ➕ Crear
-   * categoría + the savings row [5%][10%][Otro][No apartar] for INGRESO only +
-   * [✅ Guardar] [✏️ Corregir] — at most 8 rows. `sv:*` callbacks carry ONLY
-   * the save token, never a percent or a name (spec bot-inline-interactions
-   * "Savings callbacks encode tokens").
+   * Two-step confirmation keyboard (design D7): after a category is selected,
+   * the confirmation only offers the optional savings row for INGRESO and
+   * [✅ Guardar] [✏️ Corregir]. Category choices remain on the preview message
+   * before selection. `sv:*` callbacks carry ONLY the save token, never a
+   * percent or a name (spec bot-inline-interactions "Savings callbacks encode
+   * tokens").
    */
-  private async previewConfirmKeyboard(ownerId: string, payload: PreviewPayload): Promise<InlineKeyboard> {
-    const normal = await this.normalCategoryList(ownerId);
-    const rows: InlineButton[][] = normal.slice(0, 5).map((category) => [
-      { text: category.name, callback_data: buildCallbackData(["cat", category.id]) },
-    ]);
-    rows.push([{ text: "➕ Crear categoría", callback_data: buildCallbackData(["pv", "catnew", payload.saveToken]) }]);
+  private previewConfirmKeyboard(payload: PreviewPayload): InlineKeyboard {
+    const rows: InlineButton[][] = [];
     if (payload.type === "INGRESO") {
       rows.push([
         { text: "5%", callback_data: `sv:5:${payload.saveToken}` },
@@ -809,7 +816,7 @@ export class TelegramService {
         savingsChoice = { kind: "auto", percent: suggested };
       }
     }
-    const keyboard = await this.previewConfirmKeyboard(ownerId, payload);
+    const keyboard = this.previewConfirmKeyboard(payload);
     return this.safeReply(
       reply,
       previewConfirmReply(payload.amount, payload.note, payload.type, category, savingsChoice),
@@ -1326,7 +1333,11 @@ export class TelegramService {
       try {
         const created = await this.deps.categoryService.createCategory(ownerId, body);
         await this.deps.botStateRepository.set({ ownerId, state: IDLE, pendingMovementId: null, pendingNote: null });
-        await this.safeReply(reply, categoryCreatedReply(created.name));
+        if (created.type === "SAVINGS") {
+          await this.safeReply(reply, reservedCategoryReply(body, "ahorro"));
+        } else {
+          await this.safeReply(reply, categoryCreatedReply(created.name));
+        }
         await this.sendMenu(reply);
         return;
       } catch (error) {
@@ -1390,7 +1401,14 @@ export class TelegramService {
 
     const preview = payload.preview;
     try {
-      const created = await this.deps.categoryService.createCategory(ownerId, body);
+      const created = await this.deps.categoryService.createCategory(
+        ownerId,
+        body,
+        preview.type === "INGRESO" ? "INCOME" : "EXPENSE",
+      );
+      if (created.type === "SAVINGS") {
+        throw new ReservedCategoryError(`Category "${body}" is the reserved concept "ahorro"`, "ahorro");
+      }
       const updated: PreviewPayload = { ...preview, category: created.name };
       // Two-step flow, step 2: the created category is selected and the
       // confirmation message is shown (with Guardar/Corregir), not the preview.
@@ -1662,6 +1680,7 @@ export class TelegramService {
     reply?: ReplyPort,
   ): Promise<boolean> {
     await this.deps.categoryService.ensureAhorro(ownerId);
+    await this.deps.categoryService.assertOwnerCategory?.(ownerId, netCategory, "INCOME");
     const result = await this.deps.expenseService.createIncomeWithSavings({
       ownerId,
       gross,
@@ -1693,6 +1712,7 @@ export class TelegramService {
     status: "PENDING" | "PAID",
   ): Promise<{ id: string } | null> {
     try {
+      await this.deps.categoryService.assertOwnerCategory?.(ownerId, category, type);
       return await this.deps.expenseService.createExpense(
         {
           amount,
@@ -2115,7 +2135,7 @@ export class TelegramService {
   }
 
   /**
-   * cc:<catId> — reassign the picked movement to the picked NORMAL category
+   * cc:<catId> — reassign the picked movement to the selected compatible category
    * (spec movement-correction): resolves the category name at callback time,
    * updates via `updateMovement`, confirms with the movement facts and returns
    * to the menu. A deleted movement replies honestly.
@@ -2240,14 +2260,18 @@ export class TelegramService {
   }
 
   /**
-   * NORMAL-category buttons: `<prefix>:<id>` rows, 7 per page + `cp:` nav
-   * (design D9). Excludes "otro" (legacy reserved) and "ahorro" (SAVINGS) —
-   * spec movement-categories / bot-manage-categories pick lists.
+   * Category buttons: `<prefix>:<id>` rows, 7 per page + `cp:` nav (design D9).
+   * Excludes "otro" (legacy reserved) and "ahorro" (SAVINGS) — spec
+   * movement-categories / bot-manage-categories pick lists.
    */
   private async categoryPickKeyboard(ownerId: string, prefix: string, page: number): Promise<InlineKeyboard> {
     const categories = await this.deps.categoryService.listCategories(ownerId);
     const normal = categories
-      .filter((category) => category.type === "NORMAL" && normalizeForMatch(category.name) !== "otro")
+      .filter(
+        (category) =>
+          category.type !== "SAVINGS" &&
+          normalizeForMatch(category.name) !== "otro",
+      )
       .sort((a, b) => a.name.localeCompare(b.name));
     const pageSize = 7;
     const pageItems = normal.slice(page * pageSize, page * pageSize + pageSize);
@@ -2470,9 +2494,13 @@ export class TelegramService {
         continue;
       }
       try {
-        await this.deps.categoryService.createCategory(ownerId, name);
-        created.push(name);
-        existingNormalized.add(normalizeForMatch(name));
+        const category = await this.deps.categoryService.createCategory(ownerId, name);
+        if (category.type === "SAVINGS") {
+          redirects.push({ name, concept: "ahorro" });
+        } else {
+          created.push(name);
+          existingNormalized.add(normalizeForMatch(name));
+        }
       } catch (error) {
         if (error instanceof ReservedCategoryError) {
           redirects.push({ name, concept: error.concept });

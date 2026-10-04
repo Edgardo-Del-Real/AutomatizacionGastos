@@ -165,12 +165,12 @@ describe("reply builders", () => {
   it("builds the setup-done reply with reserved redirects", () => {
     const text = setupDoneWithRedirectsReply(
       ["Cafe", "otro"],
-      [{ name: "gastos fijos", concept: "gasto fijo" }],
+      [{ name: "previsto", concept: "previsto" }],
     );
 
     expect(text).toContain("Cafe");
     expect(text).toContain("otro");
-    expect(text).toContain("gastos fijos");
+    expect(text).toContain("previsto");
     expect(text).toContain("previsto");
   });
 
@@ -189,15 +189,14 @@ describe("reply builders", () => {
 
   it.each([
     ["previsto", "previsto: <monto> <nota>"],
-    ["gasto fijo", "previsto: <monto> <nota>"],
     ["ahorro", "registrar ahorro:"],
     ["compartido", "compartido:"],
     ["compartida", "compartido:"],
     ["otro", "respaldo"],
   ] as const)("builds the reserved redirect for the %s concept teaching the system usage", (concept, teaches) => {
-    const text = reservedCategoryReply("gastos fijos", concept);
+    const text = reservedCategoryReply(concept, concept);
 
-    expect(text).toContain("gastos fijos");
+    expect(text).toContain(concept);
     expect(text).toContain(teaches);
   });
 

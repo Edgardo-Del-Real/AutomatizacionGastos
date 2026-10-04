@@ -51,7 +51,7 @@ The `✏️ Renombrar categoría` button MUST list the owner's categories as but
 #### Scenario: Rename to a reserved name rejected
 
 - GIVEN the owner picked a category
-- WHEN they send "gastos fijos" as the new name
+- WHEN they send "previsto" as the new name
 - THEN the rename is rejected and the menu returns
 
 ### Requirement: Delete Category

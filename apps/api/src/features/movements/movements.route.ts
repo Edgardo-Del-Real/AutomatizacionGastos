@@ -62,7 +62,7 @@ export const movementsRoute: FastifyPluginAsync<MovementsRouteOptions> = async (
   app.get("/movements/categories", async (request, reply) => {
     const ownerId = readQueryOwnerId(request.query);
     const categories = await categoryService.listCategories(ownerId);
-    return reply.send(categories.map(({ name, keywords }) => ({ name, keywords })));
+    return reply.send(categories.map(({ name, keywords, type }) => ({ name, keywords, type })));
   });
 
   app.patch("/movements/:id", async (request, reply) => {

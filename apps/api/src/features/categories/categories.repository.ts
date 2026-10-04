@@ -18,7 +18,7 @@ export interface CategoryRepository {
 export class PrismaCategoryRepository implements CategoryRepository {
   constructor(private readonly prisma: PrismaClient) {}
 
-  async create(ownerId: string, name: string, type: CategoryType = "NORMAL"): Promise<CategoryEntity> {
+  async create(ownerId: string, name: string, type: CategoryType = "MIXED"): Promise<CategoryEntity> {
     return this.prisma.category.create({ data: { ownerId, name, type } });
   }
 
@@ -76,7 +76,7 @@ export class PrismaCategoryRepository implements CategoryRepository {
     return this.prisma.category.upsert({
       where: { ownerId_name: { ownerId, name: "otro" } },
       update: {},
-      create: { ownerId, name: "otro", type: "NORMAL" },
+      create: { ownerId, name: "otro", type: "MIXED" },
     });
   }
 

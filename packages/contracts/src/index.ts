@@ -129,6 +129,7 @@ export type UpdateMovementInput = z.infer<typeof updateMovementSchema>;
 export const ownerCategorySchema = z.object({
   name: z.string(),
   keywords: z.array(z.string()),
+  type: z.enum(["NORMAL", "MIXED", "EXPENSE", "INCOME", "SAVINGS"]).optional(),
 });
 
 export type OwnerCategory = z.infer<typeof ownerCategorySchema>;

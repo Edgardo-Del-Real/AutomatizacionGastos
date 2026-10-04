@@ -20,23 +20,17 @@ function resolveTestDatabaseUrl(): string {
 }
 
 /**
- * Finds the hand-written savings-rule migration SQL (D11): the newest migration
- * whose body mentions SAVINGS. The static pins below keep the migration honest
- * (enum value added, CategoryType created, ahorro converted, movements untouched).
+ * Finds the hand-written savings-rule migration SQL (D11) by its stable prefix.
  */
 function savingsMigrationSql(): string {
   const migrationsDir = join(__dirname, "..", "..", "..", "prisma", "migrations");
-  const dirs = readdirSync(migrationsDir, { withFileTypes: true })
-    .filter((entry) => entry.isDirectory())
-    .map((entry) => entry.name)
-    .sort();
-  for (let i = dirs.length - 1; i >= 0; i -= 1) {
-    const sql = readFileSync(join(migrationsDir, dirs[i]!, "migration.sql"), "utf8");
-    if (sql.includes("SAVINGS")) {
-      return sql;
-    }
+  const directory = readdirSync(migrationsDir, { withFileTypes: true }).find(
+    (entry) => entry.isDirectory() && entry.name.startsWith("20260927090000_savings_rule"),
+  );
+  if (directory !== undefined) {
+    return readFileSync(join(migrationsDir, directory.name, "migration.sql"), "utf8");
   }
-  throw new Error("No migration contains SAVINGS");
+  throw new Error("Savings-rule migration not found");
 }
 
 describe("savings-rule migration (D11)", () => {
@@ -104,14 +98,14 @@ describe("savings-rule migration (D11)", () => {
       expect(values).toContain("SAVINGS");
     });
 
-    it("defaults a new category to NORMAL", async () => {
+    it("defaults a new category to MIXED", async () => {
       await prisma.$executeRawUnsafe(
         `INSERT INTO "Category" ("id", "ownerId", "name") VALUES ('${randomUUID()}', 'owner-1', 'Salud')`,
       );
       const row = await prisma.$queryRaw<{ type: string }[]>`
         SELECT "type" FROM "Category" WHERE "ownerId" = 'owner-1'
       `;
-      expect(row[0]?.type).toBe("NORMAL");
+      expect(row[0]?.type).toBe("MIXED");
     });
 
     it("stores a SAVINGS-typed ahorro category", async () => {

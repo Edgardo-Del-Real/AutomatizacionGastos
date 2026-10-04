@@ -145,21 +145,19 @@ describe("App", () => {
     render(<App />);
 
     // Spanish header.
-    expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent(
-      "Rita Dashboard",
-    );
-    expect(screen.getByText("Resumen de ingresos y gastos")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent("Rita");
+    expect(screen.getByText("Tus finanzas, en orden")).toBeInTheDocument();
 
     const nav = screen.getByRole("navigation", {
       name: "Secciones del dashboard",
     });
     const buttons = within(nav).getAllByRole("button");
     expect(buttons.map((button) => button.textContent)).toEqual([
-      "KPIs",
-      "Gráficos",
+      "Resumen",
+      "Análisis",
       "Movimientos",
     ]);
-    expect(screen.getByRole("button", { name: "KPIs" })).toHaveAttribute(
+    expect(screen.getByRole("button", { name: "Resumen" })).toHaveAttribute(
       "aria-current",
       "page",
     );
@@ -170,7 +168,7 @@ describe("App", () => {
     expect(screen.queryByRole("table")).toBeNull();
   });
 
-  it("shows only the charts section when Gráficos is selected", async () => {
+  it("shows only the charts section when Análisis is selected", async () => {
     const user = userEvent.setup();
     fetchMovementSummaryMock.mockResolvedValue(summary);
     fetchCategoriesMock.mockResolvedValue([]);
@@ -180,7 +178,7 @@ describe("App", () => {
       expect(screen.getByRole("heading", { name: "Ingresos" })).toBeInTheDocument(),
     );
 
-    await user.click(screen.getByRole("button", { name: "Gráficos" }));
+    await user.click(screen.getByRole("button", { name: "Análisis" }));
 
     expect(
       screen.getByRole("heading", { name: "¿Dónde está tu dinero?" }),
@@ -192,7 +190,7 @@ describe("App", () => {
     ).toBeInTheDocument();
     expect(screen.queryByRole("heading", { name: "Ingresos" })).toBeNull();
     expect(screen.queryByRole("table")).toBeNull();
-    expect(screen.getByRole("button", { name: "Gráficos" })).toHaveAttribute(
+    expect(screen.getByRole("button", { name: "Análisis" })).toHaveAttribute(
       "aria-current",
       "page",
     );
@@ -293,7 +291,15 @@ describe("App", () => {
     expect(fetchMovementSummaryMock).toHaveBeenCalledTimes(1);
 
     const firstRow = within(screen.getAllByRole("row")[1]!);
-    await user.click(firstRow.getByRole("button", { name: /eliminar/i }));
+    await user.click(
+      firstRow.getByRole("button", { name: "Abrir acciones del movimiento" }),
+    );
+    await user.click(
+      within(screen.getByRole("menu", { name: "Acciones del movimiento" })).getByRole(
+        "button",
+        { name: /eliminar/i },
+      ),
+    );
     await user.click(
       within(screen.getByRole("dialog")).getByRole("button", {
         name: /eliminar/i,
@@ -322,7 +328,15 @@ describe("App", () => {
     await waitFor(() => expect(screen.getByRole("table")).toBeInTheDocument());
 
     const firstRow = within(screen.getAllByRole("row")[1]!);
-    await user.click(firstRow.getByRole("button", { name: /editar/i }));
+    await user.click(
+      firstRow.getByRole("button", { name: "Abrir acciones del movimiento" }),
+    );
+    await user.click(
+      within(screen.getByRole("menu", { name: "Acciones del movimiento" })).getByRole(
+        "button",
+        { name: /editar/i },
+      ),
+    );
     const form = await screen.findByRole("form", { name: "Editar movimiento" });
     await user.clear(within(form).getByLabelText("Nota"));
     await user.type(within(form).getByLabelText("Nota"), "sueldo agosto");

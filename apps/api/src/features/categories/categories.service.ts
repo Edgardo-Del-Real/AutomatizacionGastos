@@ -6,11 +6,23 @@ import { matchCategory, normalizeForMatch, normalizeForMatchTolerant, type Keywo
 import { ReservedCategoryError, resolveReservedConcept } from "./reserved";
 
 const AHORRO = "ahorro";
+const INCOME_CATEGORY_NAMES = new Set([
+  "sueldo",
+  "sueldos",
+  "salario",
+  "salarios",
+  "honorario",
+  "honorarios",
+  "venta",
+  "ventas",
+  "ingreso",
+  "ingresos",
+]);
 
 export class CategoryService {
   constructor(private readonly repository: CategoryRepository) {}
 
-  async createCategory(ownerId: string, name: string): Promise<CategoryEntity> {
+  async createCategory(ownerId: string, name: string, requestedType: CategoryType = "MIXED"): Promise<CategoryEntity> {
     const trimmed = name.trim();
     if (trimmed.length === 0) {
       throw new ValidationFailedError("Category name must not be empty");
@@ -19,6 +31,9 @@ export class CategoryService {
     // never a duplicate error.
     if (normalizeForMatch(trimmed) === AHORRO) {
       return this.ensureAhorro(ownerId);
+    }
+    if (requestedType === "SAVINGS") {
+      throw new ValidationFailedError('Only the reserved "ahorro" category can use the SAVINGS type');
     }
     // Reserved guard: folded "ahorros" is rejected (never upserted, never
     // NORMAL); every other folded reserved member gets its educational
@@ -32,8 +47,12 @@ export class CategoryService {
       );
     }
     await this.assertNameAvailable(ownerId, trimmed);
+    const type =
+      requestedType === "MIXED" && INCOME_CATEGORY_NAMES.has(normalizeForMatch(trimmed))
+        ? "INCOME"
+        : requestedType;
     try {
-      return await this.repository.create(ownerId, trimmed, "NORMAL");
+      return await this.repository.create(ownerId, trimmed, type);
     } catch (error) {
       if (isUniqueConstraintViolation(error)) {
         throw new ValidationFailedError(`Category "${trimmed}" already exists`);
@@ -70,8 +89,8 @@ export class CategoryService {
     if (normalizeForMatch(to) === AHORRO) {
       throw new SavingsForbiddenError(`Cannot rename a category to "${AHORRO}"`);
     }
-    // Reserved guard (rename side): folded reserved targets (previsto,
-    // gastos fijos, ahorros, compartidos, otros, provisto) are rejected before
+    // Reserved guard (rename side): folded reserved targets (previsto, ahorros,
+    // compartidos, otros, provisto) are rejected before
     // the availability check so they never read as duplicates.
     const reserved = resolveReservedConcept(to);
     if (reserved !== null) {
@@ -122,7 +141,7 @@ export class CategoryService {
     return this.repository.ensureOtro(ownerId);
   }
 
-  /** D9: upserts the SAVINGS-typed "ahorro" category for savings splits. */
+  /** Upserts the reserved SAVINGS-typed "ahorro" category for savings splits. */
   async ensureAhorro(ownerId: string): Promise<CategoryEntity> {
     return this.repository.ensureAhorro(ownerId);
   }
@@ -149,8 +168,17 @@ export class CategoryService {
     if (category === undefined) {
       throw new ValidationFailedError(`Category "${trimmed}" does not belong to the owner`);
     }
-    if (category.type === "SAVINGS" && (movementType === "EXPENSE" || movementType === "INCOME")) {
+    if (category.type === "SAVINGS" && movementType !== undefined && movementType !== "SAVINGS") {
       throw new SavingsForbiddenError(`The SAVINGS category "${trimmed}" is only valid for SAVINGS movements`);
+    }
+    if (
+      movementType !== undefined &&
+      ((category.type === "INCOME" && movementType !== "INCOME") ||
+        (category.type === "EXPENSE" && movementType !== "EXPENSE"))
+    ) {
+      throw new ValidationFailedError(
+        `The category "${trimmed}" is only valid for ${category.type === "INCOME" ? "INCOME" : "EXPENSE"} movements`,
+      );
     }
   }
 

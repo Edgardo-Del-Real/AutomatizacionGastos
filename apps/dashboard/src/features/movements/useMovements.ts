@@ -23,7 +23,9 @@ export function useMovements(
 
   useEffect(() => {
     let cancelled = false;
-    setState({ status: "loading" });
+    setState((current) =>
+      current.status === "idle" ? { status: "loading" } : current,
+    );
     fetchMovements(ownerId, filters, visibility)
       .then((data) => {
         if (!cancelled) setState({ status: "success", data });

@@ -261,6 +261,7 @@ describe("MovementList", () => {
   });
 
   it("exposes edit and delete actions on every movement row", async () => {
+    const user = userEvent.setup();
     fetchMovementsMock.mockResolvedValue(movements);
     fetchCategoriesMock.mockResolvedValue([]);
 
@@ -269,18 +270,40 @@ describe("MovementList", () => {
 
     const rows = screen.getAllByRole("row");
     expect(rows).toHaveLength(3); // header + 2 movement rows
+    await user.click(within(rows[1]!).getByRole("button", { name: /abrir acciones/i }));
     expect(
       within(rows[1]!).getByRole("button", { name: /editar/i }),
     ).toBeInTheDocument();
     expect(
       within(rows[1]!).getByRole("button", { name: /eliminar/i }),
     ).toBeInTheDocument();
+    await user.click(within(rows[2]!).getByRole("button", { name: /abrir acciones/i }));
     expect(
       within(rows[2]!).getByRole("button", { name: /editar/i }),
     ).toBeInTheDocument();
     expect(
       within(rows[2]!).getByRole("button", { name: /eliminar/i }),
     ).toBeInTheDocument();
+  });
+
+  it("closes the actions menu when clicking outside it", async () => {
+    const user = userEvent.setup();
+    fetchMovementsMock.mockResolvedValue(movements);
+
+    render(<MovementList />);
+    await waitFor(() => expect(screen.getByRole("table")).toBeInTheDocument());
+
+    const firstRow = within(screen.getAllByRole("row")[1]!);
+    await user.click(
+      firstRow.getByRole("button", { name: /abrir acciones/i }),
+    );
+    expect(screen.getByRole("menu", { name: /acciones del movimiento/i })).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: /cerrar acciones/i }));
+
+    expect(
+      screen.queryByRole("menu", { name: /acciones del movimiento/i }),
+    ).toBeNull();
   });
 
   it("edits a movement from the row and bumps refresh on success", async () => {
@@ -297,6 +320,7 @@ describe("MovementList", () => {
     await waitFor(() => expect(screen.getByRole("table")).toBeInTheDocument());
 
     const firstRow = within(screen.getAllByRole("row")[1]!);
+    await user.click(firstRow.getByRole("button", { name: /abrir acciones/i }));
     await user.click(firstRow.getByRole("button", { name: /editar/i }));
 
     const form = await screen.findByRole("form", { name: "Editar movimiento" });
@@ -323,6 +347,7 @@ describe("MovementList", () => {
     await waitFor(() => expect(screen.getByRole("table")).toBeInTheDocument());
 
     const firstRow = within(screen.getAllByRole("row")[1]!);
+    await user.click(firstRow.getByRole("button", { name: /abrir acciones/i }));
     await user.click(firstRow.getByRole("button", { name: /eliminar/i }));
 
     const dialog = screen.getByRole("dialog");
@@ -347,6 +372,7 @@ describe("MovementList", () => {
     await waitFor(() => expect(screen.getByRole("table")).toBeInTheDocument());
 
     const firstRow = within(screen.getAllByRole("row")[1]!);
+    await user.click(firstRow.getByRole("button", { name: /abrir acciones/i }));
     await user.click(firstRow.getByRole("button", { name: /eliminar/i }));
     await user.click(
       within(screen.getByRole("dialog")).getByRole("button", {
@@ -370,6 +396,7 @@ describe("MovementList", () => {
     await waitFor(() => expect(screen.getByRole("table")).toBeInTheDocument());
 
     const firstRow = within(screen.getAllByRole("row")[1]!);
+    await user.click(firstRow.getByRole("button", { name: /abrir acciones/i }));
     await user.click(firstRow.getByRole("button", { name: /eliminar/i }));
     await user.click(
       within(screen.getByRole("dialog")).getByRole("button", {
@@ -391,8 +418,7 @@ describe("MovementList", () => {
     renderWithViewer(<MovementList />, duo);
     await waitFor(() => expect(screen.getByRole("table")).toBeInTheDocument());
 
-    expect(screen.getByText("Compartido · Edgardo")).toBeInTheDocument();
-    expect(screen.getByText("Compartido · Rita")).toBeInTheDocument();
+    expect(screen.getAllByLabelText("Movimiento compartido")).toHaveLength(2);
 
     // The individual row (newest, sorted first) carries no badge.
     const rows = screen.getAllByRole("row");
@@ -400,6 +426,7 @@ describe("MovementList", () => {
   });
 
   it("renders partner rows read-only and keeps actions on the viewer's own rows", async () => {
+    const user = userEvent.setup();
     fetchMovementsMock.mockResolvedValue(sharedMovements);
 
     renderWithViewer(<MovementList />, duo);
@@ -407,6 +434,7 @@ describe("MovementList", () => {
 
     const rows = screen.getAllByRole("row");
     // rows[1]: own INDIVIDUAL row (viewer rita) → actions available
+    await user.click(within(rows[1]!).getByRole("button", { name: /abrir acciones/i }));
     expect(
       within(rows[1]!).getByRole("button", { name: /editar/i }),
     ).toBeInTheDocument();
@@ -414,6 +442,7 @@ describe("MovementList", () => {
       within(rows[1]!).getByRole("button", { name: /eliminar/i }),
     ).toBeInTheDocument();
     // rows[2]: own SHARED row (registrant rita) → actions available
+    await user.click(within(rows[2]!).getByRole("button", { name: /abrir acciones/i }));
     expect(
       within(rows[2]!).getByRole("button", { name: /editar/i }),
     ).toBeInTheDocument();
@@ -424,10 +453,11 @@ describe("MovementList", () => {
     expect(
       within(rows[3]!).queryByRole("button", { name: /eliminar/i }),
     ).toBeNull();
-    expect(screen.getByText("Compartido · Edgardo")).toBeInTheDocument();
+    expect(screen.getAllByLabelText("Movimiento compartido")).toHaveLength(2);
   });
 
   it("renders a PENDING row with the Previsto badge and a Marcar pagado action on own rows", async () => {
+    const user = userEvent.setup();
     fetchMovementsMock.mockResolvedValue(pendingMovements);
 
     render(<MovementList />);
@@ -436,6 +466,7 @@ describe("MovementList", () => {
     const rows = screen.getAllByRole("row");
     const pendingRow = within(rows[1]!); // newest first: the PENDING row
     expect(pendingRow.getByText("Previsto")).toBeInTheDocument();
+    await user.click(pendingRow.getByRole("button", { name: /abrir acciones/i }));
     expect(
       pendingRow.getByRole("button", { name: /marcar pagado/i }),
     ).toBeInTheDocument();
@@ -448,6 +479,7 @@ describe("MovementList", () => {
   });
 
   it("keeps the Marcar pagado action off partner rows", async () => {
+    const user = userEvent.setup();
     const partnerPending: Movement[] = [
       {
         id: "pp1",
@@ -489,6 +521,7 @@ describe("MovementList", () => {
       within(rows[1]!).queryByRole("button", { name: /marcar pagado/i }),
     ).toBeNull();
     // rows[2] = the viewer's own PENDING row → keeps the action.
+    await user.click(within(rows[2]!).getByRole("button", { name: /abrir acciones/i }));
     expect(
       within(rows[2]!).getByRole("button", { name: /marcar pagado/i }),
     ).toBeInTheDocument();
@@ -507,6 +540,7 @@ describe("MovementList", () => {
     await waitFor(() => expect(screen.getByRole("table")).toBeInTheDocument());
 
     const pendingRow = within(screen.getAllByRole("row")[1]!);
+    await user.click(pendingRow.getByRole("button", { name: /abrir acciones/i }));
     await user.click(
       pendingRow.getByRole("button", { name: /marcar pagado/i }),
     );
@@ -529,6 +563,7 @@ describe("MovementList", () => {
     await waitFor(() => expect(screen.getByRole("table")).toBeInTheDocument());
 
     const pendingRow = within(screen.getAllByRole("row")[1]!);
+    await user.click(pendingRow.getByRole("button", { name: /abrir acciones/i }));
     await user.click(
       pendingRow.getByRole("button", { name: /marcar pagado/i }),
     );

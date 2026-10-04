@@ -86,23 +86,27 @@ export function PlannedSection({
   return (
     <section
       aria-label="Gastos fijos previstos"
-      className="rounded-card border border-border bg-surface p-6 shadow-card"
+      className="overflow-hidden rounded-card border border-border bg-surface shadow-card"
     >
-      <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
-        <h2 className="text-base font-semibold text-ink">
-          Gastos fijos previstos
-        </h2>
-        <p className="text-sm text-ink-soft">{monthLabel(planned.month)}</p>
-      </div>
-      <p className="mt-2 font-mono text-2xl font-bold tabular-nums text-ink">
-        {formatARS(planned.total)}
-      </p>
-
-      <form
-        aria-label="Agregar previsto"
-        onSubmit={handleSubmit}
-        className="mt-6 grid gap-3 border-t border-border pt-6 sm:grid-cols-2 lg:grid-cols-4"
-      >
+      <div className="grid lg:grid-cols-[minmax(220px,0.75fr)_minmax(0,1.25fr)]">
+        <div className="bg-accent p-6 text-on-accent sm:p-8">
+          <p className="text-xs font-semibold tracking-[0.16em] text-on-accent/70 uppercase">
+            Próximo mes
+          </p>
+          <h2 className="mt-3 text-xl font-bold">Gastos fijos previstos</h2>
+          <p className="mt-1 text-sm text-on-accent/75">{monthLabel(planned.month)}</p>
+          <p className="mt-8 font-mono text-3xl font-bold tabular-nums">
+            {formatARS(planned.total)}
+          </p>
+          <p className="mt-2 text-sm text-on-accent/75">
+            Planificá hoy para llegar tranquilo.
+          </p>
+        </div>
+        <form
+          aria-label="Agregar previsto"
+          onSubmit={handleSubmit}
+          className="grid gap-3 p-6 sm:grid-cols-2 sm:p-8"
+        >
         <div>
           <label htmlFor="planned-amount" className={LABEL_CLASS}>
             Monto
@@ -154,7 +158,7 @@ export function PlannedSection({
           </select>
         </div>
 
-        <div className="flex items-end">
+          <div className="flex items-end sm:col-span-2">
           <button
             type="submit"
             disabled={busy === "createPlanned"}
@@ -162,8 +166,9 @@ export function PlannedSection({
           >
             Agregar previsto
           </button>
-        </div>
-      </form>
+          </div>
+        </form>
+      </div>
 
       {invalidAmount ? (
         <p id="planned-error" role="alert" className={`${ERROR_CLASS} mt-3`}>

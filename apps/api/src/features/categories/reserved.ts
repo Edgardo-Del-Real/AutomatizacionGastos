@@ -9,7 +9,6 @@ import { normalizeForMatchTolerant } from "./matcher";
  */
 export type ReservedConcept =
   | "previsto"
-  | "gasto fijo"
   | "ahorro"
   | "compartido"
   | "compartida"
@@ -17,7 +16,6 @@ export type ReservedConcept =
 
 const RESERVED_CONCEPTS: readonly ReservedConcept[] = [
   "previsto",
-  "gasto fijo",
   "ahorro",
   "compartido",
   "compartida",

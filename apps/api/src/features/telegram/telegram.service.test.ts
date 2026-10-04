@@ -811,7 +811,7 @@ describe("TelegramService preview callbacks (v2)", () => {
 
     await h.service.handleUpdate(textUpdate({ text: "Gimnasio", messageId: 3 }), h.reply);
 
-    expect(h.mockCreateCategory).toHaveBeenCalledWith(ownerId, "Gimnasio");
+    expect(h.mockCreateCategory).toHaveBeenCalledWith(ownerId, "Gimnasio", "EXPENSE");
     const lastCall = h.mockSetState.mock.calls.at(-1)?.[0] as BotStateRecord;
     expect(lastCall.state).toBe("awaiting_preview");
     const payload = previewPayloadSchema.parse(JSON.parse(lastCall.pendingNote ?? "{}"));

@@ -64,7 +64,37 @@ describe("categories savings guards (D9)", () => {
   it("keeps normal categories NORMAL", async () => {
     const created = await service.createCategory("owner-1", "Salud");
     const row = await prisma.category.findUnique({ where: { id: created.id } });
-    expect(row?.type).toBe("NORMAL");
+    expect(row?.type).toBe("MIXED");
+  });
+
+  it("creates typed income and expense categories", async () => {
+    const income = await service.createCategory("owner-1", "Sueldos", "INCOME");
+    const expense = await service.createCategory("owner-1", "Comida", "EXPENSE");
+
+    expect(income.type).toBe("INCOME");
+    expect(expense.type).toBe("EXPENSE");
+  });
+
+  it("normalizes untyped income names to INCOME", async () => {
+    const created = await service.createCategory("owner-1", "sueldos");
+
+    expect(created.type).toBe("INCOME");
+  });
+
+  it("rejects an income-only category on an expense movement", async () => {
+    await service.createCategory("owner-1", "Sueldos", "INCOME");
+
+    await expect(service.assertOwnerCategory("owner-1", "Sueldos", "EXPENSE")).rejects.toMatchObject({
+      message: expect.stringContaining("only valid for INCOME"),
+    });
+  });
+
+  it("rejects an expense-only category on an income movement", async () => {
+    await service.createCategory("owner-1", "Comida", "EXPENSE");
+
+    await expect(service.assertOwnerCategory("owner-1", "Comida", "INCOME")).rejects.toMatchObject({
+      message: expect.stringContaining("only valid for EXPENSE"),
+    });
   });
 
   it("ensureAhorro creates the SAVINGS ahorro category and is idempotent", async () => {

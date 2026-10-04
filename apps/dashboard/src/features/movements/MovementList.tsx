@@ -33,8 +33,22 @@ const BADGE_CLASS =
 const PENDING_BADGE_CLASS =
   "inline-flex items-center rounded-full bg-expense-soft px-2 py-0.5 text-xs font-medium text-expense";
 
+function currencyIcon(currency: string): { icon: string; label: string } {
+  if (currency === "ARS") return { icon: "🇦🇷", label: "Pesos argentinos (ARS)" };
+  if (currency === "USD") return { icon: "🇺🇸", label: "Dólares estadounidenses (USD)" };
+  return { icon: "💱", label: currency };
+}
+
 function sortByOccurredAtDesc(a: Date, b: Date): number {
   return b.getTime() - a.getTime();
+}
+
+function formatMovementDate(date: Date): string {
+  return new Intl.DateTimeFormat("es-AR", {
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+  }).format(date);
 }
 
 /** The registrant is the author of the row: `registrantId` (derived alias of ownerId). */
@@ -74,6 +88,7 @@ export function MovementList({
     useMovementMutations(onMutated);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [confirmingId, setConfirmingId] = useState<string | null>(null);
+  const [openActionsId, setOpenActionsId] = useState<string | null>(null);
 
   const memberNames = new Map(
     members.map((member) => [member.ownerId, member.name]),
@@ -92,6 +107,81 @@ export function MovementList({
     } else {
       setInternalVisibility(resolved);
     }
+  }
+
+  async function handleConfirmDelete() {
+    if (!confirmingId) return;
+    const ok = await removeMovement(confirmingId);
+    if (ok) setConfirmingId(null);
+  }
+
+  function renderActions(movement: Movement) {
+    if (registrantOf(movement) !== viewerId) return null;
+    const isOpen = openActionsId === movement.id;
+    const closeActions = () => setOpenActionsId(null);
+    return (
+      <div className="relative flex justify-center">
+        <button
+          type="button"
+          aria-label="Abrir acciones del movimiento"
+          aria-expanded={isOpen}
+          title="Acciones"
+          onClick={() => setOpenActionsId(isOpen ? null : movement.id)}
+          className={`${ACTION_CLASS} min-w-9 text-base leading-none`}
+        >
+          ⋯
+        </button>
+        {isOpen ? (
+          <>
+            <button
+              type="button"
+              aria-label="Cerrar acciones"
+              onClick={closeActions}
+              className="fixed inset-0 z-10 cursor-default bg-transparent"
+            />
+            <div
+              role="menu"
+              aria-label="Acciones del movimiento"
+              className="absolute right-0 top-full z-20 mt-2 flex min-w-44 flex-col gap-1 rounded-control border border-border bg-surface p-1.5 shadow-card"
+            >
+              {movement.status === "PENDING" ? (
+                <button
+                  type="button"
+                  onClick={() => {
+                    closeActions();
+                    void markPaid(movement.id);
+                  }}
+                  disabled={busy === "markPaid"}
+                  className="flex items-center gap-2 rounded-control px-3 py-2 text-left text-sm text-ink hover:bg-surface-raised"
+                >
+                  <span aria-hidden="true">✅</span> Marcar pagado
+                </button>
+              ) : null}
+              <button
+                type="button"
+                onClick={() => {
+                  closeActions();
+                  setEditingId(movement.id);
+                }}
+                className="flex items-center gap-2 rounded-control px-3 py-2 text-left text-sm text-ink hover:bg-surface-raised"
+              >
+                <span aria-hidden="true">✏️</span> Editar
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  closeActions();
+                  setConfirmingId(movement.id);
+                }}
+                className="flex items-center gap-2 rounded-control px-3 py-2 text-left text-sm text-ink hover:bg-surface-raised"
+              >
+                <span aria-hidden="true">🗑️</span> Eliminar
+              </button>
+            </div>
+          </>
+        ) : null}
+      </div>
+    );
   }
 
   if (state.status === "error") {
@@ -114,15 +204,23 @@ export function MovementList({
     );
   }
 
-  if (state.status === "success") {
-    if (state.data.length === 0) {
-      return (
+    if (state.status === "success") {
+      if (state.data.length === 0) {
+        return (
         <section
           aria-label="Movimientos"
-          className="rounded-card border border-dashed border-border bg-surface p-10 text-center shadow-card"
+          className="overflow-hidden rounded-card border border-border bg-surface shadow-card"
         >
-          <h2 className="text-base font-semibold text-ink">Movimientos</h2>
-          <p className="mt-2 text-sm text-ink-soft">No hay movimientos.</p>
+          <MovementFilters
+            value={{ ...filters, visibility: effectiveVisibility }}
+            onChange={handleFiltersChange}
+          />
+          <div className="border-t border-dashed border-border p-10 text-center">
+            <h2 className="text-base font-semibold text-ink">Movimientos</h2>
+            <p className="mt-2 text-sm text-ink-soft">
+              No hay movimientos que coincidan con los filtros.
+            </p>
+          </div>
         </section>
       );
     }
@@ -134,16 +232,10 @@ export function MovementList({
       ? (state.data.find((movement) => movement.id === confirmingId) ?? null)
       : null;
 
-    async function handleConfirmDelete() {
-      if (!confirmingId) return;
-      const ok = await removeMovement(confirmingId);
-      if (ok) setConfirmingId(null);
-    }
-
     return (
       <section
         aria-label="Movimientos"
-        className="overflow-hidden rounded-card border border-border bg-surface shadow-card"
+        className="overflow-visible rounded-card border border-border bg-surface shadow-card"
       >
         <div className="border-b border-border px-4 py-4 sm:px-6">
           <h2 className="text-base font-semibold text-ink">Movimientos</h2>
@@ -163,20 +255,103 @@ export function MovementList({
               : "No se pudo marcar como pagado."}
           </p>
         ) : null}
-        <div className="overflow-x-auto">
-            <table className="w-full min-w-full text-left text-sm">
+        {false && (
+        <div className="space-y-3 p-4">
+          {visible.map((movement) =>
+            movement.id === editingId ? (
+              <div key={movement.id} className="rounded-card border border-border bg-surface-raised">
+                <MovementEditForm
+                  movement={movement}
+                  refreshToken={refreshToken}
+                  onSaved={() => {
+                    setEditingId(null);
+                    onMutated?.();
+                  }}
+                  onCancel={() => setEditingId(null)}
+                />
+              </div>
+            ) : (
+              <article
+                key={movement.id}
+                className="rounded-card border border-border bg-surface-raised p-4"
+              >
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <p className="text-xs tabular-nums text-ink-faint">
+                      {formatMovementDate(movement.occurredAt)}
+                    </p>
+                    <div className="mt-1 flex flex-wrap items-center gap-2">
+                      <span className={TYPE_BADGE_CLASS[movement.type]}>
+                        {TYPE_LABELS[movement.type]}
+                      </span>
+                      {movement.status === "PENDING" ? (
+                        <span className={PENDING_BADGE_CLASS}>Previsto</span>
+                      ) : null}
+                    </div>
+                  </div>
+                  <p
+                    className={`shrink-0 text-right font-mono font-semibold tabular-nums ${
+                      movement.type === "INCOME"
+                        ? "text-income"
+                        : movement.type === "SAVINGS"
+                          ? "text-accent"
+                          : "text-expense"
+                    }`}
+                  >
+                    {formatARS(movement.amount)}
+                  </p>
+                </div>
+                <dl className="mt-4 grid grid-cols-2 gap-x-4 gap-y-3 text-sm">
+                  <div className="min-w-0">
+                    <dt className="text-xs text-ink-faint">Categoría</dt>
+                    <dd className="mt-1 break-words text-ink">
+                      {movement.category ?? "—"}
+                    </dd>
+                  </div>
+                  <div className="min-w-0">
+                    <dt className="text-xs text-ink-faint">Moneda</dt>
+                    <dd className="mt-1 text-ink-soft">{movement.currency}</dd>
+                  </div>
+                  <div className="col-span-2 min-w-0">
+                    <dt className="text-xs text-ink-faint">Nota</dt>
+                    <dd className="mt-1 break-words text-ink-soft">
+                      {movement.note ?? "—"}
+                    </dd>
+                  </div>
+                  {movement.visibility === "SHARED" ? (
+                    <div className="col-span-2 min-w-0">
+                      <dt className="text-xs text-ink-faint">Compartido</dt>
+                      <dd className="mt-1 break-words text-ink-soft">
+                        {registrantName(movement)}
+                      </dd>
+                    </div>
+                  ) : null}
+                </dl>
+                {registrantOf(movement) === viewerId ? (
+                  <div className="mt-4 border-t border-border pt-3">
+                    {renderActions(movement)}
+                  </div>
+                ) : null}
+              </article>
+            ),
+          )}
+        </div>
+        )}
+
+        <div className="overflow-visible">
+          <table className="w-full table-fixed text-left text-sm">
               <thead>
                 <tr className="border-b border-border text-xs tracking-wide text-ink-faint uppercase">
-                  <th className="px-4 py-3 font-medium sm:px-6">Fecha</th>
-                  <th className="px-4 py-3 font-medium sm:px-6">Tipo</th>
-                  <th className="px-4 py-3 text-right font-medium sm:px-6">
+                  <th className="px-2 py-3 font-medium sm:px-3">Fecha</th>
+                  <th className="px-2 py-3 font-medium sm:px-3">Tipo</th>
+                  <th className="px-2 py-3 text-right font-medium sm:px-3">
                     Monto
                   </th>
-                  <th className="px-4 py-3 font-medium sm:px-6">Moneda</th>
-                  <th className="px-4 py-3 font-medium sm:px-6">Categoría</th>
-                  <th className="px-4 py-3 font-medium sm:px-6">Nota</th>
-                  <th className="px-4 py-3 font-medium sm:px-6">Compartido</th>
-                  <th className="px-4 py-3 font-medium sm:px-6">Acciones</th>
+                  <th className="hidden px-2 py-3 text-center font-medium sm:table-cell sm:px-3">Moneda</th>
+                  <th className="w-32 px-2 py-3 font-medium sm:w-40 sm:px-3">Categoría</th>
+                  <th className="px-2 py-3 font-medium sm:px-3">Nota</th>
+                  <th className="hidden w-20 px-2 py-3 text-center font-medium sm:table-cell sm:px-3">Compartido</th>
+                  <th className="px-2 py-3 text-center font-medium sm:px-3">Acciones</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-border">
@@ -200,10 +375,10 @@ export function MovementList({
                       key={movement.id}
                       className="transition-colors even:bg-white/[0.02] hover:bg-white/5"
                     >
-                      <td className="px-4 py-3 whitespace-nowrap tabular-nums sm:px-6">
-                        {movement.occurredAt.toISOString().slice(0, 10)}
+                      <td className="px-2 py-3 whitespace-nowrap tabular-nums sm:px-3">
+                        {formatMovementDate(movement.occurredAt)}
                       </td>
-                      <td className="px-4 py-3 whitespace-nowrap sm:px-6">
+                      <td className="px-2 py-3 whitespace-nowrap sm:px-3">
                         <span className={TYPE_BADGE_CLASS[movement.type]}>
                           {TYPE_LABELS[movement.type]}
                         </span>
@@ -214,7 +389,7 @@ export function MovementList({
                         ) : null}
                       </td>
                       <td
-                        className={`px-4 py-3 text-right whitespace-nowrap sm:px-6 ${
+                        className={`px-2 py-3 text-right whitespace-nowrap sm:px-3 ${
                           movement.type === "INCOME"
                             ? "font-mono font-semibold text-income tabular-nums"
                             : movement.type === "SAVINGS"
@@ -224,54 +399,34 @@ export function MovementList({
                       >
                         {formatARS(movement.amount)}
                       </td>
-                      <td className="px-4 py-3 whitespace-nowrap text-ink-soft sm:px-6">
-                        {movement.currency}
+                      <td className="hidden px-2 py-3 text-center text-ink-soft sm:table-cell sm:px-3">
+                        <span
+                          aria-label={currencyIcon(movement.currency).label}
+                          title={currencyIcon(movement.currency).label}
+                        >
+                          {currencyIcon(movement.currency).icon}
+                        </span>
                       </td>
-                      <td className="px-4 py-3 sm:px-6">
-                        <span className="inline-flex items-center rounded-full bg-accent-soft px-2 py-0.5 text-xs font-medium text-accent">
+                      <td className="w-32 px-2 py-3 sm:w-40 sm:px-3">
+                        <span className="inline-flex max-w-full whitespace-nowrap rounded-full bg-accent-soft px-2 py-0.5 text-xs font-medium text-accent">
                           {movement.category ?? "—"}
                         </span>
                       </td>
-                      <td className="px-4 py-3 text-ink-soft sm:px-6">
+                      <td className="break-words px-2 py-3 text-ink-soft sm:px-3">
                         {movement.note ?? "—"}
                       </td>
-                      <td className="px-4 py-3 whitespace-nowrap sm:px-6">
+                      <td className="hidden w-20 px-2 py-3 text-center sm:table-cell sm:px-3">
                         {movement.visibility === "SHARED" ? (
-                          <span className={BADGE_CLASS}>
-                            Compartido · {registrantName(movement)}
+                          <span
+                            className={BADGE_CLASS}
+                            aria-label="Movimiento compartido"
+                            title="Movimiento compartido"
+                          >
+                            ✅
                           </span>
                         ) : null}
                       </td>
-                      <td className="px-4 py-3 whitespace-nowrap sm:px-6">
-                        {registrantOf(movement) === viewerId ? (
-                          <div className="flex items-center gap-2">
-                            {movement.status === "PENDING" ? (
-                              <button
-                                type="button"
-                                onClick={() => void markPaid(movement.id)}
-                                disabled={busy === "markPaid"}
-                                className={ACTION_CLASS}
-                              >
-                                Marcar pagado
-                              </button>
-                            ) : null}
-                            <button
-                              type="button"
-                              onClick={() => setEditingId(movement.id)}
-                              className={ACTION_CLASS}
-                            >
-                              Editar
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => setConfirmingId(movement.id)}
-                              className={ACTION_CLASS}
-                            >
-                              Eliminar
-                            </button>
-                          </div>
-                        ) : null}
-                      </td>
+                      <td className="px-2 py-3 text-center whitespace-nowrap sm:px-3">{renderActions(movement)}</td>
                   </tr>
                 ),
               )}

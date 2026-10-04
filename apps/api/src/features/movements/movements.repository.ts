@@ -164,7 +164,7 @@ export class PrismaMovementRepository implements MovementRepository {
       conditions.push(Prisma.sql`"occurredAt" <= ${baDayEnd(filters.to)}`);
     }
     if (filters.category) {
-      conditions.push(Prisma.sql`"category" = ${filters.category}`);
+      conditions.push(Prisma.sql`"category" ILIKE ${`%${filters.category}%`}`);
     }
     if (filters.q) {
       conditions.push(Prisma.sql`"note" ILIKE ${`%${filters.q}%`}`);

@@ -257,8 +257,14 @@ describe("categories service (integration)", () => {
   });
 
   describe("reserved and duplicate-variant guards", () => {
+    it("allows gastos fijos as an EXPENSE category for planned and paid movements", async () => {
+      const created = await service.createCategory("owner-1", "gastos fijos", "EXPENSE");
+
+      expect(created.name).toBe("gastos fijos");
+      expect(created.type).toBe("EXPENSE");
+    });
+
     it.each([
-      ["gastos fijos", "gasto fijo"],
       ["previsto", "previsto"],
       ["provisto", "previsto"],
       ["compartido", "compartido"],

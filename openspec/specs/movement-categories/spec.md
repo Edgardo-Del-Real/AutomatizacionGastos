@@ -124,7 +124,7 @@ The system MUST expose owner-scoped operations to list categories, create a cate
 
 ### Requirement: Category Type
 
-The system MUST store a `type` field on every category (`NORMAL` default | `SAVINGS`). A category whose exact normalized name is "ahorro" MUST be created or upserted as `SAVINGS`, never `NORMAL`. A category whose folded name is "ahorros" MUST NOT be created as `NORMAL` nor upserted as `SAVINGS`: it MUST be rejected with a SAVINGS redirect (see Reserved and Duplicate-Variant Guards). The migration MUST auto-convert pre-existing "ahorro" categories to `SAVINGS` and MUST leave their movements untouched. The SAVINGS category MUST NOT be deletable or renamed. The system MUST ensure an "ahorro" `SAVINGS` category exists whenever a savings split would create a SAVINGS movement.
+The system MUST store a `type` field on every category. New categories default to `MIXED`; explicit types are `INCOME`, `EXPENSE`, `MIXED`, and the reserved `SAVINGS` type. `NORMAL` remains readable for backwards compatibility and behaves as `MIXED`. A category whose exact normalized name is "ahorro" MUST be created or upserted as `SAVINGS`, never `NORMAL`. A category whose folded name is "ahorros" MUST NOT be created as `NORMAL` nor upserted as `SAVINGS`: it MUST be rejected with a SAVINGS redirect (see Reserved and Duplicate-Variant Guards). The migration MUST auto-convert pre-existing `NORMAL` categories to `MIXED`, classify unambiguous legacy income names such as "sueldo" and "sueldos" as `INCOME`, and leave movements untouched. The SAVINGS category MUST NOT be deletable or renamed. The system MUST ensure an "ahorro" `SAVINGS` category exists whenever a savings split would create a SAVINGS movement.
 (Previously: only the exact normalized name "ahorro" was typed SAVINGS; "ahorros" was unguarded and created a NORMAL category.)
 
 #### Scenario: ahorro is always SAVINGS
@@ -137,7 +137,26 @@ The system MUST store a `type` field on every category (`NORMAL` default | `SAVI
 
 - GIVEN "crear categoría Salud"
 - WHEN processed
-- THEN a NORMAL category is created
+- THEN a MIXED category is created
+
+#### Scenario: Income category cannot be used for expenses
+
+- GIVEN a category "Sueldos" typed `INCOME`
+- WHEN an EXPENSE movement is assigned to it
+- THEN the assignment is rejected with a validation error
+
+#### Scenario: Expense category cannot be used for income
+
+- GIVEN a category "Comida" typed `EXPENSE`
+- WHEN an INCOME movement is assigned to it
+- THEN the assignment is rejected with a validation error
+
+#### Scenario: Legacy salary category is normalized
+
+- GIVEN a legacy category named "sueldos" without an explicit type
+- WHEN the typed-category migration runs
+- THEN the category is typed `INCOME`
+- AND its existing movements are left untouched
 
 #### Scenario: Legacy ahorro converts, movements untouched
 
@@ -176,12 +195,12 @@ The category-validation used by movement writes MUST reject assigning the SAVING
 
 ### Requirement: Reserved and Duplicate-Variant Guards
 
-The system MUST reject, in `createCategory` and `renameCategory`, any name whose `normalizeForMatchTolerant` form is a member of the folded reserved set `{previsto, gasto fijo, ahorro, compartido, compartida, otro}`, including the guard-only aliases `provisto`→`previsto` and `provisorio`→`previsto` (the aliases MUST NOT apply to general matching; the plural fold already reduces "provisorios" to "provisorio", so one alias entry covers both forms). The system MUST reject any name whose folded form equals the folded form of an existing same-owner category. Rejections MUST NOT create or mutate any category. `deleteCategory` MUST NOT gain reserved names — categories created before this change MUST remain deletable.
+The system MUST reject, in `createCategory` and `renameCategory`, any name whose `normalizeForMatchTolerant` form is a member of the folded reserved set `{previsto, ahorro, compartido, compartida, otro}`, including the guard-only aliases `provisto`→`previsto` and `provisorio`→`previsto` (the aliases MUST NOT apply to general matching; the plural fold already reduces "provisorios" to "provisorio", so one alias entry covers both forms). The category name `gasto fijo`/`gastos fijos` MUST remain available for fixed expenses and planned expenses. The system MUST reject any name whose folded form equals the folded form of an existing same-owner category. Rejections MUST NOT create or mutate any category. `deleteCategory` MUST NOT gain reserved names — categories created before this change MUST remain deletable.
 (Previously: only `provisto` was a guard-only alias; "gasto provisorio" was not reserved and created a phantom category.)
 
 #### Scenario: Reserved create rejected
 
-- GIVEN an owner creates "gastos fijos" (or "previsto", "provisto", "compartido", "otro")
+- GIVEN an owner creates "previsto" (or "provisto", "compartido", "otro")
 - WHEN processed
 - THEN no category is created and a redirect explains the system concept
 
@@ -191,11 +210,12 @@ The system MUST reject, in `createCategory` and `renameCategory`, any name whose
 - WHEN processed
 - THEN the rename is rejected and the name is unchanged
 
-#### Scenario: Duplicate-variant create rejected
+#### Scenario: Fixed-expense category can be created
 
-- GIVEN a category "gasto fijo" already exists
-- WHEN the owner creates "gastos fijos"
-- THEN it is rejected and no duplicate is created
+- GIVEN the owner starts a planned-expense capture
+- WHEN they create "gastos fijos"
+- THEN the category is created as an EXPENSE category
+- AND the movement remains PENDING until it is paid
 
 #### Scenario: Provisorio alias rejected
 

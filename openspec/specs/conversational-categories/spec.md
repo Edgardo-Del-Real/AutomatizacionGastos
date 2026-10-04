@@ -8,13 +8,20 @@ Conversational category understanding "within reason": plural variants match, co
 
 ### Requirement: Reserved Concept Guard
 
-The system MUST reject, on every category-creation path, any category whose `normalizeForMatchTolerant` name is a member of the folded reserved set `{previsto, gasto fijo, ahorro, compartido, compartida, otro}`. Within the guard ONLY, the alias `provisto` MUST be treated as `previsto`; the alias MUST NOT apply to general matching. Rejections MUST NOT create any category and MUST produce an educational redirect (e.g., "usá 'previsto: monto nota'"). A folded `ahorros` MUST be rejected with a SAVINGS redirect and MUST NOT upsert; exact `ahorro` MUST keep the existing SAVINGS routing.
+The system MUST reject, on every category-creation path, any category whose `normalizeForMatchTolerant` name is a member of the folded reserved set `{previsto, ahorro, compartido, compartida, otro}`. The category name `gasto fijo`/`gastos fijos` MUST remain available as an `EXPENSE` category for planned and paid fixed expenses. Within the guard ONLY, the alias `provisto` MUST be treated as `previsto`; the alias MUST NOT apply to general matching. Rejections MUST NOT create any reserved category and MUST produce an educational redirect (e.g., "usá 'previsto: monto nota'"). A folded `ahorros` MUST be rejected with a SAVINGS redirect and MUST NOT upsert; exact `ahorro` MUST keep the existing SAVINGS routing.
 
 #### Scenario: Reserved create rejected on any path
 
-- GIVEN any creation path with name "gastos fijos"
+- GIVEN any creation path with name "previsto"
 - WHEN processed
 - THEN no category is created AND a redirect explains the system concept
+
+#### Scenario: Fixed-expense category is allowed
+
+- GIVEN the owner starts the planned-expense flow
+- WHEN they create a category named "gastos fijos"
+- THEN the category is created as an EXPENSE category
+- AND the planned movement remains PENDING until it is paid
 
 #### Scenario: Guard-only alias
 
@@ -69,11 +76,12 @@ The system MUST match keywords and notes through `normalizeForMatchTolerant`: pe
 
 The system MUST reject creating or renaming a category whose folded name (`normalizeForMatchTolerant`) equals the folded name of an existing same-owner category.
 
-#### Scenario: Variant create rejected
+#### Scenario: Fixed-expense category remains available
 
-- GIVEN a category "gasto fijo" exists
+- GIVEN the owner starts a planned-expense capture
 - WHEN the owner creates "gastos fijos"
-- THEN it is rejected and no duplicate is created
+- THEN it is created as an EXPENSE category
+- AND it can be used by both the pending movement and its later paid movement
 
 #### Scenario: Variant rename rejected
 

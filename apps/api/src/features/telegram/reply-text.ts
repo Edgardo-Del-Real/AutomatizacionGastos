@@ -370,8 +370,6 @@ export function reservedCategoryReply(name: string, concept: ReservedConcept): s
   switch (concept) {
     case "previsto":
       return `"${name}" es un gasto fijo previsto: usá "previsto: <monto> <nota>" para registrarlo (ej: "previsto: 2500 alquiler").`;
-    case "gasto fijo":
-      return `"${name}" va como gasto fijo previsto: usá "previsto: <monto> <nota>" (ej: "previsto: 2500 alquiler"). Consultá tus previstos con "cuánto tengo previsto?".`;
     case "ahorro":
       return `"${name}" es la categoría de ahorro: definí tu regla con "registrar ahorro: <palabra> al <X>%" (ej: "registrar ahorro: sueldo al 10%").`;
     case "compartido":

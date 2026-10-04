@@ -15,7 +15,6 @@ describe("resolveReservedConcept", () => {
   it.each([
     ["otro", "otro"],
     ["previsto", "previsto"],
-    ["gastos fijos", "gasto fijo"],
     ["compartidos", "compartido"],
   ])("keeps full-name reserved concepts for '%s'", (input, concept) => {
     expect(resolveReservedConcept(input)).toBe(concept);

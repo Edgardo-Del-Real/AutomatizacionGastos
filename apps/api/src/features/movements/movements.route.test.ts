@@ -581,7 +581,7 @@ describe("movements route", () => {
       });
 
       expect(response.statusCode).toBe(200);
-      expect(response.json()).toEqual([{ name: "Cafe", keywords: ["cafe"] }]);
+      expect(response.json()).toEqual([{ name: "Cafe", keywords: ["cafe"], type: "MIXED" }]);
     });
 
     it("returns an empty list for an owner without categories", async () => {

@@ -25,6 +25,9 @@ enum MovementStatus {
 
 enum CategoryType {
   NORMAL
+  MIXED
+  EXPENSE
+  INCOME
   SAVINGS
 }
 
@@ -60,7 +63,7 @@ model Category {
   id        String             @id @default(cuid())
   ownerId   String
   name      String
-  type      CategoryType       @default(NORMAL)
+  type      CategoryType       @default(MIXED)
   createdAt DateTime           @default(now())
   keywords  CategoryKeyword[]
 

@@ -27,12 +27,20 @@ const summaryCategories: MovementSummary["categories"] = [
     expensePercent: 0,
     incomePercent: 0,
   },
+  {
+    name: "Sueldos",
+    expenseAmount: 0,
+    incomeAmount: 137700,
+    expensePercent: 0,
+    incomePercent: 100,
+  },
 ];
 
 const allCategories: OwnerCategory[] = [
-  { name: "carnicería", keywords: [] },
-  { name: "verdulería", keywords: [] },
-  { name: "farmacia", keywords: [] },
+  { name: "carnicería", keywords: [], type: "EXPENSE" },
+  { name: "verdulería", keywords: [], type: "MIXED" },
+  { name: "farmacia", keywords: [], type: "MIXED" },
+  { name: "Sueldos", keywords: [], type: "INCOME" },
 ];
 
 function mockSuccess(ownerCategories: OwnerCategory[]) {
@@ -44,17 +52,17 @@ function mockSuccess(ownerCategories: OwnerCategory[]) {
 }
 
 describe("CategoryCards", () => {
-  it("renders a card for every created category, merging the summary spend", () => {
+  it("renders cards for created non-savings categories, merging the summary", () => {
     mockSuccess(allCategories);
 
     render(<CategoryCards categories={summaryCategories} />);
 
     expect(
-      screen.getByRole("heading", { name: "Gastos por categoría" }),
+      screen.getByRole("heading", { name: "Movimientos por categoría" }),
     ).toBeInTheDocument();
 
     const cards = screen.getAllByRole("listitem");
-    expect(cards).toHaveLength(3);
+    expect(cards).toHaveLength(4);
 
     expect(
       within(cards[0]!).getByRole("heading", { name: "carnicería" }),
@@ -67,6 +75,7 @@ describe("CategoryCards", () => {
     ).toBeInTheDocument();
     // verdulería and farmacia both show $ 0,00.
     expect(screen.getAllByText("$ 0,00")).toHaveLength(2);
+    expect(within(cards[3]!).getByText("$ 137.700,00")).toBeInTheDocument();
   });
 
   it("renders no cards when the owner has no created categories", () => {
@@ -75,8 +84,17 @@ describe("CategoryCards", () => {
     render(<CategoryCards categories={summaryCategories} />);
 
     expect(
-      screen.getByRole("heading", { name: "Gastos por categoría" }),
+      screen.getByRole("heading", { name: "Movimientos por categoría" }),
     ).toBeInTheDocument();
+    expect(screen.queryAllByRole("listitem")).toHaveLength(0);
+  });
+
+  it("does not duplicate the reserved savings KPI as a category card", () => {
+    mockSuccess([{ name: "ahorro", keywords: [], type: "SAVINGS" }]);
+
+    render(<CategoryCards categories={[]} />);
+
+    expect(screen.queryByText("$ 15.300,00")).not.toBeInTheDocument();
     expect(screen.queryAllByRole("listitem")).toHaveLength(0);
   });
 

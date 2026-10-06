@@ -43,10 +43,38 @@ describe("MovementFilters", () => {
     const options = within(select)
       .getAllByRole("option")
       .map((option) => option.textContent);
-    expect(options).toEqual(["Todos", "Ingreso", "Gasto", "Ahorro"]);
+    expect(options).toEqual(["Todos", "Ingreso", "Gasto", "Previstos", "Ahorro"]);
 
     await user.selectOptions(select, "SAVINGS");
     expect((select as HTMLSelectElement).value).toBe("SAVINGS");
+  });
+
+  it("maps Previstos to EXPENSE + PENDING and clears status when switching back to Gasto", async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    const { rerender } = render(
+      <MovementFilters value={{}} onChange={onChange} />,
+    );
+
+    await user.selectOptions(screen.getByLabelText("Tipo"), "PREVISTO");
+    expect(onChange).toHaveBeenCalledWith({ type: "EXPENSE", status: "PENDING" });
+
+    // The synthetic option is reflected back from the two underlying fields.
+    rerender(
+      <MovementFilters
+        value={{ type: "EXPENSE", status: "PENDING" }}
+        onChange={onChange}
+      />,
+    );
+    expect((screen.getByLabelText("Tipo") as HTMLSelectElement).value).toBe(
+      "PREVISTO",
+    );
+
+    await user.selectOptions(screen.getByLabelText("Tipo"), "EXPENSE");
+    expect(onChange).toHaveBeenCalledWith({
+      type: "EXPENSE",
+      status: undefined,
+    });
   });
 
   it("combines the visibility filter with the other filters", async () => {

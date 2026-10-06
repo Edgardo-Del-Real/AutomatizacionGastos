@@ -16,6 +16,13 @@ export function MovementFilters({ value, onChange }: MovementFiltersProps) {
   const update = (patch: Partial<MovementListFilters>) =>
     onChange({ ...value, ...patch });
 
+  // "Previstos" is the synthetic option: EXPENSE + PENDING. It has no wire value
+  // of its own, so it is recognized from the two underlying filter fields.
+  const typeFilterValue =
+    value.type === "EXPENSE" && value.status === "PENDING"
+      ? "PREVISTO"
+      : (value.type ?? "");
+
   return (
     <div className="flex flex-wrap items-end gap-x-6 gap-y-4 px-4 py-4 sm:px-6">
       <div className="flex flex-col gap-1.5">
@@ -25,19 +32,26 @@ export function MovementFilters({ value, onChange }: MovementFiltersProps) {
         <select
           id="movement-type-filter"
           aria-label="Tipo"
-          value={value.type ?? ""}
-          onChange={(event) =>
+          value={typeFilterValue}
+          onChange={(event) => {
+            const next = event.target.value;
+            if (next === "PREVISTO") {
+              update({ type: "EXPENSE", status: "PENDING" });
+              return;
+            }
+            // Any explicit type resets status so switching back to Gasto (or
+            // any other option) clears the planned sub-filter.
             update({
-              type: (event.target.value || undefined) as
-                | MovementType
-                | undefined,
-            })
-          }
+              type: (next || undefined) as MovementType | undefined,
+              status: undefined,
+            });
+          }}
           className={CONTROL_CLASS}
         >
           <option value="">Todos</option>
           <option value="INCOME">Ingreso</option>
           <option value="EXPENSE">Gasto</option>
+          <option value="PREVISTO">Previstos</option>
           <option value="SAVINGS">Ahorro</option>
         </select>
       </div>

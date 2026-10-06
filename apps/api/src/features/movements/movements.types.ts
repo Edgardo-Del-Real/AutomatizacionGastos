@@ -1,4 +1,4 @@
-import type { Movement, MovementType, VisibilityFilter } from "@rita/contracts";
+import type { Movement, MovementStatus, MovementType, VisibilityFilter } from "@rita/contracts";
 
 export type { Movement, MovementType };
 
@@ -16,6 +16,7 @@ export type ViewerScope = {
 
 export type MovementListFilters = {
   type?: MovementType;
+  status?: MovementStatus;
   from?: string;
   to?: string;
   category?: string;

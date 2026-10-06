@@ -212,6 +212,16 @@ describe("movementFiltersSchema", () => {
     expect(result.success).toBe(false);
   });
 
+  it("accepts PENDING in the status filter", () => {
+    const parsed = movementFiltersSchema.parse({ ownerId: "owner-1", status: "PENDING" });
+    expect(parsed.status).toBe("PENDING");
+  });
+
+  it("rejects an invalid status value", () => {
+    const result = movementFiltersSchema.safeParse({ ownerId: "owner-1", status: "LATE" });
+    expect(result.success).toBe(false);
+  });
+
   it("parses an optional visibility filter", () => {
     const parsed = movementFiltersSchema.parse({ ownerId: "owner-1", visibility: "shared" });
     expect(parsed.visibility).toBe("shared");

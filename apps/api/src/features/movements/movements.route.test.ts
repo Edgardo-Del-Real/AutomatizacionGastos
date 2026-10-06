@@ -193,6 +193,37 @@ describe("movements route", () => {
       expect(response.statusCode).toBe(422);
       expect(response.json().code).toBe("ValidationFailed");
     });
+
+    it("filters by status=PENDING, returning only planned expenses", async () => {
+      await seed({
+        ownerId: "owner-1",
+        amount: 300,
+        category: "food",
+        note: "mercado",
+        occurredAt: "2026-08-10T12:00:00.000Z",
+        type: "EXPENSE",
+      });
+      await seed({
+        ownerId: "owner-1",
+        amount: 2500,
+        category: "rent",
+        note: "alquiler",
+        occurredAt: "2026-08-15T12:00:00.000Z",
+        type: "EXPENSE",
+        status: "PENDING",
+      });
+
+      const response = await app.inject({
+        method: "GET",
+        url: "/movements?ownerId=owner-1&type=EXPENSE&status=PENDING",
+      });
+
+      expect(response.statusCode).toBe(200);
+      const movements = response.json();
+      expect(movements).toHaveLength(1);
+      expect(movements[0].status).toBe("PENDING");
+      expect(movements[0].amount).toBe(2500);
+    });
   });
 
   describe("GET /movements/summary", () => {

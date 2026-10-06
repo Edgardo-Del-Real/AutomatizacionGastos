@@ -226,21 +226,32 @@ describe("fetchMovements", () => {
     );
   });
 
+  it("sends the PENDING status filter on the list request", async () => {
+    fetchMock.mockResolvedValue(jsonResponse(validMovements));
+
+    await fetchMovements("default", { type: "EXPENSE", status: "PENDING" });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/movements?ownerId=default&type=EXPENSE&status=PENDING&visibility=all",
+    );
+  });
+
   it("builds query params from all active filters including visibility", async () => {
     fetchMock.mockResolvedValue(jsonResponse(validMovements));
 
     await fetchMovements("default", {
-      type: "INCOME",
+      type: "EXPENSE",
       from: "2026-08-01",
       to: "2026-08-31",
       category: "sueldo",
       q: "julio",
+      status: "PENDING",
     });
 
     // URLSearchParams preserves insertion order: ownerId first, then filters,
     // then the visibility filter.
     expect(fetchMock).toHaveBeenCalledWith(
-      "/api/movements?ownerId=default&type=INCOME&from=2026-08-01&to=2026-08-31&category=sueldo&q=julio&visibility=all",
+      "/api/movements?ownerId=default&type=EXPENSE&from=2026-08-01&to=2026-08-31&category=sueldo&q=julio&status=PENDING&visibility=all",
     );
   });
 

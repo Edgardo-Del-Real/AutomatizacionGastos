@@ -50,6 +50,7 @@ export class ApiError extends Error {
 /** Client-side movement list filters, mapped onto `/movements` query params. */
 export type MovementListFilters = {
   type?: "EXPENSE" | "INCOME" | "SAVINGS";
+  status?: "PAID" | "PENDING";
   from?: string;
   to?: string;
   category?: string;
@@ -187,6 +188,7 @@ export function fetchMovements(
   if (filters.to) params.to = filters.to;
   if (filters.category) params.category = filters.category;
   if (filters.q) params.q = filters.q;
+  if (filters.status) params.status = filters.status;
   return request(
     "GET",
     `/api/movements?${new URLSearchParams({ ownerId, ...params, visibility })}`,

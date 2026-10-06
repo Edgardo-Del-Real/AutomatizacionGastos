@@ -77,6 +77,7 @@ export type ListMovements = z.infer<typeof listMovementsSchema>;
 export const movementFiltersSchema = z.object({
   ownerId: z.string().min(1),
   type: movementTypeSchema.optional(),
+  status: movementStatusSchema.optional(),
   from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
   to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
   category: z.string().min(1).optional(),

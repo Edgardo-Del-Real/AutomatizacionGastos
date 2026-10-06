@@ -157,6 +157,9 @@ export class PrismaMovementRepository implements MovementRepository {
     if (filters.type) {
       conditions.push(Prisma.sql`"type" = ${filters.type}::"MovementType"`);
     }
+    if (filters.status) {
+      conditions.push(Prisma.sql`"status" = ${filters.status}::"MovementStatus"`);
+    }
     if (filters.from) {
       conditions.push(Prisma.sql`"occurredAt" >= ${baDayStart(filters.from)}`);
     }

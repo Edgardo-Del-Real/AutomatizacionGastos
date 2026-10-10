@@ -155,6 +155,53 @@ export function parseSavingsPercentInput(input: string | number): number | null 
 }
 
 /**
+ * D4 — shared-expense-split parser. Resolves the sender's share of a COMPARTIDO
+ * as a percent valid only in `1..99`, or null (invalid → re-prompt). Own es-AR
+ * parsing on purpose (do NOT reuse `parseSavingsPercentInput`, whose `.`/`,`
+ * are decimals): here a `%` suffix is a percent, a bare number `<= 100` is a
+ * percent, and a bare number `> 100` or a currency-formatted value
+ * (`$45.000`, `45.000 ars`, dotted thousands) is an amount whose percent is
+ * `amount / total * 100`. Valid only when the resolved percent lands in `1..99`
+ * (implied amount `> 0` and `< total`, so the owner never keeps the whole bill).
+ */
+export function parseSharedContributionInput(input: string, total: number): number | null {
+  const trimmed = input.trim();
+  if (trimmed.length === 0) {
+    return null;
+  }
+
+  const hasPercentSign = /%\s*$/.test(trimmed);
+  const hasCurrencyMark = /^\s*\$/.test(trimmed) || /\bars\s*$/i.test(trimmed);
+
+  // es-AR numeric core: strip the currency/percent marks, . = thousands,
+  // , = decimal separator (`45.000` → 45000, `45,5` → 45.5).
+  const core = trimmed
+    .replace(/^\s*\$/, "")
+    .replace(/\bars\s*$/i, "")
+    .replace(/%\s*$/, "")
+    .replace(/\./g, "")
+    .replace(",", ".")
+    .trim();
+  if (!/^-?\d+(\.\d+)?$/.test(core)) {
+    return null;
+  }
+  const value = Number(core);
+  if (!Number.isFinite(value) || value <= 0) {
+    return null;
+  }
+
+  const isPercentBySize = !hasPercentSign && !hasCurrencyMark && value <= 100;
+  const percent = hasPercentSign || isPercentBySize ? value : (value / total) * 100;
+
+  if (!Number.isFinite(percent) || percent < 1 || percent > 99) {
+    return null;
+  }
+  // Fractional percents are valid (D9); trim floating-point tails for the
+  // persisted payload without changing representable values like 50 or 45.5.
+  return Math.round(percent * 10000) / 10000;
+}
+
+/**
  * One setup-reply entry after command classification (design D11): plain names
  * and `registrar categoria: X` are CREATE entries (identical effect), while
  * delete/rename commands carry their own semantics. Execution happens in

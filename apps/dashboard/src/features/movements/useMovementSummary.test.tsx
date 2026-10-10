@@ -61,7 +61,7 @@ describe("useMovementSummary", () => {
     if (state.status === "success") {
       expect(state.data.kpis.balance).toBe(1500);
     }
-    expect(fetchMovementSummaryMock).toHaveBeenCalledWith("default", "all");
+    expect(fetchMovementSummaryMock).toHaveBeenCalledWith("default", "mine");
   });
 
   it("refetches the summary when the visibility filter changes", async () => {

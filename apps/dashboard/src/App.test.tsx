@@ -362,7 +362,7 @@ describe("App", () => {
     await waitFor(() =>
       expect(fetchMovementSummaryMock).toHaveBeenLastCalledWith(
         "default",
-        "all",
+        "mine",
       ),
     );
     expect(screen.queryByLabelText("Ver como")).toBeNull();
@@ -383,12 +383,12 @@ describe("App", () => {
     // No persisted viewer and VITE_OWNER_ID ("default") is not a member, so the
     // viewer falls back to the first member.
     await waitFor(() =>
-      expect(fetchMovementSummaryMock).toHaveBeenLastCalledWith("rita", "all"),
+      expect(fetchMovementSummaryMock).toHaveBeenLastCalledWith("rita", "mine"),
     );
 
     await user.click(screen.getByRole("button", { name: "Movimientos" }));
     await waitFor(() =>
-      expect(fetchMovementsMock).toHaveBeenLastCalledWith("rita", {}, "all"),
+      expect(fetchMovementsMock).toHaveBeenLastCalledWith("rita", {}, "mine"),
     );
 
     await user.selectOptions(screen.getByLabelText("Ver como"), "edgardo");
@@ -396,14 +396,14 @@ describe("App", () => {
     await waitFor(() =>
       expect(fetchMovementSummaryMock).toHaveBeenLastCalledWith(
         "edgardo",
-        "all",
+        "mine",
       ),
     );
     await waitFor(() =>
       expect(fetchMovementsMock).toHaveBeenLastCalledWith(
         "edgardo",
         {},
-        "all",
+        "mine",
       ),
     );
     expect(window.localStorage.getItem("rita.viewer")).toBe("edgardo");
@@ -419,7 +419,7 @@ describe("App", () => {
     await waitFor(() =>
       expect(fetchMovementSummaryMock).toHaveBeenLastCalledWith(
         "default",
-        "all",
+        "mine",
       ),
     );
 
@@ -447,11 +447,11 @@ describe("App", () => {
     await waitFor(() =>
       expect(fetchMovementSummaryMock).toHaveBeenLastCalledWith(
         "default",
-        "all",
+        "mine",
       ),
     );
     await waitFor(() =>
-      expect(fetchMovementsMock).toHaveBeenLastCalledWith("default", {}, "all"),
+      expect(fetchMovementsMock).toHaveBeenLastCalledWith("default", {}, "mine"),
     );
   });
 
@@ -477,7 +477,7 @@ describe("App", () => {
       plannedHeading.compareDocumentPosition(kpisHeading) &
         Node.DOCUMENT_POSITION_PRECEDING,
     ).toBeTruthy();
-    expect(screen.getByText("septiembre de 2026")).toBeInTheDocument();
+    expect(screen.getByText("Pendientes — se suman al mes en que los pagues.")).toBeInTheDocument();
     expect(screen.getByText("$ 4.000,00")).toBeInTheDocument();
   });
 
@@ -499,7 +499,7 @@ describe("App", () => {
     expect(
       await screen.findByRole("heading", { name: "Gastos fijos previstos" }),
     ).toBeInTheDocument();
-    expect(screen.getByText("septiembre de 2026")).toBeInTheDocument();
+    expect(screen.getByText("Pendientes — se suman al mes en que los pagues.")).toBeInTheDocument();
     expect(screen.getByText("$ 4.000,00")).toBeInTheDocument();
     expect(
       screen.getByRole("form", { name: "Agregar previsto" }),

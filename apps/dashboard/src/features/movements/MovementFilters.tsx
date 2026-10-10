@@ -121,7 +121,7 @@ export function MovementFilters({ value, onChange }: MovementFiltersProps) {
         <select
           id="movement-visibility-filter"
           aria-label="Visibilidad"
-          value={value.visibility ?? "all"}
+          value={value.visibility ?? "mine"}
           onChange={(event) =>
             update({ visibility: event.target.value as VisibilityFilter })
           }

@@ -29,13 +29,16 @@ afterEach(() => {
 });
 
 describe("PlannedSection", () => {
-  it("renders the planned month label and the es-AR next-month total", () => {
+  it("renders the outstanding pending total without a planned date", () => {
     render(<PlannedSection planned={{ month: "2026-09", total: 4000 }} />);
 
     expect(
       screen.getByRole("heading", { name: "Gastos fijos previstos" }),
     ).toBeInTheDocument();
-    expect(screen.getByText("septiembre de 2026")).toBeInTheDocument();
+    expect(screen.getByText("Por pagar")).toBeInTheDocument();
+    expect(
+      screen.getByText("Pendientes — se suman al mes en que los pagues."),
+    ).toBeInTheDocument();
     expect(screen.getByText("$ 4.000,00")).toBeInTheDocument();
   });
 

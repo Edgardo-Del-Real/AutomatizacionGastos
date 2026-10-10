@@ -379,7 +379,7 @@ describe("TelegramService (integration v2)", () => {
     expect(await prisma.expense.count()).toBe(0);
   });
 
-  it("capture e2e: COMPARTIDO registers a SHARED EXPENSE row", async () => {
+  it("capture e2e: COMPARTIDO without a partner registers the legacy single SHARED EXPENSE row (sharedTotal null)", async () => {
     await seedCategories(["Cafe"]);
     const preview = await openPreview("COMPARTIDO", "2000 super");
     const { reply } = replyCollector();
@@ -390,6 +390,9 @@ describe("TelegramService (integration v2)", () => {
     expect(movements).toHaveLength(1);
     expect(movements[0]?.type).toBe("EXPENSE");
     expect(movements[0]?.visibility).toBe("SHARED");
+    expect(movements[0]?.amount.toNumber()).toBe(2000);
+    // Legacy single row: no split, no annotation source.
+    expect(movements[0]?.sharedTotal).toBeNull();
   });
 
   it("capture e2e: Guardar is gated until a category is chosen; ➕ creates and selects", async () => {

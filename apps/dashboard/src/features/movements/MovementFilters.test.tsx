@@ -32,7 +32,7 @@ describe("MovementFilters", () => {
       .getAllByRole("option")
       .map((option) => option.textContent);
     expect(options).toEqual(["Todos", "Míos", "Compartidos"]);
-    expect(select).toHaveValue("all");
+    expect(select).toHaveValue("mine");
   });
 
   it("offers Ahorro alongside Ingreso and Gasto in the type filter", async () => {

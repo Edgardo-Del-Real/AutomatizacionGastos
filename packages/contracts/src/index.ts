@@ -66,6 +66,10 @@ export const movementSchema = expenseSchema.extend({
   // Additive contract: status is carried when present; existing consumers keep
   // parsing movements without it (PAID is the persisted default).
   status: movementStatusSchema.optional(),
+  // Additive contract (shared-expense-split D8): sharedTotal is carried when
+  // present on a split SHARED row; legacy rows keep parsing without it and a
+  // NULL sharedTotal behaves exactly as before.
+  sharedTotal: z.number().nullable().optional(),
 });
 
 export type Movement = z.infer<typeof movementSchema>;

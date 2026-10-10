@@ -11,7 +11,7 @@ import { useMovementMutations } from "./useMovementMutations";
 type Planned = MovementSummary["planned"];
 
 type PlannedSectionProps = {
-  /** `summary.planned` from the API: next-month PENDING EXPENSE total. */
+  /** `summary.planned` from the API: outstanding PENDING EXPENSE total. */
   planned: Planned;
   /** Bumped on any successful mutation so categories re-fetch in place. */
   refreshToken?: number;
@@ -24,23 +24,10 @@ const FIELD_CLASS =
 const LABEL_CLASS = "text-xs font-medium tracking-wide text-ink-faint uppercase";
 const ERROR_CLASS = "text-sm font-medium text-danger";
 
-/** Formats a "YYYY-MM" month key as an es-AR long month label ("septiembre de 2026"). */
-function monthLabel(month: string): string {
-  const [year, monthIndex] = month.split("-").map(Number);
-  // The API contract pins "YYYY-MM" (movementSummarySchema.planned.month); the
-  // defaults are unreachable for a valid key.
-  const date = new Date(Date.UTC(year ?? 1970, (monthIndex ?? 1) - 1, 1));
-  return new Intl.DateTimeFormat("es-AR", {
-    month: "long",
-    year: "numeric",
-    timeZone: "UTC",
-  }).format(date);
-}
-
 /**
  * D9 — planned expenses section, rendered right after the KPI cards in the
- * kpis tab. Shows `summary.planned` (next-month total, es-AR) and hosts the
- * inline "Agregar previsto" form: amount, note, and category, with a
+ * kpis tab. Shows `summary.planned` (outstanding PENDING total, es-AR) and
+ * hosts the inline "Agregar previsto" form: amount, note, and category, with a
  * positive-amount guard that never reaches the API on invalid input.
  * Planned expenses are INDIVIDUAL by design: there is no shared toggle.
  */
@@ -91,10 +78,12 @@ export function PlannedSection({
       <div className="grid lg:grid-cols-[minmax(220px,0.75fr)_minmax(0,1.25fr)]">
         <div className="bg-accent p-6 text-on-accent sm:p-8">
           <p className="text-xs font-semibold tracking-[0.16em] text-on-accent/70 uppercase">
-            Próximo mes
+            Por pagar
           </p>
           <h2 className="mt-3 text-xl font-bold">Gastos fijos previstos</h2>
-          <p className="mt-1 text-sm text-on-accent/75">{monthLabel(planned.month)}</p>
+          <p className="mt-1 text-sm text-on-accent/75">
+            Pendientes — se suman al mes en que los pagues.
+          </p>
           <p className="mt-8 font-mono text-3xl font-bold tabular-nums">
             {formatARS(planned.total)}
           </p>

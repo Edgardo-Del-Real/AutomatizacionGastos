@@ -37,15 +37,15 @@ The dashboard MUST fetch `GET /movements/summary` for the configured owner and M
 - WHEN the KPI cards render
 - THEN the "Ahorrado" card shows $0
 
-#### Scenario: Planned section renders next-month total
+#### Scenario: Planned section renders the outstanding total
 
 - GIVEN `summary.planned` is `{ month: "2026-09", total: 4000 }`
 - WHEN the dashboard loads
-- THEN a "Gastos fijos previstos" section shows the month and total in es-AR
+- THEN a "Gastos fijos previstos" section shows the pending total in es-AR without a planned date
 
 ### Requirement: Movement List
 
-The dashboard MUST fetch `GET /movements` for the selected viewer and MUST render a table ordered by `occurredAt` descending with columns for date, type, amount (es-AR), currency, category, note, and the SHARED badge. Each row MUST expose edit and delete actions ONLY for movements the viewer registered (registrantId equals the selected viewer); partner rows MUST be read-only. The list MUST apply the visibility filter (`mine`|`shared`|`all`). A SAVINGS row MUST render its type as "Ahorro" with an "Ahorro" badge. A PENDING row MUST render its status as "Previsto" with a "Previsto" badge and a "Marcar pagado" action for own rows.
+The dashboard MUST fetch `GET /movements` for the selected viewer and MUST render a table ordered by `occurredAt` descending with columns for date, type, amount (es-AR), currency, category, note, and the SHARED badge. Each row MUST expose edit and delete actions ONLY for movements the viewer registered (registrantId equals the selected viewer); partner rows MUST be read-only. The list MUST apply the visibility filter (`mine`|`shared`|`all`). A SAVINGS row MUST render its type as "Ahorro" with an "Ahorro" badge. A PENDING row MUST render its status as "Previsto" with a "Previsto" badge, an em dash ("—") in the date column until marked paid, and a "Marcar pagado" action for own rows.
 (Previously: only INCOME/EXPENSE/SAVINGS rows existed with type labels/badges; no PENDING rendering.)
 
 #### Scenario: Render movements
@@ -306,7 +306,8 @@ The dashboard MUST provide a "Marcar pagado" action on own PENDING rows that cal
 
 ### Requirement: Viewer Visibility Filter
 
-The dashboard MUST provide a visibility filter with values `mine` | `shared` | `all` (default `all`) that re-queries `GET /movements` AND `GET /movements/summary` with the `visibility` query param, so the list AND the charts (KPIs, category breakdown, top lists) reflect the filter. A reset action MUST restore `all`.
+The dashboard MUST provide a visibility filter with values `mine` | `shared` | `all` (default `mine`) that re-queries `GET /movements` AND `GET /movements/summary` with the `visibility` query param, so the list AND the charts (KPIs, category breakdown, top lists) reflect the filter. A reset action MUST restore `mine`.
+(Previously: the default was `all`, so a partner's SHARED halves appeared in the viewer's list and totals; the default is now `mine` so the list and charts show only the viewer's own movements and their share of a split.)
 
 #### Scenario: Filter applies to list and charts
 
@@ -314,29 +315,52 @@ The dashboard MUST provide a visibility filter with values `mine` | `shared` | `
 - WHEN the user selects "shared"
 - THEN both the list and the summary requests carry `visibility=shared` and the charts reflect only SHARED movements
 
-#### Scenario: Reset restores all
+#### Scenario: Reset restores mine
 
 - GIVEN an active visibility filter
 - WHEN the user clicks reset
-- THEN the list and summary reload with `visibility=all`
+- THEN the list and summary reload with `visibility=mine`
 
-#### Scenario: Default is all
+#### Scenario: Default is mine
 
 - GIVEN the dashboard loads with no filter selected
-- THEN both requests carry `visibility=all` (own + partner SHARED)
+- THEN both requests carry `visibility=mine` (the viewer's own movements)
 
 ### Requirement: SHARED Badge
 
-The dashboard MUST render a SHARED badge on movement rows whose `visibility` is `SHARED`, showing the registrant's name. INDIVIDUAL rows MUST NOT show the badge.
+The dashboard MUST render a SHARED badge on movement rows whose `visibility` is `SHARED`, showing who the row belongs to: "vos" for the viewer's own rows, otherwise the member's name. INDIVIDUAL rows MUST NOT show the badge.
 
 #### Scenario: Badge on shared row
 
 - GIVEN a SHARED movement registered by Edgardo
 - WHEN the row renders in Rita's list
-- THEN the row shows a SHARED badge with Edgardo's name
+- THEN the row shows a SHARED badge with "Edgardo"
+- AND Rita's own SHARED rows show the badge "vos"
 
 #### Scenario: No badge on individual row
 
 - GIVEN an INDIVIDUAL movement
 - WHEN the row renders
 - THEN no badge is shown
+
+### Requirement: Shared Split Amount Annotation
+
+The dashboard MUST render any row whose `sharedTotal` is present as the owner's share with the original total below it in italics (es-AR), in BOTH the movement-list "Monto" cell and the card view. A row without `sharedTotal` MUST render its amount exactly as before with no annotation.
+
+#### Scenario: List cell annotates a split row
+
+- GIVEN a split row with amount 1000 and `sharedTotal` 2000
+- WHEN the list renders
+- THEN the amount cell shows "$ 1.000" with "$ 2.000" below it in italics
+
+#### Scenario: Card view annotates a split row
+
+- GIVEN the same split row in the card view
+- WHEN the card renders
+- THEN the amount shows "$ 1.000" with "$ 2.000" in italics below
+
+#### Scenario: Non-split rows unannotated
+
+- GIVEN a movement with no `sharedTotal`
+- WHEN its amount renders
+- THEN no annotation appears

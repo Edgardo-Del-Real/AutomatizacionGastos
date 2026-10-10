@@ -11,7 +11,7 @@ export type MovementsState = AsyncState<Movement[]> & { retry: () => void };
 export function useMovements(
   ownerId: string,
   filters: MovementListFilters = {},
-  visibility: VisibilityFilter = "all",
+  visibility: VisibilityFilter = "mine",
   refreshToken?: number,
 ): MovementsState {
   const [state, setState] = useState<AsyncState<Movement[]>>({ status: "idle" });

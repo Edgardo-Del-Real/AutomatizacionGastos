@@ -2,7 +2,8 @@
 
 ## Purpose
 
-Register next month's fixed expenses as `PENDING` EXPENSE movements that stay invisible to KPIs until the owner marks them paid. The planned month is derived from the load date (`occurredAt` + 1 month, Buenos Aires) with no stored month column; marking paid rewrites `occurredAt` to the real payment date, and only then do the amounts enter expenses, balance, and charts.
+Register fixed expenses as `PENDING` EXPENSE movements that stay invisible to KPIs until the owner marks them paid. A previsto carries no planned date: it keeps its load date in `occurredAt` and is shown only in the outstanding `planned` total. Marking it paid rewrites `occurredAt` to the real payment date, and only then does the amount enter expenses, balance, and charts — in the month it was actually paid.
+(Previously: the planned target month was derived as `occurredAt` + 1 month in Buenos Aires, so previstos were dated to the following month.)
 
 ## Requirements
 
@@ -28,21 +29,21 @@ The system MUST store a `status` field on every movement (enum `MovementStatus` 
 - WHEN it is persisted
 - THEN its status is `PENDING`
 
-### Requirement: Planned Month Derivation
+### Requirement: Planned Expenses Carry No Date
 
-The planned target month MUST be derived as `occurredAt` (load date) + 1 month in `America/Argentina/Buenos_Aires`. The system MUST NOT store a planned-month column. A `PENDING` movement MUST keep the load date in `occurredAt` until marked paid.
+A `PENDING` movement MUST NOT carry a planned target month: it MUST keep the load date in `occurredAt` from creation and MUST NOT be tied to a projected month. The `planned` block MUST count every outstanding PENDING EXPENSE regardless of its `occurredAt`. When marked paid, `markPaidById` rewrites `occurredAt` to the payment date so the amount enters the KPIs of the month the payment happened.
 
-#### Scenario: Derived from load date
+#### Scenario: A previsto has no planned date
 
 - GIVEN a PENDING expense loaded on 2026-08-15
-- WHEN the planned month is computed
-- THEN the target month is 2026-09
+- WHEN the planned block is computed
+- THEN the expense is counted regardless of any projected month
 
-#### Scenario: Buenos Aires boundary
+#### Scenario: Old previstos still count
 
-- GIVEN a PENDING expense with `occurredAt` 2026-08-01T02:59:00Z (= 2026-07-31 23:59 Buenos Aires)
-- WHEN the planned month is computed
-- THEN the target month is 2026-08 (load month is July, plus one)
+- GIVEN a PENDING expense loaded two months ago and never paid
+- WHEN the planned block is computed
+- THEN it is still included in `planned.total`
 
 ### Requirement: Planned Creation Guards
 
@@ -90,19 +91,26 @@ A `PENDING` movement MUST NOT contribute to income, expenses, balance, per-month
 
 ### Requirement: Planned Summary Block
 
-`movementSummarySchema` MUST include `planned: { month, total }`, where `total` is the sum of the owner's PENDING EXPENSE movements targeted at `month`. The `planned` block MUST always target the month following the current Buenos Aires month and MUST ignore any `from`/`to` filters.
+`movementSummarySchema` MUST include `planned: { month, total }`, where `total` is the sum of the owner's OUTSTANDING PENDING EXPENSE movements (every PENDING EXPENSE; no date derivation). `month` MUST remain the next-month key as an informational label only and the block MUST ignore any `from`/`to` filters.
+(Previously: `total` was the sum of PENDING movements targeted at the month derived from `occurredAt` + 1 month, so previstos were dated to the following month.)
 
-#### Scenario: planned reports next month
+#### Scenario: planned reports every outstanding previsto
 
 - GIVEN PENDING EXPENSE 2500 loaded this month
 - WHEN the summary is requested
-- THEN `planned` is `{ month: <next month>, total: 2500 }`
+- THEN `planned` is `{ month: <next month key>, total: 2500 }`
+
+#### Scenario: an old previsto still counts
+
+- GIVEN a PENDING expense loaded two months ago and never paid
+- WHEN the summary is requested
+- THEN it is still included in `planned.total`
 
 #### Scenario: planned ignores date filters
 
 - GIVEN `from`/`to` limited to the current month
 - WHEN the summary is requested
-- THEN `planned` still reports the next-month total
+- THEN `planned` still reports the outstanding total
 
 #### Scenario: no pending planned is zero
 

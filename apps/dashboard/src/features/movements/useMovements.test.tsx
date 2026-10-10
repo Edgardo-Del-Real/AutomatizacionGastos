@@ -63,7 +63,7 @@ describe("useMovements", () => {
     if (state.status === "success") {
       expect(state.data).toHaveLength(2);
     }
-    expect(fetchMovementsMock).toHaveBeenCalledWith("default", {}, "all");
+    expect(fetchMovementsMock).toHaveBeenCalledWith("default", {}, "mine");
   });
 
   it("refetches when the visibility filter changes", async () => {
@@ -96,7 +96,7 @@ describe("useMovements", () => {
     );
 
     await waitFor(() => expect(result.current.status).toBe("success"));
-    expect(fetchMovementsMock).toHaveBeenCalledWith("default", firstFilters, "all");
+    expect(fetchMovementsMock).toHaveBeenCalledWith("default", firstFilters, "mine");
 
     const secondFilters: MovementListFilters = { type: "EXPENSE", q: "taxi" };
     rerender({ filters: secondFilters });
@@ -105,7 +105,7 @@ describe("useMovements", () => {
       expect(fetchMovementsMock).toHaveBeenCalledWith(
         "default",
         secondFilters,
-        "all",
+        "mine",
       ),
     );
   });

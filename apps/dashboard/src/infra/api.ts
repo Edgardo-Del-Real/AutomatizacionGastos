@@ -166,7 +166,7 @@ export function fetchHouseholdMembers(): Promise<HouseholdMember[]> {
 
 export function fetchMovementSummary(
   ownerId: string,
-  visibility: VisibilityFilter = "all",
+  visibility: VisibilityFilter = "mine",
 ): Promise<MovementSummary> {
   return request(
     "GET",
@@ -180,7 +180,7 @@ export function fetchMovementSummary(
 export function fetchMovements(
   ownerId: string,
   filters: MovementListFilters = {},
-  visibility: VisibilityFilter = "all",
+  visibility: VisibilityFilter = "mine",
 ): Promise<Movement[]> {
   const params: Record<string, string> = {};
   if (filters.type) params.type = filters.type;

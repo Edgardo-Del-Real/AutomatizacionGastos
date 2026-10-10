@@ -134,13 +134,13 @@ describe("fetchHouseholdMembers", () => {
 });
 
 describe("fetchMovementSummary", () => {
-  it("resolves validated summary data for the owner with default visibility all", async () => {
+  it("resolves validated summary data for the owner with default visibility mine", async () => {
     fetchMock.mockResolvedValue(jsonResponse(validSummary));
 
     const summary = await fetchMovementSummary("default");
 
     expect(fetchMock).toHaveBeenCalledWith(
-      "/api/movements/summary?ownerId=default&visibility=all",
+      "/api/movements/summary?ownerId=default&visibility=mine",
     );
     expect(summary.kpis.balance).toBe(1500);
     expect(summary.mom.months).toHaveLength(2);
@@ -188,13 +188,13 @@ describe("fetchMovementSummary", () => {
 });
 
 describe("fetchMovements", () => {
-  it("resolves validated movements for the owner with default visibility all", async () => {
+  it("resolves validated movements for the owner with default visibility mine", async () => {
     fetchMock.mockResolvedValue(jsonResponse(validMovements));
 
     const movements = await fetchMovements("acme");
 
     expect(fetchMock).toHaveBeenCalledWith(
-      "/api/movements?ownerId=acme&visibility=all",
+      "/api/movements?ownerId=acme&visibility=mine",
     );
     expect(movements).toHaveLength(2);
     expect(movements[0]).toMatchObject({
@@ -222,7 +222,7 @@ describe("fetchMovements", () => {
     await fetchMovements("default", { type: "SAVINGS" });
 
     expect(fetchMock).toHaveBeenCalledWith(
-      "/api/movements?ownerId=default&type=SAVINGS&visibility=all",
+      "/api/movements?ownerId=default&type=SAVINGS&visibility=mine",
     );
   });
 
@@ -232,7 +232,7 @@ describe("fetchMovements", () => {
     await fetchMovements("default", { type: "EXPENSE", status: "PENDING" });
 
     expect(fetchMock).toHaveBeenCalledWith(
-      "/api/movements?ownerId=default&type=EXPENSE&status=PENDING&visibility=all",
+      "/api/movements?ownerId=default&type=EXPENSE&status=PENDING&visibility=mine",
     );
   });
 
@@ -251,7 +251,7 @@ describe("fetchMovements", () => {
     // URLSearchParams preserves insertion order: ownerId first, then filters,
     // then the visibility filter.
     expect(fetchMock).toHaveBeenCalledWith(
-      "/api/movements?ownerId=default&type=EXPENSE&from=2026-08-01&to=2026-08-31&category=sueldo&q=julio&status=PENDING&visibility=all",
+      "/api/movements?ownerId=default&type=EXPENSE&from=2026-08-01&to=2026-08-31&category=sueldo&q=julio&status=PENDING&visibility=mine",
     );
   });
 
@@ -261,7 +261,7 @@ describe("fetchMovements", () => {
     await fetchMovements("default", { q: "" });
 
     expect(fetchMock).toHaveBeenCalledWith(
-      "/api/movements?ownerId=default&visibility=all",
+      "/api/movements?ownerId=default&visibility=mine",
     );
   });
 

@@ -35,7 +35,7 @@ function Dashboard() {
 
   // Hoisted visibility filter (AD8): one state drives BOTH the summary and the
   // list requests so the charts and the table always agree.
-  const [visibility, setVisibility] = useState<VisibilityFilter>("all");
+  const [visibility, setVisibility] = useState<VisibilityFilter>("mine");
 
   const [activeSection, setActiveSection] =
     useState<DashboardSection>("kpis");

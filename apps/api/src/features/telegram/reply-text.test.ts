@@ -69,6 +69,10 @@ import {
   savingsRulePromptReply,
   savingsRulesListReply,
   selectionAbandonedReply,
+  sharedPercentInvalidReply,
+  sharedPercentPromptReply,
+  sharedPickFirstReply,
+  successSharedReply,
   setupBatchDoneReply,
   setupDoneReply,
   setupDoneWithRedirectsReply,
@@ -315,6 +319,42 @@ describe("savings admin and manual-choice reply templates (savings-config)", () 
   });
 });
 
+describe("shared-expense-split replies (Phase 4, task 4.3)", () => {
+  it("prompts for the shared percent after [Otro] in the COMPARTIDO confirmation", () => {
+    const text = sharedPercentPromptReply();
+
+    expect(text).toContain("porcentaje");
+  });
+
+  it("rejects an invalid shared percent and re-prompts keeping the state open", () => {
+    const text = sharedPercentInvalidReply();
+
+    expect(text).toContain("1");
+    expect(text).toContain("99");
+    expect(text).toContain("de nuevo");
+  });
+
+  it("asks to pick a percent first when Guardar is tapped without one", () => {
+    const text = sharedPickFirstReply();
+
+    expect(text).toContain("porcentaje");
+    expect(text).toContain("50%");
+    expect(text).toContain("Otro");
+  });
+
+  it("confirms the sender share with the 'parte de {total} compartido' annotation (OQ2 wording)", () => {
+    expect(successSharedReply(1000, 2000, "super", "Super")).toBe(
+      "✅ Guardado: $\u00A01.000,00 — parte de $\u00A02.000,00 compartido (super) — Categoría: Super",
+    );
+  });
+
+  it("confirms a share without a note", () => {
+    expect(successSharedReply(20000, 40000, null, "Alquiler")).toBe(
+      "✅ Guardado: $\u00A020.000,00 — parte de $\u00A040.000,00 compartido — Categoría: Alquiler",
+    );
+  });
+});
+
 describe("query reply templates", () => {
   it("lists the owner categories", () => {
     expect(categoriesQueryReply([])).toContain("No tenés categorías");
@@ -348,7 +388,7 @@ describe("query reply templates", () => {
   });
 
   it("renders the planned total", () => {
-    expect(plannedQueryReply("2026-10", 2500)).toContain(formatARS(2500));
+    expect(plannedQueryReply(2500)).toContain(formatARS(2500));
   });
 
   it("dispatches the template by the executed query type", () => {

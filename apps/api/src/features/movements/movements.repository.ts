@@ -27,6 +27,8 @@ type MovementRow = {
   type: MovementType;
   visibility: MovementVisibility;
   status: MovementStatus;
+  /** shared-expense-split: the split gross (null on every legacy row). */
+  sharedTotal: Prisma.Decimal | null;
 };
 
 type DecimalLike = Prisma.Decimal | string | number | null | undefined;
@@ -52,6 +54,8 @@ function mapMovementRow(row: MovementRow): Movement {
     type: row.type,
     visibility: row.visibility,
     status: row.status,
+    // shared-expense-split: null stays null (legacy rows expose no annotation).
+    sharedTotal: row.sharedTotal === null ? null : toNumber(row.sharedTotal),
   };
 }
 
@@ -174,7 +178,7 @@ export class PrismaMovementRepository implements MovementRepository {
     }
     const where = Prisma.join(conditions, " AND ");
     const rows = await this.prisma.$queryRaw<MovementRow[]>`
-      SELECT "id", "ownerId", "ownerId" AS "registrantId", "amount", "currency", "category", "note", "occurredAt", "createdAt", "type", "visibility", "status"
+      SELECT "id", "ownerId", "ownerId" AS "registrantId", "amount", "currency", "category", "note", "occurredAt", "createdAt", "type", "visibility", "status", "sharedTotal"
       FROM "Expense"
       WHERE ${where}
       ORDER BY "occurredAt" DESC
@@ -335,7 +339,7 @@ export class PrismaMovementRepository implements MovementRepository {
     ];
     const where = Prisma.join(conditions, " AND ");
     const rows = await this.prisma.$queryRaw<MovementRow[]>`
-      SELECT "id", "ownerId", "ownerId" AS "registrantId", "amount", "currency", "category", "note", "occurredAt", "createdAt", "type", "visibility", "status"
+      SELECT "id", "ownerId", "ownerId" AS "registrantId", "amount", "currency", "category", "note", "occurredAt", "createdAt", "type", "visibility", "status", "sharedTotal"
       FROM "Expense"
       WHERE ${where}
       ORDER BY "amount" DESC
@@ -361,11 +365,13 @@ export class PrismaMovementRepository implements MovementRepository {
   }
 
   /**
-   * D4 — the planned block: sum of the owner's PENDING EXPENSE movements whose
-   * derived month equals `month`. The month is derived per row in SQL using the
-   * same BA idiom as the bucketing aggregates (naive-UTC column → BA wall time)
-   * plus one month, so the boundary scenario behaves identically to mom/daily.
-   * No period conditions are composed here — planned ignores from/to by design.
+   * D4 — the planned block: sum of the owner's OUTSTANDING PENDING EXPENSE
+   * movements. Previstos carry no planned date: any PENDING EXPENSE counts
+   * regardless of its occurredAt (the load date), and the movement gains its
+   * real payment date when marked paid (markPaidById), entering the KPI of the
+   * month it was actually paid. `month` is the informational target key the
+   * caller derives; no period conditions are composed here — planned ignores
+   * from/to by design.
    */
   async summaryPlanned(
     scope: ViewerScope,
@@ -376,9 +382,6 @@ export class PrismaMovementRepository implements MovementRepository {
       Prisma.sql`"currency" = 'ARS'`,
       Prisma.sql`"type" = 'EXPENSE'::"MovementType"`,
       Prisma.sql`"status" = 'PENDING'::"MovementStatus"`,
-      Prisma.sql`to_char(date_trunc('month',
-        ("occurredAt" AT TIME ZONE 'UTC' AT TIME ZONE ${BA_TIMEZONE})
-        + interval '1 month'), 'YYYY-MM') = ${month}`,
     ];
     const where = Prisma.join(conditions, " AND ");
     const rows = await this.prisma.$queryRaw<{ total: DecimalLike }[]>`

@@ -126,6 +126,33 @@ describe("movementSchema", () => {
     const result = movementSchema.safeParse({ ...movementPayload, status: "PARTIAL" });
     expect(result.success).toBe(false);
   });
+
+  // shared-expense-split: additive sharedTotal contract (design D8/D9 — the
+  // field rides movementSchema only; expenseSchema and legacy rows stay intact).
+  it("carries sharedTotal on a shared-split row", () => {
+    const parsed = movementSchema.parse({
+      ...movementPayload,
+      type: "EXPENSE",
+      visibility: "SHARED",
+      sharedTotal: 2000,
+    });
+    expect(parsed.sharedTotal).toBe(2000);
+  });
+
+  it("carries a null sharedTotal", () => {
+    const parsed = movementSchema.parse({ ...movementPayload, sharedTotal: null });
+    expect(parsed.sharedTotal).toBeNull();
+  });
+
+  it("parses a legacy row without sharedTotal (absent stays absent)", () => {
+    const parsed = movementSchema.parse(movementPayload);
+    expect(parsed.sharedTotal).toBeUndefined();
+  });
+
+  it("rejects a sharedTotal out of the money shape", () => {
+    const result = movementSchema.safeParse({ ...movementPayload, sharedTotal: "2000" });
+    expect(result.success).toBe(false);
+  });
 });
 
 describe("householdMemberSchema", () => {

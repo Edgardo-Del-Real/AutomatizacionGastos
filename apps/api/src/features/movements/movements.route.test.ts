@@ -732,14 +732,15 @@ describe("movements route", () => {
       expect(notes).toEqual(["compartido edgardo", "compartido rita"]);
     });
 
-    it("defaults to all: own movements plus the partner's SHARED ones", async () => {
+    it("defaults to mine: only the viewer's own movements", async () => {
       await seedDuo();
 
       const response = await duoApp.inject({ method: "GET", url: "/movements?ownerId=rita" });
 
       expect(response.statusCode).toBe(200);
       const notes = (response.json() as { note: string | null }[]).map((m) => m.note).sort();
-      expect(notes).toEqual(["compartido edgardo", "compartido rita", "privado rita"]);
+      expect(notes).toEqual(["compartido rita", "privado rita"]);
+      expect(notes).not.toContain("compartido edgardo");
       expect(notes).not.toContain("privado edgardo");
     });
 
@@ -755,6 +756,70 @@ describe("movements route", () => {
       const summary = response.json() as { kpis: { expenses: number; count: number } };
       expect(summary.kpis.expenses).toBe(300);
       expect(summary.kpis.count).toBe(2);
+    });
+
+    it("per-viewer KPI shift on a shared split (mine=own share; all=total)", async () => {
+      // A 1000/1000 split of a 2000 COMPARTIDO: two SHARED rows, one per owner.
+      const now = new Date(Date.now() - 3 * 60 * 60 * 1000);
+      await prisma.expense.createMany({
+        data: [
+          {
+            ownerId: "rita",
+            amount: 1000,
+            currency: "ARS",
+            category: "super",
+            note: "split rita",
+            occurredAt: now,
+            type: "EXPENSE",
+            visibility: "SHARED",
+            sharedTotal: 2000,
+          },
+          {
+            ownerId: "edgardo",
+            amount: 1000,
+            currency: "ARS",
+            category: "super",
+            note: "split edgardo",
+            occurredAt: now,
+            type: "EXPENSE",
+            visibility: "SHARED",
+            sharedTotal: 2000,
+          },
+        ],
+      });
+
+      const mine = await duoApp.inject({
+        method: "GET",
+        url: "/movements/summary?ownerId=rita&visibility=mine",
+      });
+      const all = await duoApp.inject({
+        method: "GET",
+        url: "/movements/summary?ownerId=rita&visibility=all",
+      });
+      const shared = await duoApp.inject({
+        method: "GET",
+        url: "/movements/summary?ownerId=rita&visibility=shared",
+      });
+
+      expect(mine.statusCode).toBe(200);
+      const mineKpis = (mine.json() as { kpis: { expenses: number; count: number; maxAmount: number; avgPerMovement: number; balance: number } }).kpis;
+      // Accepted consequence: mine credits only the viewer's 1000 share.
+      expect(mineKpis.expenses).toBe(1000);
+      expect(mineKpis.count).toBe(1);
+      expect(mineKpis.maxAmount).toBe(1000);
+      expect(mineKpis.avgPerMovement).toBe(1000);
+      expect(mineKpis.balance).toBe(-1000);
+
+      const allKpis = (all.json() as { kpis: { expenses: number; count: number; maxAmount: number } }).kpis;
+      // all/shared still sum to the total gross (identical categories keep the
+      // per-category gross correct).
+      expect(allKpis.expenses).toBe(2000);
+      expect(allKpis.count).toBe(2);
+      expect(allKpis.maxAmount).toBe(1000);
+
+      const sharedKpis = (shared.json() as { kpis: { expenses: number; count: number } }).kpis;
+      expect(sharedKpis.expenses).toBe(2000);
+      expect(sharedKpis.count).toBe(2);
     });
   });
 
@@ -922,7 +987,7 @@ describe("movements route", () => {
       expect(summary.planned).toEqual({ month: nextBaMonthKey(), total: 2500 });
     });
 
-    it("reports the planned total for the next Buenos Aires month", async () => {
+    it("reports every outstanding PENDING total (previstos have no planned date)", async () => {
       const noon = thisMonthNoonIso();
       const nextKey = nextBaMonthKey();
       await seed({
@@ -974,11 +1039,11 @@ describe("movements route", () => {
       expect(response.statusCode).toBe(200);
       const summary = response.json();
       // The PENDING row lives in the current month, outside the filtered range,
-      // yet planned still reports the next-month total (filters are ignored).
+      // yet planned still reports the outstanding total (filters are ignored).
       expect(summary.planned).toEqual({ month: nextKey, total: 2500 });
     });
 
-    it("reports a zero planned total when no PENDING expense targets next month", async () => {
+    it("reports a zero planned total when no PENDING expense exists", async () => {
       const response = await app.inject({ method: "GET", url: "/movements/summary?ownerId=owner-empty" });
 
       expect(response.statusCode).toBe(200);
@@ -986,12 +1051,12 @@ describe("movements route", () => {
       expect(summary.planned).toEqual({ month: nextBaMonthKey(), total: 0 });
     });
 
-    it("derives the planned month in Buenos Aires (next-month 02:59Z lands in the current month BA)", async () => {
+    it("counts any outstanding PENDING regardless of its occurredAt month (no derived date)", async () => {
       const nextKey = nextBaMonthKey();
-      // next-month-01T02:59:00Z == last day of the current month 23:59 in Buenos
-      // Aires: the load month is the CURRENT month, so the derived month is next
-      // month. A naive UTC derivation would derive the month AFTER next and the
-      // row would not be counted.
+      // The previsto is dated at the boundary (next-month-01T02:59:00Z == last
+      // day of the current month 23:59 in Buenos Aires). With no planned-date
+      // derivation, any PENDING row counts regardless of where its occurredAt
+      // falls.
       const boundaryIso = `${nextKey}-01T02:59:00.000Z`;
       await seed({
         ownerId: "owner-1",
@@ -1010,9 +1075,9 @@ describe("movements route", () => {
       expect(summary.planned).toEqual({ month: nextKey, total: 500 });
     });
 
-    it("excludes PENDING rows whose derived month is not next month (2026-08-01T02:59Z → 2026-08)", async () => {
-      // Spec boundary: 2026-08-01T02:59:00Z == 2026-07-31 23:59 BA → load month
-      // July → derived August. August is never the next month, so planned stays 0.
+    it("includes PENDING rows regardless of created month (previstos carry no date)", async () => {
+      // The previsto is dated 2026-08-01T02:59:00Z (== 2026-07-31 23:59 BA). With
+      // no planned-date derivation it still counts in the outstanding total.
       await seed({
         ownerId: "owner-1",
         amount: 777,
@@ -1027,7 +1092,7 @@ describe("movements route", () => {
 
       expect(response.statusCode).toBe(200);
       const summary = response.json();
-      expect(summary.planned).toEqual({ month: nextBaMonthKey(), total: 0 });
+      expect(summary.planned).toEqual({ month: nextBaMonthKey(), total: 777 });
     });
 
     it("returns PENDING rows in the movement list, newest first, with their status", async () => {

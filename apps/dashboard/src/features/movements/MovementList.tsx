@@ -1,4 +1,5 @@
 import { useState } from "react";
+import type { ReactElement } from "react";
 
 import type { Movement, MovementType, VisibilityFilter } from "@rita/contracts";
 
@@ -56,10 +57,37 @@ function registrantOf(movement: Movement): string {
   return movement.registrantId ?? movement.ownerId;
 }
 
+/**
+ * Amount renderer used by BOTH the list "Monto" cell and the (dormant) card
+ * view. A split row (`sharedTotal` present) shows the owner's share with the
+ * original total below it in italics (es-AR); a legacy row renders the plain
+ * amount with no annotation. Exported so the card path stays testable while
+ * the `{false && ...}` gate stays off.
+ */
+export function MovementAmount({
+  amount,
+  sharedTotal,
+}: {
+  amount: number;
+  sharedTotal?: number | null;
+}): ReactElement {
+  if (sharedTotal === undefined || sharedTotal === null) {
+    return <>{formatARS(amount)}</>;
+  }
+  return (
+    <>
+      {formatARS(amount)}
+      <em className="block text-xs font-normal text-ink-soft">
+        {formatARS(sharedTotal)}
+      </em>
+    </>
+  );
+}
+
 type MovementListProps = {
   refreshToken?: number;
   onMutated?: () => void;
-  /** Hoisted visibility filter (drives list AND summary); default all. */
+  /** Hoisted visibility filter (drives list AND summary); default mine. */
   visibility?: VisibilityFilter;
   /** Reports visibility changes up so the App can re-query the summary too. */
   onVisibilityChange?: (visibility: VisibilityFilter) => void;
@@ -74,9 +102,9 @@ export function MovementList({
   const { viewerId, members } = useViewer();
   const [filters, setFilters] = useState<MovementListFilters>({});
   // Uncontrolled fallback: when the App does not hoist the filter (standalone
-  // usage) the list manages its own visibility, defaulting to all.
+  // usage) the list manages its own visibility, defaulting to mine.
   const [internalVisibility, setInternalVisibility] =
-    useState<VisibilityFilter>("all");
+    useState<VisibilityFilter>("mine");
   const effectiveVisibility = visibility ?? internalVisibility;
   const state = useMovements(
     viewerId,
@@ -94,14 +122,16 @@ export function MovementList({
     members.map((member) => [member.ownerId, member.name]),
   );
 
-  function registrantName(movement: Movement): string {
-    return memberNames.get(registrantOf(movement)) ?? registrantOf(movement);
+  /** Shared-row owner badge: "vos" for the viewer, otherwise the member name. */
+  function sharedOwnerLabel(movement: Movement): string {
+    const owner = registrantOf(movement);
+    return owner === viewerId ? "vos" : (memberNames.get(owner) ?? owner);
   }
 
   function handleFiltersChange(next: MovementListFilters) {
     const { visibility: nextVisibility, ...rest } = next;
     setFilters(rest);
-    const resolved = nextVisibility ?? "all";
+    const resolved = nextVisibility ?? "mine";
     if (onVisibilityChange) {
       onVisibilityChange(resolved);
     } else {
@@ -278,7 +308,7 @@ export function MovementList({
                 <div className="flex items-start justify-between gap-3">
                   <div className="min-w-0">
                     <p className="text-xs tabular-nums text-ink-faint">
-                      {formatMovementDate(movement.occurredAt)}
+                      {movement.status === "PENDING" ? "—" : formatMovementDate(movement.occurredAt)}
                     </p>
                     <div className="mt-1 flex flex-wrap items-center gap-2">
                       <span className={TYPE_BADGE_CLASS[movement.type]}>
@@ -298,7 +328,10 @@ export function MovementList({
                           : "text-expense"
                     }`}
                   >
-                    {formatARS(movement.amount)}
+                    <MovementAmount
+                      amount={movement.amount}
+                      sharedTotal={movement.sharedTotal}
+                    />
                   </p>
                 </div>
                 <dl className="mt-4 grid grid-cols-2 gap-x-4 gap-y-3 text-sm">
@@ -322,7 +355,7 @@ export function MovementList({
                     <div className="col-span-2 min-w-0">
                       <dt className="text-xs text-ink-faint">Compartido</dt>
                       <dd className="mt-1 break-words text-ink-soft">
-                        {registrantName(movement)}
+                        {sharedOwnerLabel(movement)}
                       </dd>
                     </div>
                   ) : null}
@@ -376,7 +409,7 @@ export function MovementList({
                       className="transition-colors even:bg-white/[0.02] hover:bg-white/5"
                     >
                       <td className="px-2 py-3 whitespace-nowrap tabular-nums sm:px-3">
-                        {formatMovementDate(movement.occurredAt)}
+                        {movement.status === "PENDING" ? "—" : formatMovementDate(movement.occurredAt)}
                       </td>
                       <td className="px-2 py-3 whitespace-nowrap sm:px-3">
                         <span className={TYPE_BADGE_CLASS[movement.type]}>
@@ -397,7 +430,10 @@ export function MovementList({
                               : "font-mono font-semibold text-expense tabular-nums"
                         }`}
                       >
-                        {formatARS(movement.amount)}
+                        <MovementAmount
+                          amount={movement.amount}
+                          sharedTotal={movement.sharedTotal}
+                        />
                       </td>
                       <td className="hidden px-2 py-3 text-center text-ink-soft sm:table-cell sm:px-3">
                         <span
@@ -419,10 +455,10 @@ export function MovementList({
                         {movement.visibility === "SHARED" ? (
                           <span
                             className={BADGE_CLASS}
-                            aria-label="Movimiento compartido"
-                            title="Movimiento compartido"
+                            aria-label={`Movimiento compartido · ${sharedOwnerLabel(movement)}`}
+                            title={`Compartido · ${sharedOwnerLabel(movement)}`}
                           >
-                            ✅
+                            {sharedOwnerLabel(movement)}
                           </span>
                         ) : null}
                       </td>

@@ -159,7 +159,7 @@ The system MUST classify an inbound NON-BOT message (webhook channel) as `INCOME
 
 ### Requirement: Movement Summary Endpoint
 
-`GET /movements/summary` MUST return `movementSummarySchema` for the `ownerId` viewer scoped by the viewer predicate (own + partner SHARED) with optional `from`/`to` filters and the `visibility` filter (`mine`|`shared`|`all`). Totals MUST include ONLY `ARS` movements; other currencies MUST NOT be mixed into totals. Month/day bucketing MUST use `America/Argentina/Buenos_Aires`. SAVINGS movements MUST be excluded from income, expenses, balance, per-month/per-day buckets, category breakdowns, and top lists; `balance` MUST equal income − expenses with SAVINGS excluded. `kpis.savings` MUST report the current-calendar-month (Buenos Aires) sum of SAVINGS movements and `mom.months[].savings` MUST report per-month SAVINGS sums. PENDING movements MUST be excluded from income, expenses, balance, per-month/per-day buckets, category breakdowns, and top lists; `kpis.savings` MUST remain SAVINGS-only and unchanged by PENDING. The summary MUST include `planned: { month, total }`, the sum of the owner's PENDING EXPENSE movements targeted at the month following the current Buenos Aires month; the `planned` block MUST ignore `from`/`to`. Shape:
+`GET /movements/summary` MUST return `movementSummarySchema` for the `ownerId` viewer scoped by the viewer predicate (own + partner SHARED) with optional `from`/`to` filters and the `visibility` filter (`mine`|`shared`|`all`). Totals MUST include ONLY `ARS` movements; other currencies MUST NOT be mixed into totals. Month/day bucketing MUST use `America/Argentina/Buenos_Aires`. SAVINGS movements MUST be excluded from income, expenses, balance, per-month/per-day buckets, category breakdowns, and top lists; `balance` MUST equal income − expenses with SAVINGS excluded. `kpis.savings` MUST report the current-calendar-month (Buenos Aires) sum of SAVINGS movements and `mom.months[].savings` MUST report per-month SAVINGS sums. PENDING movements MUST be excluded from income, expenses, balance, per-month/per-day buckets, category breakdowns, and top lists; `kpis.savings` MUST remain SAVINGS-only and unchanged by PENDING. The summary MUST include `planned: { month, total }`, the sum of the owner's outstanding PENDING EXPENSE movements (previstos carry no planned date; `month` is the informational next-month key); the `planned` block MUST ignore `from`/`to`. Shape:
 
 ```
 kpis:        { income, expenses, balance, savings, avgPerMonth, avgPerMovement, maxAmount, count }
@@ -167,7 +167,7 @@ mom:         { months: [{ month, income, expenses, balance, savings }] }   // la
 daily:       [{ day, income, expenses, balance }]                 // last 30 days, zero-filled
 categories:  [{ name, expenseAmount, incomeAmount, expensePercent, incomePercent }]
 top:         { expenses: [movement], income: [movement] }         // by amount desc
-planned:     { month, total }                                     // next month, PENDING EXPENSE only
+planned:     { month, total }                                     // outstanding PENDING EXPENSE total (no planned date)
 ```
 
 (Previously: SAVINGS did not exist, `kpis`/`mom` had no `savings` fields, and the summary had no `planned` block or PENDING exclusion.)
@@ -224,7 +224,7 @@ planned:     { month, total }                                     // next month,
 
 - GIVEN `from`/`to` limited to the current month
 - WHEN the summary is requested
-- THEN `planned` still reports the next-month total
+- THEN `planned` still reports the outstanding total
 
 #### Scenario: planned empty
 
@@ -468,7 +468,8 @@ All movement read queries MUST scope by viewer using the single predicate `owner
 
 ### Requirement: Visibility Filter Parameter
 
-`GET /movements` and `GET /movements/summary` MUST accept a `visibility` query parameter with values `mine` | `shared` | `all`. `mine` MUST return only movements owned by the viewer; `shared` MUST return only movements with `visibility=SHARED` visible to the viewer; `all` (default) MUST return own movements plus the partner's SHARED ones. The parameter MUST also drive the dashboard chart feeds (e.g. category breakdown).
+`GET /movements` and `GET /movements/summary` MUST accept a `visibility` query parameter with values `mine` | `shared` | `all`. `mine` (default) MUST return only movements owned by the viewer; `shared` MUST return only movements with `visibility=SHARED` visible to the viewer; `all` MUST return own movements plus the partner's SHARED ones. The parameter MUST also drive the dashboard chart feeds (e.g. category breakdown).
+(Previously: `all` was the default and returned the partner's SHARED movements; the default is now `mine` so a viewer sees only their own movements, and the partner's SHARED halves are opt-in via `shared`/`all`.)
 
 #### Scenario: Mine filters to own
 
@@ -482,11 +483,11 @@ All movement read queries MUST scope by viewer using the single predicate `owner
 - WHEN `GET /movements?visibility=shared`
 - THEN only SHARED movements visible to the viewer return
 
-#### Scenario: All is the default
+#### Scenario: Mine is the default
 
 - GIVEN the same movements
 - WHEN `GET /movements` with no visibility parameter
-- THEN own movements plus partner SHARED return
+- THEN only the viewer's own movements return
 
 #### Scenario: Invalid value rejected
 
@@ -536,3 +537,25 @@ Movements created by the bot MUST derive `type`, `status`, and `visibility` from
 - GIVEN an owner in `idle` sends a message with an income keyword such as "cobro"
 - WHEN the message is processed
 - THEN no movement is created and the message routes through idle free-text routing
+
+### Requirement: Shared Total Movement Field
+
+`Expense` MUST carry a nullable `sharedTotal Decimal(12,2)` recording the full gross the sender split from, set only on a shared-split row (see shared-expense-split). `@rita/contracts` MUST expose `sharedTotal` on `movementSchema` additively (optional, nullable). The additions MUST NOT change the shape or validation of any pre-existing movement field; a movement without `sharedTotal` MUST validate and behave exactly as before. The movements read path (SELECT, row type, mapper) MUST return `sharedTotal`.
+
+#### Scenario: Split row carries sharedTotal
+
+- GIVEN a split sender row of amount 1000 from a 2000 COMPARTIDO
+- WHEN it is validated against `movementSchema`
+- THEN it carries `sharedTotal` 2000
+
+#### Scenario: Legacy row omits sharedTotal
+
+- GIVEN a pre-existing movement with no `sharedTotal`
+- WHEN it is validated against `movementSchema`
+- THEN it validates and `sharedTotal` is absent or null
+
+#### Scenario: Other movement fields unchanged
+
+- GIVEN code importing `movementSchema`
+- WHEN contracts rebuild
+- THEN every pre-existing field and constraint is unchanged

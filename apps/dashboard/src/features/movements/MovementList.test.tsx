@@ -15,7 +15,7 @@ import {
   patchMovement,
 } from "../../infra/api";
 import { ViewerProvider } from "../household/ViewerContext";
-import { MovementList } from "./MovementList";
+import { MovementAmount, MovementList } from "./MovementList";
 
 vi.mock("../../infra/api", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../infra/api")>()),
@@ -49,6 +49,51 @@ const movements: Movement[] = [
     note: null,
     occurredAt: new Date("2026-08-09T12:00:00Z"),
     createdAt: new Date("2026-08-09T12:00:00Z"),
+  },
+];
+
+/** A SHARED split pair plus a legacy SHARED row without sharedTotal (Phase 6). */
+const splitMovements: Movement[] = [
+  {
+    id: "sp1",
+    ownerId: "rita",
+    registrantId: "rita",
+    visibility: "SHARED",
+    amount: 1000,
+    currency: "ARS",
+    type: "EXPENSE",
+    category: "super",
+    note: "compra familiar",
+    sharedTotal: 2000,
+    occurredAt: new Date("2026-08-10T12:00:00Z"),
+    createdAt: new Date("2026-08-10T12:00:00Z"),
+  },
+  {
+    id: "sp2",
+    ownerId: "edgardo",
+    registrantId: "edgardo",
+    visibility: "SHARED",
+    amount: 1000,
+    currency: "ARS",
+    type: "EXPENSE",
+    category: "super",
+    note: "compra familiar",
+    sharedTotal: 2000,
+    occurredAt: new Date("2026-08-11T12:00:00Z"),
+    createdAt: new Date("2026-08-11T12:00:00Z"),
+  },
+  {
+    id: "legacy-shared",
+    ownerId: "rita",
+    registrantId: "rita",
+    visibility: "SHARED",
+    amount: 500,
+    currency: "ARS",
+    type: "EXPENSE",
+    category: "casa",
+    note: "legacy",
+    occurredAt: new Date("2026-08-12T12:00:00Z"),
+    createdAt: new Date("2026-08-12T12:00:00Z"),
   },
 ];
 
@@ -256,7 +301,7 @@ describe("MovementList", () => {
     await user.click(screen.getByRole("button", { name: /limpiar/i }));
 
     await waitFor(() =>
-      expect(fetchMovementsMock).toHaveBeenLastCalledWith("default", {}, "all"),
+      expect(fetchMovementsMock).toHaveBeenLastCalledWith("default", {}, "mine"),
     );
   });
 
@@ -418,11 +463,11 @@ describe("MovementList", () => {
     renderWithViewer(<MovementList />, duo);
     await waitFor(() => expect(screen.getByRole("table")).toBeInTheDocument());
 
-    expect(screen.getAllByLabelText("Movimiento compartido")).toHaveLength(2);
+    expect(screen.getAllByLabelText(/Movimiento compartido/)).toHaveLength(2);
 
     // The individual row (newest, sorted first) carries no badge.
     const rows = screen.getAllByRole("row");
-    expect(within(rows[1]!).queryByText(/Compartido ·/)).toBeNull();
+    expect(within(rows[1]!).queryByLabelText(/Movimiento compartido/)).toBeNull();
   });
 
   it("renders partner rows read-only and keeps actions on the viewer's own rows", async () => {
@@ -453,7 +498,7 @@ describe("MovementList", () => {
     expect(
       within(rows[3]!).queryByRole("button", { name: /eliminar/i }),
     ).toBeNull();
-    expect(screen.getAllByLabelText("Movimiento compartido")).toHaveLength(2);
+    expect(screen.getAllByLabelText(/Movimiento compartido/)).toHaveLength(2);
   });
 
   it("renders a PENDING row with the Previsto badge and a Marcar pagado action on own rows", async () => {
@@ -576,5 +621,44 @@ describe("MovementList", () => {
     expect(
       within(screen.getAllByRole("row")[1]!).getByText("Previsto"),
     ).toBeInTheDocument();
+  });
+});
+
+describe("MovementAmount (shared-expense-split Phase 6, task 6.1)", () => {
+  it("shows the original total below the share in italics (es-AR)", () => {
+    render(<MovementAmount amount={1000} sharedTotal={2000} />);
+
+    expect(screen.getByText("$ 1.000,00")).toBeInTheDocument();
+    const total = screen.getByText("$ 2.000,00");
+    expect(total.tagName).toBe("EM");
+    expect(total.textContent?.replace(/\u00A0/g, " ")).toBe("$ 2.000,00");
+  });
+
+  it("renders the plain amount with no annotation when sharedTotal is absent", () => {
+    const { container } = render(<MovementAmount amount={700} />);
+
+    expect(screen.getByText("$ 700,00")).toBeInTheDocument();
+    expect(container.querySelector("em")).toBeNull();
+  });
+
+  it("annotates the list 'Monto' cell of a split row and leaves legacy rows unannotated", async () => {
+    fetchMovementsMock.mockResolvedValue(splitMovements);
+
+    renderWithViewer(<MovementList />, duo);
+    await waitFor(() => expect(screen.getByRole("table")).toBeInTheDocument());
+
+    // Newest first: legacy-shared (08-12) → partner split (08-11) → own split (08-10).
+    const rows = screen.getAllByRole("row");
+    // rita's split row (viewer rita): total below in italics + "vos" badge.
+    expect(within(rows[3]!).getByText("$ 2.000,00").tagName).toBe("EM");
+    expect(within(rows[3]!).getByText("vos")).toBeInTheDocument();
+    // edgardo's split row: total below in italics + "Edgardo" badge.
+    expect(within(rows[2]!).getByText("$ 2.000,00").tagName).toBe("EM");
+    expect(within(rows[2]!).getByText("Edgardo")).toBeInTheDocument();
+    // Legacy SHARED row (no sharedTotal): amount only, no total annotation,
+    // but the owner badge still tells whose half it is.
+    expect(within(rows[1]!).queryByText("$ 2.000,00")).toBeNull();
+    expect(within(rows[1]!).getByText("$ 500,00")).toBeInTheDocument();
+    expect(within(rows[1]!).getByText("vos")).toBeInTheDocument();
   });
 });

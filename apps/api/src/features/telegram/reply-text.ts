@@ -86,6 +86,8 @@ export function previewReply(
  * exist on this confirmation (the initial preview asks for the category).
  * INGRESO confirmations append the savings line (design "Savings line
  * labels"); non-INGRESO types never pass a choice and never show it.
+ * COMPARTIDO confirmations append the share line when a percent is chosen
+ * (shared-expense-split D6).
  */
 export function previewConfirmReply(
   amount: number,
@@ -93,10 +95,12 @@ export function previewConfirmReply(
   type: "REAL" | "PENDING" | "INGRESO" | "COMPARTIDO",
   category: string,
   savingsChoice?: SavingsChoice,
+  sharedPercent?: number,
 ): string {
   const notePart = note === null ? "" : ` (${truncateNote(note)})`;
   const savingsLine = savingsChoice === undefined ? "" : ` — ${savingsLineLabel(savingsChoice)}`;
-  return `Confirmá: ${formatARS(amount)}${notePart} — Tipo: ${captureTypeLabel(type)} — Categoría: ${category}${savingsLine}`;
+  const shareLine = sharedPercent === undefined ? "" : ` — ${sharedLineLabel(sharedPercent)}`;
+  return `Confirmá: ${formatARS(amount)}${notePart} — Tipo: ${captureTypeLabel(type)} — Categoría: ${category}${savingsLine}${shareLine}`;
 }
 
 /**
@@ -288,6 +292,29 @@ export function savingsPercentInvalidReply(): string {
 }
 
 /**
+ * Shared-expense-split replies (OQ2 wording locked): percent prompt after
+ * `[Otro]` in the COMPARTIDO confirmation, the invalid re-prompt, the
+ * Guardar-without-percent gate, and the split confirmation reporting the
+ * sender share with the `parte de {total} compartido` annotation.
+ */
+export function sharedPercentPromptReply(): string {
+  return "¿Qué porcentaje ponés vos de este gasto compartido? Mandámelo como número (ej: 50, 30%) o como monto, ejemplo 15000.";
+}
+
+export function sharedPercentInvalidReply(): string {
+  return "Ese porcentaje no es válido: tiene que ser de 1% a 99% (o un monto menor al total). Mandámelo de nuevo (ej: 50).";
+}
+
+export function sharedPickFirstReply(): string {
+  return "Elegí primero qué porcentaje ponés de este gasto compartido: tocá [50%], [25%], [75%] u [Otro] en la confirmación.";
+}
+
+export function successSharedReply(share: number, total: number, note: string | null, category: string): string {
+  const notePart = note === null ? "" : ` (${truncateNote(note)})`;
+  return `✅ Guardado: ${formatARS(share)} — parte de ${formatARS(total)} compartido${notePart} — Categoría: ${category}`;
+}
+
+/**
  * Savings line label for the INGRESO confirmation (design "Savings line
  * labels"): manual percent/disabled choices win over the matched-rule
  * suggestion in both the label and `resolveSplit`.
@@ -301,6 +328,14 @@ export function savingsLineLabel(choice: SavingsChoice): string {
     case "auto":
       return choice.percent === null ? "Ahorro: sin regla" : `Ahorro: ${formatPercent(choice.percent)} (regla)`;
   }
+}
+
+/**
+ * shared-expense-split (D6): share line label on the COMPARTIDO confirmation
+ * when a percent is persisted — mirrors the savings line.
+ */
+export function sharedLineLabel(percent: number): string {
+  return `Tu parte: ${formatPercent(percent)}`;
 }
 
 export function setupQuestionReply(existing: string[]): string {
@@ -432,10 +467,9 @@ export function savingsQueryReply(savings: number, month: string): string {
   return `En ${label} ahorraste ${formatARS(savings)}.`;
 }
 
-/** D7/D11: "cuánto tengo previsto" — next-month planned total from real data. */
-export function plannedQueryReply(month: string, total: number): string {
-  const label = formatMonthLabel(month);
-  return `En ${label} tenés previsto ${formatARS(total)}.`;
+/** D7/D11: "cuánto tengo previsto" — outstanding PENDING total (previstos carry no date; the amount enters the month it is paid). */
+export function plannedQueryReply(total: number): string {
+  return `Tenés ${formatARS(total)} pendientes por pagar. Cuando los pagues, se suman al mes correspondiente.`;
 }
 
 function formatMonthLabel(monthKey: string): string {
@@ -462,7 +496,7 @@ export function queryReplyTemplate(result: QueryExecutionResult): string {
     case "savings":
       return savingsQueryReply(result.savings, result.month);
     case "planned":
-      return plannedQueryReply(result.month, result.total);
+      return plannedQueryReply(result.total);
   }
 }
 

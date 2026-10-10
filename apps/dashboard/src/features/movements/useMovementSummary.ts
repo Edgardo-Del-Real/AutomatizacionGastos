@@ -11,7 +11,7 @@ export type MovementSummaryState = AsyncState<MovementSummary> & {
 
 export function useMovementSummary(
   ownerId: string,
-  visibility: VisibilityFilter = "all",
+  visibility: VisibilityFilter = "mine",
   refreshToken?: number,
 ): MovementSummaryState {
   const [state, setState] = useState<AsyncState<MovementSummary>>({

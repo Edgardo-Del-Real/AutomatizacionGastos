@@ -7,14 +7,18 @@ import type { SavingsRuleService } from "../savings/savings.service";
 import type { HouseholdService } from "../household/household.service";
 import type { BotStateRepository, BotStateRecord } from "./bot-state.repository";
 import type { InlineKeyboard } from "./telegram.parser";
-import { capturePayloadSchema, previewPayloadSchema, savingsPercentPayloadSchema, TelegramService, type PreviewPayload } from "./telegram.service";
+import { capturePayloadSchema, previewPayloadSchema, savingsPercentPayloadSchema, sharedPercentPayloadSchema, TelegramService, type PreviewPayload } from "./telegram.service";
 import {
   alreadyProcessedReply,
   menuReply,
   previewConfirmReply,
   savingsPercentInvalidReply,
   savingsPercentPromptReply,
+  sharedPercentInvalidReply,
+  sharedPercentPromptReply,
+  sharedPickFirstReply,
   successReply,
+  successSharedReply,
   successSplitReply,
 } from "./reply-text";
 
@@ -51,6 +55,7 @@ type Harness = {
   service: TelegramService;
   mockCreateExpense: ReturnType<typeof vi.fn>;
   mockCreateIncomeWithSavings: ReturnType<typeof vi.fn>;
+  mockCreateSharedSplit: ReturnType<typeof vi.fn>;
   mockResolveSplit: ReturnType<typeof vi.fn>;
   mockEnsureAhorro: ReturnType<typeof vi.fn>;
   mockMatchNote: ReturnType<typeof vi.fn>;
@@ -60,7 +65,7 @@ type Harness = {
   reply: (text: string, keyboard?: InlineKeyboard, editMessageId?: number) => Promise<number | undefined>;
 };
 
-function makeHarness(): Harness {
+function makeHarness(options?: { partner?: string | null }): Harness {
   const replies: string[] = [];
   const keyboards: (InlineKeyboard | undefined)[] = [];
   const reply = async (text: string, keyboard?: InlineKeyboard): Promise<number | undefined> => {
@@ -87,6 +92,7 @@ function makeHarness(): Harness {
       net: { id: "net-1", ownerId, amount: 900, currency: "ARS", category: null, note: null, occurredAt: new Date(), createdAt: new Date(), type: "INCOME" },
       savings: { id: "sav-1", ownerId, amount: 100, currency: "ARS", category: "ahorro", note: null, occurredAt: new Date(), createdAt: new Date(), type: "SAVINGS" },
     })),
+    createSharedExpenseSplit: vi.fn(async () => ({ sender: 1000, partner: 1000 })),
   } as unknown as ExpenseService;
   const movementService = {
     listMovements: vi.fn(async () => []),
@@ -139,7 +145,7 @@ function makeHarness(): Harness {
   } as unknown as BotStateRepository;
   const household = {
     resolveOwnerByChatId: vi.fn(() => ownerId),
-    partnerOf: vi.fn(() => null),
+    partnerOf: vi.fn(() => options?.partner ?? null),
   } as unknown as HouseholdService;
 
   const service = new TelegramService({
@@ -157,6 +163,7 @@ function makeHarness(): Harness {
     service,
     mockCreateExpense: vi.mocked(expenseService.createExpense),
     mockCreateIncomeWithSavings: vi.mocked(expenseService.createIncomeWithSavings),
+    mockCreateSharedSplit: vi.mocked(expenseService.createSharedExpenseSplit),
     mockResolveSplit: vi.mocked(savingsService.resolveSplit),
     mockEnsureAhorro: vi.mocked(categoryService.ensureAhorro),
     mockMatchNote: vi.mocked(savingsService.matchNote),
@@ -221,7 +228,7 @@ describe("TelegramService savings split on INGRESO (v2)", () => {
     expect(h.replies.at(-1)).toBe(menuReply());
   });
 
-  it("COMPARTIDO NEVER splits even when the note matches a rule (single SHARED EXPENSE)", async () => {
+  it("COMPARTIDO without a partner keeps the legacy single SHARED row and never touches savings", async () => {
     h.mockResolveSplit.mockResolvedValue({ kind: "split", percent: 10 });
     h.mockResolveSplit.mockClear();
 
@@ -234,11 +241,20 @@ describe("TelegramService savings split on INGRESO (v2)", () => {
 
     expect(h.mockResolveSplit).not.toHaveBeenCalled();
     expect(h.mockCreateIncomeWithSavings).not.toHaveBeenCalled();
+    expect(h.mockCreateSharedSplit).not.toHaveBeenCalled();
     expect(h.mockCreateExpense).toHaveBeenCalledWith(
-      expect.objectContaining({ amount: 2000, note: "super de entrenuts", category: "Cafe", type: "EXPENSE" }),
+      expect.objectContaining({
+        amount: 2000,
+        note: "super de entrenuts",
+        category: "Cafe",
+        type: "EXPENSE",
+      }),
       ownerId,
       { visibility: "SHARED" },
     );
+    // Legacy no-partner single row: sharedTotal is never carried on the row.
+    const legacyArgs = h.mockCreateExpense.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(Object.hasOwn(legacyArgs, "sharedTotal")).toBe(false);
   });
 
   it("PENDING never splits either (savings only apply to INGRESO)", async () => {
@@ -417,5 +433,198 @@ describe("TelegramService savings row and sv:* choices on the INGRESO confirmati
     const state = await h.botStateRepository.get(ownerId);
     const unchanged = previewPayloadSchema.parse(JSON.parse(state?.pendingNote ?? "{}"));
     expect(unchanged.savings).toBeUndefined();
+  });
+});
+
+describe("TelegramService shared row and sp:* choices on the COMPARTIDO confirmation (shared-expense-split)", () => {
+  let h: Harness;
+
+  beforeEach(() => {
+    h = makeHarness({ partner: "partner" });
+  });
+
+  /** Opens a partner-present COMPARTIDO preview, picks a category, returns the payload. */
+  async function openSharedConfirmation(text: string): Promise<PreviewPayload> {
+    await h.service.handleCallback(callbackUpdate("m:shr"), h.reply);
+    await h.service.handleUpdate(textUpdate({ text, messageId: 2 }), h.reply);
+    const state = await h.botStateRepository.get(ownerId);
+    const payload = previewPayloadSchema.parse(JSON.parse(state?.pendingNote ?? "{}"));
+    await h.service.handleCallback(callbackUpdate("cat:c0"), h.reply);
+    return payload;
+  }
+
+  /** Asserts the last keyboard carries the shared row [50%][25%][75%][Otro] with token-only data. */
+  function expectSharedRow(token: string): void {
+    const kb = h.keyboards.at(-1) as InlineKeyboard;
+    const sharedRow = kb.find((row) => row.some((button) => button.callback_data.startsWith("sp:")));
+    expect(sharedRow?.map((button) => button.callback_data)).toEqual([
+      `sp:50:${token}`,
+      `sp:25:${token}`,
+      `sp:75:${token}`,
+      `sp:other:${token}`,
+    ]);
+    for (const button of sharedRow ?? []) {
+      // token-only callbacks: never the percent (spec "Shared callbacks encode tokens").
+      expect(button.callback_data).toMatch(/^sp:(50|25|75|other):[0-9a-f]{8}$/);
+    }
+  }
+
+  it("renders the shared row on a partner-present COMPARTIDO confirmation", async () => {
+    const payload = await openSharedConfirmation("2000 super");
+
+    expectSharedRow(payload.saveToken);
+    expect(h.replies.at(-1)).toBe(previewConfirmReply(2000, "super", "COMPARTIDO", "Cafe"));
+  });
+
+  it("renders NO shared row without a partner (legacy single-row path)", async () => {
+    const solo = makeHarness();
+    await solo.service.handleCallback(callbackUpdate("m:shr"), solo.reply);
+    await solo.service.handleUpdate(textUpdate({ text: "2000 super", messageId: 2 }), solo.reply);
+    const state = await solo.botStateRepository.get(ownerId);
+    const payload = previewPayloadSchema.parse(JSON.parse(state?.pendingNote ?? "{}"));
+    await solo.service.handleCallback(callbackUpdate("cat:c0"), solo.reply);
+
+    const kb = solo.keyboards.at(-1) as InlineKeyboard;
+    expect(kb.flat().some((button) => button.callback_data.startsWith("sp:"))).toBe(false);
+    expect(kb.flat().map((button) => button.callback_data)).toContain(`pv:save:${payload.saveToken}`);
+  });
+
+  it("renders NO shared row on non-COMPARTIDO confirmations even with a partner", async () => {
+    await h.service.handleCallback(callbackUpdate("m:new"), h.reply);
+    await h.service.handleUpdate(textUpdate({ text: "30000 gym", messageId: 2 }), h.reply);
+    await h.service.handleCallback(callbackUpdate("cat:c0"), h.reply);
+
+    const kb = h.keyboards.at(-1) as InlineKeyboard;
+    expect(kb.flat().some((button) => button.callback_data.startsWith("sp:"))).toBe(false);
+  });
+
+  it("sp:50 persists sharedPercent 50 and re-renders the confirmation", async () => {
+    const payload = await openSharedConfirmation("2000 super");
+
+    await h.service.handleCallback(callbackUpdate(`sp:50:${payload.saveToken}`), h.reply);
+
+    const state = await h.botStateRepository.get(ownerId);
+    expect(state?.state).toBe("awaiting_preview");
+    const updated = previewPayloadSchema.parse(JSON.parse(state?.pendingNote ?? "{}"));
+    expect(updated.sharedPercent).toBe(50);
+    expect(h.replies.at(-1)).toBe(
+      previewConfirmReply(2000, "super", "COMPARTIDO", "Cafe", undefined, 50),
+    );
+  });
+
+  it("sp:other enters awaiting_shared_percent persisting the open preview", async () => {
+    const payload = await openSharedConfirmation("2000 super");
+
+    await h.service.handleCallback(callbackUpdate(`sp:other:${payload.saveToken}`), h.reply);
+
+    const state = await h.botStateRepository.get(ownerId);
+    expect(state?.state).toBe("awaiting_shared_percent");
+    const saved = sharedPercentPayloadSchema.parse(JSON.parse(state?.pendingNote ?? "{}"));
+    expect(saved.preview.saveToken).toBe(payload.saveToken);
+    expect(h.replies.at(-1)).toBe(sharedPercentPromptReply());
+  });
+
+  it("a valid percent reply returns to awaiting_preview, persists sharedPercent 30 and edits the confirmation", async () => {
+    const payload = await openSharedConfirmation("2000 super");
+    await h.service.handleCallback(callbackUpdate(`sp:other:${payload.saveToken}`), h.reply);
+
+    await h.service.handleUpdate(textUpdate({ text: "30", messageId: 3 }), h.reply);
+
+    const state = await h.botStateRepository.get(ownerId);
+    expect(state?.state).toBe("awaiting_preview");
+    const updated = previewPayloadSchema.parse(JSON.parse(state?.pendingNote ?? "{}"));
+    expect(updated.sharedPercent).toBe(30);
+    expect(h.replies.at(-1)).toBe(
+      previewConfirmReply(2000, "super", "COMPARTIDO", "Cafe", undefined, 30),
+    );
+  });
+
+  it("an amount reply derives the percent (30000 of 40000 → 75)", async () => {
+    const payload = await openSharedConfirmation("40000 alquiler");
+    await h.service.handleCallback(callbackUpdate(`sp:other:${payload.saveToken}`), h.reply);
+
+    await h.service.handleUpdate(textUpdate({ text: "30000", messageId: 3 }), h.reply);
+
+    const state = await h.botStateRepository.get(ownerId);
+    const updated = previewPayloadSchema.parse(JSON.parse(state?.pendingNote ?? "{}"));
+    expect(updated.sharedPercent).toBe(75);
+  });
+
+  it("an invalid percent reply re-prompts and keeps the awaiting_shared_percent state", async () => {
+    const payload = await openSharedConfirmation("2000 super");
+    await h.service.handleCallback(callbackUpdate(`sp:other:${payload.saveToken}`), h.reply);
+
+    await h.service.handleUpdate(textUpdate({ text: "0", messageId: 3 }), h.reply);
+
+    const state = await h.botStateRepository.get(ownerId);
+    expect(state?.state).toBe("awaiting_shared_percent");
+    expect(h.replies.at(-1)).toBe(sharedPercentInvalidReply());
+    const saved = sharedPercentPayloadSchema.parse(JSON.parse(state?.pendingNote ?? "{}"));
+    expect(saved.preview.sharedPercent).toBeUndefined();
+  });
+
+  it("gates sp:* by state+token: a mismatched token replies already processed and changes nothing", async () => {
+    await openSharedConfirmation("2000 super");
+
+    await h.service.handleCallback(callbackUpdate("sp:50:deadbeef"), h.reply);
+
+    expect(h.replies.at(-1)).toBe(alreadyProcessedReply());
+    const state = await h.botStateRepository.get(ownerId);
+    const unchanged = previewPayloadSchema.parse(JSON.parse(state?.pendingNote ?? "{}"));
+    expect(unchanged.sharedPercent).toBeUndefined();
+  });
+
+  it("Guardar without a chosen percent registers nothing and asks to pick first", async () => {
+    const payload = await openSharedConfirmation("2000 super");
+
+    await h.service.handleCallback(callbackUpdate(`pv:save:${payload.saveToken}`), h.reply);
+
+    expect(h.mockCreateExpense).not.toHaveBeenCalled();
+    expect(h.mockCreateSharedSplit).not.toHaveBeenCalled();
+    expect(h.mockResolveSplit).not.toHaveBeenCalled();
+    expect(h.replies.at(-1)).toBe(sharedPickFirstReply());
+  });
+
+  it("Guardar with a chosen percent registers the TWO-row shared split and confirms the share", async () => {
+    const payload = await openSharedConfirmation("2000 super");
+    await h.service.handleCallback(callbackUpdate(`sp:50:${payload.saveToken}`), h.reply);
+
+    await h.service.handleCallback(callbackUpdate(`pv:save:${payload.saveToken}`), h.reply);
+
+    expect(h.mockCreateSharedSplit).toHaveBeenCalledWith({
+      ownerId,
+      partnerId: "partner",
+      total: 2000,
+      percent: 50,
+      note: "super",
+      category: "Cafe",
+      occurredAt: expect.any(Date),
+    });
+    expect(h.mockCreateExpense).not.toHaveBeenCalled();
+    expect(h.mockCreateIncomeWithSavings).not.toHaveBeenCalled();
+    expect(h.mockResolveSplit).not.toHaveBeenCalled();
+    expect(h.replies.at(-2)).toBe(successSharedReply(1000, 2000, "super", "Cafe"));
+    expect(h.replies.at(-1)).toBe(menuReply());
+  });
+
+  it("savePreview passes a persisted sharedPercent through to registerCapture (5.4)", async () => {
+    // Seed a preview payload carrying sharedPercent directly (persisted preview
+    // from a previous session) and confirm the save splits with it.
+    await h.service.handleCallback(callbackUpdate("m:shr"), h.reply);
+    await h.service.handleUpdate(textUpdate({ text: "2000 super", messageId: 2 }), h.reply);
+    const state = await h.botStateRepository.get(ownerId);
+    const payload = previewPayloadSchema.parse(JSON.parse(state?.pendingNote ?? "{}"));
+    const withPercent: PreviewPayload = { ...payload, category: "Cafe", sharedPercent: 25 };
+    await h.botStateRepository.set({
+      ownerId,
+      state: "awaiting_preview",
+      pendingMovementId: null,
+      pendingNote: JSON.stringify(withPercent),
+    } as BotStateRecord);
+    await h.service.handleCallback(callbackUpdate(`pv:save:${payload.saveToken}`), h.reply);
+
+    expect(h.mockCreateSharedSplit).toHaveBeenCalledWith(
+      expect.objectContaining({ total: 2000, percent: 25 }),
+    );
   });
 });

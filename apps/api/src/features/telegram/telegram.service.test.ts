@@ -129,6 +129,7 @@ type Harness = {
   mockListRules: ReturnType<typeof vi.fn>;
   mockDeleteRule: ReturnType<typeof vi.fn>;
   mockCreateIncomeWithSavings: ReturnType<typeof vi.fn>;
+  mockCreateSharedSplit: ReturnType<typeof vi.fn>;
   mockSetState: ReturnType<typeof vi.fn>;
   mockBrainInterpret: ReturnType<typeof vi.fn>;
   mockBrainReply: ReturnType<typeof vi.fn>;
@@ -179,6 +180,7 @@ function makeHarness(options?: { noBrain?: boolean }): Harness {
       net: { id: "net-1", ownerId, amount: 850, currency: "ARS", category: null, note: null, occurredAt: new Date(), createdAt: new Date(), type: "INCOME" },
       savings: { id: "sav-1", ownerId, amount: 150, currency: "ARS", category: "ahorro", note: null, occurredAt: new Date(), createdAt: new Date(), type: "SAVINGS" },
     })),
+    createSharedExpenseSplit: vi.fn(async () => ({ sender: 1000, partner: 1000 })),
   } as unknown as ExpenseService;
   const movementService = {
     updateMovement: vi.fn(async (ownerIdArg: string, id: string, patch: unknown) => ({
@@ -302,6 +304,7 @@ function makeHarness(options?: { noBrain?: boolean }): Harness {
     mockListRules: vi.mocked(savingsService.listRules),
     mockDeleteRule: vi.mocked(savingsService.deleteRule),
     mockCreateIncomeWithSavings: vi.mocked(expenseService.createIncomeWithSavings),
+    mockCreateSharedSplit: vi.mocked(expenseService.createSharedExpenseSplit),
     mockSetState: vi.mocked(botStateRepository.set),
     mockBrainInterpret: vi.mocked(brain?.interpret ?? vi.fn()),
     mockBrainReply: vi.mocked(brain?.reply ?? vi.fn()),
@@ -933,14 +936,23 @@ describe("TelegramService movement type mapping (v2)", () => {
     );
   });
 
-  it("COMPARTIDO registers EXPENSE + PAID + SHARED", async () => {
+  it("COMPARTIDO without a partner registers EXPENSE + PAID + SHARED (legacy single row)", async () => {
     await saveCapture("COMPARTIDO", "2000 super");
 
     expect(h.mockCreateExpense).toHaveBeenCalledWith(
-      expect.objectContaining({ amount: 2000, note: "super", category: "Cafe", type: "EXPENSE" }),
+      expect.objectContaining({
+        amount: 2000,
+        note: "super",
+        category: "Cafe",
+        type: "EXPENSE",
+      }),
       ownerId,
       { visibility: "SHARED" },
     );
+    // Legacy no-partner path: no sharedTotal on the single row.
+    const legacyArgs = h.mockCreateExpense.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(Object.hasOwn(legacyArgs, "sharedTotal")).toBe(false);
+    expect(h.mockCreateSharedSplit).not.toHaveBeenCalled();
   });
 
   it("the save confirmation always returns to the menu", async () => {
@@ -1877,7 +1889,7 @@ describe("TelegramService reports sub-menu (rep:*)", () => {
     ["rep:balance", "balance", "balance"],
     ["rep:month", "month", "En "],
     ["rep:savings", "savings", "ahorraste"],
-    ["rep:planned", "planned", "previsto"],
+    ["rep:planned", "planned", "pendientes"],
   ] as const)("%s answers from the executed %s query and returns to the menu", async (data, _type, expected) => {
     await h.service.handleCallback(callbackUpdate({ data }), h.reply);
 

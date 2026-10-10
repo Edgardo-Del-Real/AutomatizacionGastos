@@ -194,6 +194,77 @@ describe("movement visibility model", () => {
       expect(edgardoAllNotes).not.toContain("rita individual");
     });
 
+    // shared-expense-split (Phase 2, task 2.1): the read path carries sharedTotal
+    // on a split row and null on every legacy row (SELECT + row type + mapper).
+    it("listByOwner carries sharedTotal on a split row and null on legacy rows", async () => {
+      await prisma.expense.createMany({
+        data: [
+          {
+            ownerId: "rita",
+            amount: 1000,
+            currency: "ARS",
+            category: "super",
+            note: "split sender",
+            occurredAt: now,
+            type: "EXPENSE",
+            visibility: "SHARED",
+            sharedTotal: 2000,
+          },
+          {
+            ownerId: "edgardo",
+            amount: 1000,
+            currency: "ARS",
+            category: "super",
+            note: "split partner",
+            occurredAt: now,
+            type: "EXPENSE",
+            visibility: "SHARED",
+            sharedTotal: 2000,
+          },
+          {
+            ownerId: "rita",
+            amount: 300,
+            currency: "ARS",
+            category: "casa",
+            note: "legacy",
+            occurredAt: now,
+            type: "EXPENSE",
+            visibility: "INDIVIDUAL",
+          },
+        ],
+      });
+
+      const rows = await repository.listByOwner(ritaAll, {});
+      const sender = rows.find((row) => row.note === "split sender");
+      const partner = rows.find((row) => row.note === "split partner");
+      const legacy = rows.find((row) => row.note === "legacy");
+
+      expect(sender?.sharedTotal).toBe(2000);
+      expect(partner?.sharedTotal).toBe(2000);
+      expect(legacy?.sharedTotal).toBeNull();
+    });
+
+    it("topByType carries sharedTotal on a split row", async () => {
+      await prisma.expense.createMany({
+        data: [
+          {
+            ownerId: "rita",
+            amount: 1000,
+            currency: "ARS",
+            category: "super",
+            note: "top split",
+            occurredAt: now,
+            type: "EXPENSE",
+            visibility: "SHARED",
+            sharedTotal: 2000,
+          },
+        ],
+      });
+
+      const rows = await repository.topByType(ritaAll, "EXPENSE", 10, { from: undefined, to: undefined });
+      expect(rows[0]?.sharedTotal).toBe(2000);
+    });
+
     it("reduces to owner-only when the viewer has no partner (single-user mode)", async () => {
       await seedHousehold();
       const soloAll: ViewerScope = { viewerId: "rita", partnerId: null, visibility: "all" };

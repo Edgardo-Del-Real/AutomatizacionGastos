@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseCommand, parseLegacyCategoryCrud, parseSavingsPercentInput, parseSetupBatchCommand } from "./telegram.commands";
+import { parseCommand, parseLegacyCategoryCrud, parseSavingsPercentInput, parseSetupBatchCommand, parseSharedContributionInput } from "./telegram.commands";
 
 describe("parseCommand (D12 normalization)", () => {
   it("normalizes a leading slash on the menu command", () => {
@@ -153,6 +153,53 @@ describe("parseSavingsPercentInput (D10: optional %, comma decimal, 0 < p <= 100
 
   it("accepts a numeric input value", () => {
     expect(parseSavingsPercentInput(15)).toBe(15);
+  });
+});
+
+describe("parseSharedContributionInput (D4: es-AR percent-or-amount, 1..99)", () => {
+  it("reads a percent suffix as a percent", () => {
+    expect(parseSharedContributionInput("30%", 40000)).toBe(30);
+  });
+
+  it("reads a bare small number (<= 100) as a percent", () => {
+    expect(parseSharedContributionInput("25", 40000)).toBe(25);
+  });
+
+  it("reads a comma-decimal bare number as a percent", () => {
+    expect(parseSharedContributionInput("45,5", 40000)).toBe(45.5);
+  });
+
+  it("reads a bare large number as an amount and derives the percent", () => {
+    expect(parseSharedContributionInput("30000", 40000)).toBe(75);
+  });
+
+  it("reads es-AR dotted thousands as an amount", () => {
+    expect(parseSharedContributionInput("45.000", 90000)).toBe(50);
+  });
+
+  it("reads a $ currency-prefixed amount", () => {
+    expect(parseSharedContributionInput("$45.000", 90000)).toBe(50);
+  });
+
+  it("reads an 'ars'-suffixed amount", () => {
+    expect(parseSharedContributionInput("45.000 ars", 90000)).toBe(50);
+  });
+
+  it("rejects 100 percent", () => {
+    expect(parseSharedContributionInput("100", 40000)).toBeNull();
+    expect(parseSharedContributionInput("100%", 40000)).toBeNull();
+  });
+
+  it("rejects 0 and a value equal to the total (the owner keeps the whole bill)", () => {
+    expect(parseSharedContributionInput("0", 40000)).toBeNull();
+    expect(parseSharedContributionInput("40000", 40000)).toBeNull();
+    expect(parseSharedContributionInput("=total", 40000)).toBeNull();
+  });
+
+  it("rejects non-numeric and negative input", () => {
+    expect(parseSharedContributionInput("quince", 40000)).toBeNull();
+    expect(parseSharedContributionInput("-5", 40000)).toBeNull();
+    expect(parseSharedContributionInput("", 40000)).toBeNull();
   });
 });
 

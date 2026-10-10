@@ -231,7 +231,7 @@ describe("TelegramService household multi-chat (spec: Owner Filtering / Dedup / 
     expect(replies.at(-2)).toBe(compartidoPrefixRedirectReply());
   });
 
-  it("a capture from the 👥 menu button registers a SHARED movement under the sender", async () => {
+  it("a capture from the 👥 menu button asks the share and registers TWO SHARED rows (sender + partner)", async () => {
     await seedCategories("rita", ["Cafe"]);
     await service.handleCallback(callbackUpdate(RITA_CHAT, "m:shr"), async () => undefined);
     await service.handleUpdate(textUpdate({ fromId: RITA_CHAT, messageId: 1, text: "2000 super" }), async () => undefined);
@@ -241,11 +241,49 @@ describe("TelegramService household multi-chat (spec: Owner Filtering / Dedup / 
     const cafe = ritaCategories.find((category) => category.name === "Cafe");
     expect(cafe).toBeDefined();
     await service.handleCallback(callbackUpdate(RITA_CHAT, `cat:${cafe!.id}`), async () => undefined);
+    // A partner is resolved (2-member household): Guardar without a percent is
+    // gated, so pick the share first, then save the two-row split.
+    await service.handleCallback(callbackUpdate(RITA_CHAT, `sp:50:${preview.saveToken}`), async () => undefined);
     await service.handleCallback(callbackUpdate(RITA_CHAT, `pv:save:${preview.saveToken}`), async () => undefined);
 
-    const movements = await prisma.expense.findMany({ where: { ownerId: "rita" } });
-    expect(movements).toHaveLength(1);
-    expect(movements[0]?.visibility).toBe("SHARED");
+    const ritaRows = await prisma.expense.findMany({ where: { ownerId: "rita" } });
+    const partnerRows = await prisma.expense.findMany({ where: { ownerId: "edgardo" } });
+    expect(ritaRows).toHaveLength(1);
+    expect(partnerRows).toHaveLength(1);
+    expect(ritaRows[0]?.amount.toNumber()).toBe(1000);
+    expect(ritaRows[0]?.visibility).toBe("SHARED");
+    expect(ritaRows[0]?.sharedTotal?.toNumber()).toBe(2000);
+    expect(partnerRows[0]?.amount.toNumber()).toBe(1000);
+    expect(partnerRows[0]?.visibility).toBe("SHARED");
+    expect(partnerRows[0]?.sharedTotal?.toNumber()).toBe(2000);
+    // Same facts on both halves (identical category, note, occurredAt).
+    expect(ritaRows[0]?.category).toBe("Cafe");
+    expect(partnerRows[0]?.category).toBe("Cafe");
+    expect(ritaRows[0]?.note).toBe("super");
+    expect(partnerRows[0]?.note).toBe("super");
+  });
+
+  it("a COMPARTIDO Guardar without a chosen share registers NOTHING and asks to pick first", async () => {
+    await seedCategories("rita", ["Cafe"]);
+    await service.handleCallback(callbackUpdate(RITA_CHAT, "m:shr"), async () => undefined);
+    await service.handleUpdate(textUpdate({ fromId: RITA_CHAT, messageId: 2, text: "2000 super" }), async () => undefined);
+    const state = await prisma.botState.findUnique({ where: { ownerId: "rita" } });
+    const preview = JSON.parse(state?.pendingNote ?? "{}") as { saveToken: string };
+    const ritaCategories = await categoryService.listCategories("rita");
+    const cafe = ritaCategories.find((category) => category.name === "Cafe");
+    expect(cafe).toBeDefined();
+    await service.handleCallback(callbackUpdate(RITA_CHAT, `cat:${cafe!.id}`), async () => undefined);
+    const replies: string[] = [];
+    await service.handleCallback(
+      callbackUpdate(RITA_CHAT, `pv:save:${preview.saveToken}`),
+      async (text) => {
+        replies.push(text);
+        return undefined;
+      },
+    );
+
+    expect(await prisma.expense.count()).toBe(0);
+    expect(replies.at(-1)).toContain("porcentaje");
   });
 
   it("a removed-state payload recovers to idle for the member who owns it", async () => {

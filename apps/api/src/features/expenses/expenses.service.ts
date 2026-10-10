@@ -70,4 +70,17 @@ export class ExpenseService {
   }): Promise<{ net: Expense | null; savings: Expense | null }> {
     return this.repository.createIncomeWithSavings(data);
   }
+
+  /** shared-expense-split (D2): delegates the two-row SHARED split. */
+  async createSharedExpenseSplit(data: {
+    ownerId: string;
+    partnerId: string;
+    total: number;
+    percent: number;
+    note: string | null;
+    occurredAt: Date;
+    category: string;
+  }): Promise<{ sender: number; partner: number } | null> {
+    return this.repository.createSharedSplit(data);
+  }
 }

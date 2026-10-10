@@ -23,13 +23,13 @@ export type MovementsRouteOptions = {
 
 /**
  * Builds the viewer scope from the ownerId query param: the household answers
- * the partner lookup, and the visibility filter defaults to `all` (own +
- * partner's SHARED) per the viewer-scoped read predicate.
+ * the partner lookup, and the visibility filter defaults to `mine` (the
+ * viewer's own movements) per the viewer-scoped read predicate.
  */
 function buildViewerScope(
   household: HouseholdService,
   viewerId: string,
-  visibility: VisibilityFilter = "all",
+  visibility: VisibilityFilter = "mine",
 ): ViewerScope {
   return { viewerId, partnerId: household.partnerOf(viewerId), visibility };
 }

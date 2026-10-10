@@ -15,7 +15,7 @@ import { MovementLifecycleExecutor } from "./movement-lifecycle-executor";
 import { MovementCorrector } from "./movement-corrector";
 import { QueryExecutor } from "./query-executor";
 import { deriveQueryType, type QueryExecutionResult, type QueryType } from "./query.types";
-import { parseCommand, parseLegacyCategoryCrud, parseSavingsPercentInput, parseSetupBatchCommand, type TelegramCommand } from "./telegram.commands";
+import { parseCommand, parseLegacyCategoryCrud, parseSavingsPercentInput, parseSetupBatchCommand, parseSharedContributionInput, type TelegramCommand } from "./telegram.commands";
 import {
   normalizeTelegramMessage,
   normalizeTelegramCallback,
@@ -85,10 +85,14 @@ import {
   savingsRulesListReply,
   selectionAbandonedReply,
   type SavingsChoice,
+  sharedPercentInvalidReply,
+  sharedPercentPromptReply,
+  sharedPickFirstReply,
   setupBatchDoneReply,
   setupQuestionReply,
   setupRetryReply,
   successReply,
+  successSharedReply,
   successSplitReply,
   unresolvableReply,
   categoryCreatedReply,
@@ -138,6 +142,10 @@ const AWAITING_DELETE_CONFIRMATION = "awaiting_delete_confirmation";
 const AWAITING_SAVINGS_RULE = "awaiting_savings_rule";
 const AWAITING_SAVINGS_PERCENT = "awaiting_savings_percent";
 const AWAITING_SAVINGS_DELETE = "awaiting_savings_delete";
+// shared-expense-split (D1): the COMPARTIDO [Otro] percent input — a distinct
+// state from awaiting_savings_percent on purpose (different domain: 1..99
+// percent-or-amount vs 0..100 percent-only).
+const AWAITING_SHARED_PERCENT = "awaiting_shared_percent";
 
 /** v2 capture types — chosen ONLY by the main-menu tap (spec quick-capture "Type Selection by Menu"). */
 export type CaptureType = "REAL" | "PENDING" | "INGRESO" | "COMPARTIDO";
@@ -191,6 +199,10 @@ export const previewPayloadSchema = z.object({
   // D5 — optional so persisted previews without it keep decoding; absent = the
   // automatic rule decides ({kind:"none"} is never persisted).
   savings: savingsOverrideSchema.optional(),
+  // shared-expense-split (D7): the chosen percent rides the preview payload;
+  // optional (fractional 1..99, D9) so persisted previews without it keep
+  // decoding and corrupt-payload recovery does not regress.
+  sharedPercent: z.number().min(1).max(99).optional(),
 });
 
 export type PreviewPayload = z.infer<typeof previewPayloadSchema>;
@@ -205,6 +217,18 @@ export const savingsPercentPayloadSchema = z.object({
 });
 
 export type SavingsPercentPayload = z.infer<typeof savingsPercentPayloadSchema>;
+
+/**
+ * shared-expense-split (D1): stored payload of `awaiting_shared_percent` — the
+ * open preview rides the state so a valid percent/amount reply returns to
+ * `awaiting_preview` with `sharedPercent` persisted and the confirmation
+ * re-rendered in place (exact mirror of `savingsPercentPayloadSchema`).
+ */
+export const sharedPercentPayloadSchema = z.object({
+  preview: previewPayloadSchema,
+});
+
+export type SharedPercentPayload = z.infer<typeof sharedPercentPayloadSchema>;
 
 /**
  * Stored payload of `awaiting_savings_rule` (design D2): no payload — the
@@ -396,6 +420,9 @@ export class TelegramService {
       case AWAITING_SAVINGS_PERCENT:
         await this.handleAwaitingSavingsPercent(body, ownerId, reply);
         return;
+      case AWAITING_SHARED_PERCENT:
+        await this.handleAwaitingSharedPercent(body, ownerId, reply);
+        return;
       case AWAITING_SAVINGS_RULE:
         await this.handleAwaitingSavingsRule(body, ownerId, reply);
         return;
@@ -488,6 +515,9 @@ export class TelegramService {
         return;
       case "sv":
         await this.handleSavingsChoiceCallback(callback, ownerId, reply);
+        return;
+      case "sp":
+        await this.handleSharedChoiceCallback(callback, ownerId, reply);
         return;
       case "sa":
         await this.handleSavingsAdminCallback(callback, ownerId, reply);
@@ -752,13 +782,14 @@ export class TelegramService {
 
   /**
    * Two-step confirmation keyboard (design D7): after a category is selected,
-   * the confirmation only offers the optional savings row for INGRESO and
-   * [✅ Guardar] [✏️ Corregir]. Category choices remain on the preview message
-   * before selection. `sv:*` callbacks carry ONLY the save token, never a
-   * percent or a name (spec bot-inline-interactions "Savings callbacks encode
-   * tokens").
+   * the confirmation only offers the optional savings row for INGRESO, the
+   * optional shared row for a partner-present COMPARTIDO (shared-expense-split
+   * D5), and [✅ Guardar] [✏️ Corregir]. Category choices remain on the preview
+   * message before selection. `sv:*`/`sp:*` callbacks carry ONLY the save
+   * token, never a percent or a name (spec bot-inline-interactions "Savings/
+   * Shared callbacks encode tokens").
    */
-  private previewConfirmKeyboard(payload: PreviewPayload): InlineKeyboard {
+  private previewConfirmKeyboard(payload: PreviewPayload, hasPartner: boolean): InlineKeyboard {
     const rows: InlineButton[][] = [];
     if (payload.type === "INGRESO") {
       rows.push([
@@ -766,6 +797,16 @@ export class TelegramService {
         { text: "10%", callback_data: `sv:10:${payload.saveToken}` },
         { text: "Otro", callback_data: `sv:other:${payload.saveToken}` },
         { text: "No apartar", callback_data: `sv:off:${payload.saveToken}` },
+      ]);
+    }
+    if (payload.type === "COMPARTIDO" && hasPartner) {
+      // shared-expense-split (D5): [50%][25%][75%][Otro], 50% first; the row
+      // exists ONLY when a partner resolves (no partner → legacy single row).
+      rows.push([
+        { text: "50%", callback_data: `sp:50:${payload.saveToken}` },
+        { text: "25%", callback_data: `sp:25:${payload.saveToken}` },
+        { text: "75%", callback_data: `sp:75:${payload.saveToken}` },
+        { text: "Otro", callback_data: `sp:other:${payload.saveToken}` },
       ]);
     }
     rows.push([
@@ -816,10 +857,13 @@ export class TelegramService {
         savingsChoice = { kind: "auto", percent: suggested };
       }
     }
-    const keyboard = this.previewConfirmKeyboard(payload);
+    // shared-expense-split (D3): the partner is resolved per surface at render
+    // time; the shared row shows only for a partner-present COMPARTIDO.
+    const hasPartner = payload.type === "COMPARTIDO" && this.deps.household.partnerOf(ownerId) !== null;
+    const keyboard = this.previewConfirmKeyboard(payload, hasPartner);
     return this.safeReply(
       reply,
-      previewConfirmReply(payload.amount, payload.note, payload.type, category, savingsChoice),
+      previewConfirmReply(payload.amount, payload.note, payload.type, category, savingsChoice, payload.sharedPercent),
       keyboard,
       editMessageId,
     );
@@ -854,6 +898,17 @@ export class TelegramService {
         // (spec quick-capture "Guardar is gated until a category is chosen").
         if (payload.category === null) {
           await this.safeReply(reply, previewAskCategoryReply());
+          return;
+        }
+        // shared-expense-split (D7): a partner-present COMPARTIDO also needs a
+        // chosen percent — Guardar without it registers NOTHING and asks to
+        // pick first (same discipline as the category gate, no default).
+        if (
+          payload.type === "COMPARTIDO" &&
+          this.deps.household.partnerOf(ownerId) !== null &&
+          payload.sharedPercent === undefined
+        ) {
+          await this.safeReply(reply, sharedPickFirstReply());
           return;
         }
         await this.savePreview(payload, ownerId, reply);
@@ -950,6 +1005,64 @@ export class TelegramService {
           pendingNote: JSON.stringify(percentPayload),
         });
         await this.safeReply(reply, savingsPercentPromptReply());
+        return;
+      }
+      default:
+        await this.safeReply(reply, callbackUnavailableReply());
+    }
+  }
+
+  /**
+   * COMPARTIDO confirmation shared choices (shared-expense-split D5): the
+   * exact structural mirror of `handleSavingsChoiceCallback` — `sp:50`/`sp:25`/
+   * `sp:75` persist `sharedPercent`, `sp:other` enters `awaiting_shared_percent`
+   * for a free-form percent-or-amount answer. Callback data encodes ONLY the
+   * save token (never the percent). The same state+token gate as the pv and sv
+   * families — a mismatched tap replies "ya procesado" and executes nothing.
+   * Manual choices update the confirmation in place (edit-in-place like the
+   * savings choices).
+   */
+  private async handleSharedChoiceCallback(callback: TelegramCallback, ownerId: string, reply?: ReplyPort): Promise<void> {
+    const parts = callback.data.split(":");
+    const choice = parts[1];
+    const token = parts[2];
+    if (token === undefined) {
+      await this.safeReply(reply, callbackUnavailableReply());
+      return;
+    }
+    const state = await this.deps.botStateRepository.get(ownerId);
+    const payload = this.decodePreviewPayload(state?.pendingNote ?? null);
+
+    // D5 — state+token gate: idempotent, executes nothing on a mismatch.
+    if (state?.state !== AWAITING_PREVIEW || payload === null || payload.saveToken !== token) {
+      await this.safeReply(reply, alreadyProcessedReply());
+      return;
+    }
+
+    switch (choice) {
+      case "25":
+      case "50":
+      case "75": {
+        const updated: PreviewPayload = { ...payload, sharedPercent: Number(choice) };
+        await this.deps.botStateRepository.set({
+          ownerId,
+          state: AWAITING_PREVIEW,
+          pendingMovementId: null,
+          pendingNote: JSON.stringify(updated),
+        });
+        await this.renderPreviewConfirmation(ownerId, updated, updated.category as string, reply, updated.confirmMessageId);
+        return;
+      }
+      case "other": {
+        // Free-form percent-or-amount input: the open preview rides the state.
+        const sharedPayload: SharedPercentPayload = { preview: payload };
+        await this.deps.botStateRepository.set({
+          ownerId,
+          state: AWAITING_SHARED_PERCENT,
+          pendingMovementId: null,
+          pendingNote: JSON.stringify(sharedPayload),
+        });
+        await this.safeReply(reply, sharedPercentPromptReply());
         return;
       }
       default:
@@ -1132,6 +1245,9 @@ export class TelegramService {
       payload.category as string,
       ownerId,
       payload.savings ?? { kind: "none" },
+      // shared-expense-split (5.4): the persisted percent rides the preview
+      // through to the registration decision point.
+      payload.sharedPercent,
       reply,
     );
   }
@@ -1270,6 +1386,54 @@ export class TelegramService {
     }
 
     const preview: PreviewPayload = { ...payload.preview, savings: { kind: "percent", percent } };
+    await this.deps.botStateRepository.set({
+      ownerId,
+      state: AWAITING_PREVIEW,
+      pendingMovementId: null,
+      pendingNote: JSON.stringify(preview),
+    });
+    await this.renderPreviewConfirmation(ownerId, preview, preview.category as string, reply, preview.confirmMessageId);
+  }
+
+  /** Decodes a persisted `awaiting_shared_percent` payload; corrupt JSON yields null. */
+  private decodeSharedPercentPayload(pendingNote: string | null): SharedPercentPayload | null {
+    if (pendingNote === null) {
+      return null;
+    }
+    try {
+      const parsed = sharedPercentPayloadSchema.safeParse(JSON.parse(pendingNote));
+      return parsed.success ? parsed.data : null;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * `awaiting_shared_percent` — the COMPARTIDO [Otro] free-form percent-or-amount
+   * input (shared-expense-split D1/D4): parsed with
+   * `parseSharedContributionInput` against the preview total (percent-suffix /
+   * bare ≤100 → percent; bare >100 or currency-formatted → amount). A valid
+   * percent returns to `awaiting_preview` with `sharedPercent` persisted and
+   * edits the confirmation in place; an invalid one re-prompts and the state
+   * stays open (nothing is set).
+   */
+  private async handleAwaitingSharedPercent(body: string, ownerId: string, reply?: ReplyPort): Promise<void> {
+    const state = await this.deps.botStateRepository.get(ownerId);
+    const payload = this.decodeSharedPercentPayload(state?.pendingNote ?? null);
+
+    if (state?.state !== AWAITING_SHARED_PERCENT || payload === null) {
+      await this.deps.botStateRepository.set({ ownerId, state: IDLE, pendingMovementId: null, pendingNote: null });
+      await this.safeReply(reply, questionDroppedReply());
+      return;
+    }
+
+    const percent = parseSharedContributionInput(body, payload.preview.amount);
+    if (percent === null) {
+      await this.safeReply(reply, sharedPercentInvalidReply());
+      return;
+    }
+
+    const preview: PreviewPayload = { ...payload.preview, sharedPercent: percent };
     await this.deps.botStateRepository.set({
       ownerId,
       state: AWAITING_PREVIEW,
@@ -1630,8 +1794,10 @@ export class TelegramService {
    * EXPENSE+PAID+INDIVIDUAL; PENDING → EXPENSE+PENDING+INDIVIDUAL; INGRESO →
    * INCOME+PAID+INDIVIDUAL with the automatic savings split (the rule ALWAYS
    * applies — per-message overrides are removed, so resolveSplit runs with
-   * `{kind:"none"}`); COMPARTIDO → EXPENSE+PAID+SHARED. COMPARTIDO and
-   * PENDING never split.
+   * `{kind:"none"}`); COMPARTIDO → a two-SHARED-EXPENSE split (sender +
+   * partner rows, shared-expense-split) when a partner resolves AND a percent
+   * was chosen, else the legacy EXPENSE+PAID+SHARED single row. COMPARTIDO
+   * never touches savings; PENDING never splits.
    */
   private async registerCapture(
     amount: number,
@@ -1640,6 +1806,7 @@ export class TelegramService {
     category: string,
     ownerId: string,
     savings: SavingsOverridePayload | { kind: "none" },
+    sharedPercent: number | undefined,
     reply?: ReplyPort,
   ): Promise<boolean> {
     if (type === "INGRESO") {
@@ -1648,6 +1815,28 @@ export class TelegramService {
       const split = await this.deps.savingsService.resolveSplit(ownerId, note ?? "", savings);
       if (split.kind === "split") {
         return this.registerIncomeSplit(amount, note, ownerId, split.percent, category, reply);
+      }
+    }
+    // shared-expense-split (D2/D3): a COMPARTIDO with a resolved partner and a
+    // chosen percent registers the two-row split; otherwise the legacy path.
+    if (type === "COMPARTIDO" && sharedPercent !== undefined) {
+      const partnerId = this.deps.household.partnerOf(ownerId);
+      if (partnerId !== null) {
+        const result = await this.deps.expenseService.createSharedExpenseSplit({
+          ownerId,
+          partnerId,
+          total: amount,
+          percent: sharedPercent,
+          note,
+          occurredAt: new Date(),
+          category,
+        });
+        if (result === null) {
+          return false;
+        }
+        await this.safeReply(reply, successSharedReply(result.sender, amount, note, category));
+        await this.sendMenu(reply);
+        return true;
       }
     }
     const movementType = type === "INGRESO" ? "INCOME" : "EXPENSE";
@@ -2542,7 +2731,7 @@ export class TelegramService {
    * partner are visible under the same predicate the dashboard uses.
    */
   private scopeFor(ownerId: string): ViewerScope {
-    return { viewerId: ownerId, partnerId: this.deps.household.partnerOf(ownerId), visibility: "all" };
+    return { viewerId: ownerId, partnerId: this.deps.household.partnerOf(ownerId), visibility: "mine" };
   }
 
   /**

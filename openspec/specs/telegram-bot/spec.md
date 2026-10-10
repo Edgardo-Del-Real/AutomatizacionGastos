@@ -282,8 +282,8 @@ When an owner with no categories sends a capture-shaped message, the system MUST
 
 ### Requirement: Per-Owner State Machine
 
-The system MUST persist, per owner, a state machine with values `idle`, `awaiting_setup`, `awaiting_capture` (payload `{type}`), `awaiting_preview` (payload `{amount, note, type, category, saveToken, savings?}`), `awaiting_category_name` (preview create-category name input), `awaiting_movement_selection` (sub-menu pick), `awaiting_category_selection` (correction reassign pick), `awaiting_delete_confirmation` (delete gate), `awaiting_savings_rule` (savings sub-menu rule text input), `awaiting_savings_percent` ("Otro" percent input), and `awaiting_savings_delete` (savings rule delete gate). The states `awaiting_category`, `awaiting_registration`, and `awaiting_amount_confirmation` MUST NOT exist; a persisted payload in any of those removed states (e.g. from a rollback) MUST recover to `idle` without registering or deleting anything. Transitions MUST be explicit and testable: a type menu tap in any flow state → abandon the pending flow and enter `awaiting_capture` with the tapped type; `awaiting_capture` + parsed `monto+nota` → `awaiting_preview`; preview `➕ Crear categoría` → `awaiting_category_name`, and a created name → back to `awaiting_preview` with the category selected; preview `✅ Guardar` → registers and `idle` + menu, `✏️ Corregir` → `awaiting_capture` with a capture prompt; the INGRESO confirmation `[Otro]` → `awaiting_savings_percent`, and a valid percent → back to `awaiting_preview` with the override persisted; a delete pick in the expense admin → `awaiting_delete_confirmation` with the resolved target id persisted; `🗑 Borrar` → deletes and `idle` + menu, `❌ Cancelar` or any new message → `idle` with nothing deleted; the savings sub-menu create → `awaiting_savings_rule`, and a parsed rule text → rule defined and `idle` + menu; a savings rule delete pick → `awaiting_savings_delete` with the rule id persisted, and confirm → rule deleted and `idle` + menu, cancel → `idle` with nothing deleted; completed setup → `idle`. Every persisted payload MUST survive a restart, and a corrupt payload MUST recover without registering or deleting anything.
-(Previously: the state machine had no savings states, the `awaiting_preview` payload carried no `savings` field, and the removed-state recovery list was unchanged.)
+The system MUST persist, per owner, a state machine with values `idle`, `awaiting_setup`, `awaiting_capture` (payload `{type}`), `awaiting_preview` (payload `{amount, note, type, category, saveToken, savings?, sharedPercent?}`), `awaiting_category_name` (preview create-category name input), `awaiting_movement_selection` (sub-menu pick), `awaiting_category_selection` (correction reassign pick), `awaiting_delete_confirmation` (delete gate), `awaiting_savings_rule` (savings sub-menu rule text input), `awaiting_savings_percent` ("Otro" percent input), `awaiting_shared_percent` ("Otro" shared percent input), and `awaiting_savings_delete` (savings rule delete gate). The states `awaiting_category`, `awaiting_registration`, and `awaiting_amount_confirmation` MUST NOT exist; a persisted payload in any of those removed states (e.g. from a rollback) MUST recover to `idle` without registering or deleting anything. Transitions MUST be explicit and testable: a type menu tap in any flow state → abandon the pending flow and enter `awaiting_capture` with the tapped type; `awaiting_capture` + parsed `monto+nota` → `awaiting_preview`; preview `➕ Crear categoría` → `awaiting_category_name`, and a created name → back to `awaiting_preview` with the category selected; preview `✅ Guardar` → registers and `idle` + menu, `✏️ Corregir` → `awaiting_capture` with a capture prompt; the INGRESO confirmation `[Otro]` → `awaiting_savings_percent`, and a valid percent → back to `awaiting_preview` with the override persisted; the partner-present COMPARTIDO confirmation `[Otro]` → `awaiting_shared_percent`, and a valid percent `1..99` → back to `awaiting_preview` with `sharedPercent` persisted; a delete pick in the expense admin → `awaiting_delete_confirmation` with the resolved target id persisted; `🗑 Borrar` → deletes and `idle` + menu, `❌ Cancelar` or any new message → `idle` with nothing deleted; the savings sub-menu create → `awaiting_savings_rule`, and a parsed rule text → rule defined and `idle` + menu; a savings rule delete pick → `awaiting_savings_delete` with the rule id persisted, and confirm → rule deleted and `idle` + menu, cancel → `idle` with nothing deleted; completed setup → `idle`. Every persisted payload MUST survive a restart, and a corrupt payload MUST recover without registering or deleting anything.
+(Previously: the state machine had no `awaiting_shared_percent` state and the `awaiting_preview` payload carried no `sharedPercent` field.)
 
 #### Scenario: Menu tap enters awaiting_capture
 
@@ -339,6 +339,12 @@ The system MUST persist, per owner, a state machine with values `idle`, `awaitin
 - GIVEN an INGRESO preview owner taps `[Otro]`
 - WHEN they reply "15"
 - THEN the confirmation re-renders with savings at 15% and the override is persisted
+
+#### Scenario: Shared Otro percent input returns to the confirmation
+
+- GIVEN a partner-present COMPARTIDO preview owner taps `[Otro]`
+- WHEN they reply "30"
+- THEN the confirmation re-renders with a 30% share and `sharedPercent` is persisted
 
 #### Scenario: Rule delete gate confirms
 
@@ -601,13 +607,13 @@ The bot's `recent` query MUST exclude PENDING movements; PENDING rows MUST be vi
 
 ### Requirement: Planned Query Routing
 
-The system MUST answer "¿cuánto tengo previsto?" and equivalent phrasings ("gastos fijos previstos", "cuánto voy a gastar el mes que viene") from real data: the sum of PENDING EXPENSE movements targeted at next month (`summary.planned`). An honest redirect MUST be used only when query execution fails.
+The system MUST answer "¿cuánto tengo previsto?" and equivalent phrasings ("gastos fijos previstos", "cuánto voy a gastar el mes que viene") from real data: the sum of the owner's outstanding PENDING EXPENSE movements (`summary.planned`). Previstos carry no planned date and enter the month in which they are paid (`occurredAt` is rewritten on mark-paid). An honest redirect MUST be used only when query execution fails.
 
 #### Scenario: planned query answers real data
 
-- GIVEN PENDING EXPENSE 2500 and 1500 targeted next month
+- GIVEN outstanding PENDING EXPENSE 2500 and 1500
 - WHEN the owner asks "¿cuánto tengo previsto?"
-- THEN the reply answers 4000 for next month from real data
+- THEN the reply answers 4000 outstanding from real data
 
 #### Scenario: no pending answers zero
 
@@ -637,3 +643,19 @@ Every bot-side category-creation path — the preview `➕ Crear categoría` flo
 - GIVEN a preview category row or a correction reassign row
 - WHEN any category button or text is processed
 - THEN no category is created beyond the explicit ➕ or admin flows
+
+### Requirement: Shared Split Confirmation Annotation
+
+A COMPARTIDO split confirmation MUST use the fixed `reply-text.ts` template (no LLM) and MUST report the sender's share plus the annotation "parte de {total} compartido". A no-partner legacy COMPARTIDO confirmation MUST remain the standard single-amount reply.
+
+#### Scenario: Split confirmation annotates the share
+
+- GIVEN a 1000/1000 split of a 2000 COMPARTIDO
+- WHEN the confirmation is sent
+- THEN it reports the sender's 1000 share and "parte de {total} compartido"
+
+#### Scenario: Legacy confirmation unchanged
+
+- GIVEN a COMPARTIDO capture with no partner
+- WHEN it saves
+- THEN the standard single-amount confirmation is sent with no annotation

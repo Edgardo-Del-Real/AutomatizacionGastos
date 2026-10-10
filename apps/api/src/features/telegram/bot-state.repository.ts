@@ -20,6 +20,8 @@ export const BOT_STATES = [
   "awaiting_savings_rule",
   "awaiting_savings_percent",
   "awaiting_savings_delete",
+  // shared-expense-split (D1): the COMPARTIDO [Otro] percent input.
+  "awaiting_shared_percent",
 ] as const;
 
 export type BotStateName = (typeof BOT_STATES)[number];

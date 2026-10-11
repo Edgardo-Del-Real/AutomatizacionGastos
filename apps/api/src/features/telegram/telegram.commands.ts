@@ -1,26 +1,85 @@
 import { normalizeForMatch } from "../categories/matcher";
 
 export type TelegramCommand =
-  | { type: "register"; name: string }
-  | { type: "rename"; from: string; to: string }
-  | { type: "associate"; keyword: string; category: string }
   | { type: "list" }
-  | { type: "configurar" };
+  | { type: "configurar" }
+  | { type: "menu" }
+  | { type: "start" }
+  | { type: "ayuda" }
+  | { type: "savings-rule"; keyword: string; percent: number }
+  | { type: "savings-rule-invalid" }
+  | { type: "savings-rule-list" }
+  | { type: "savings-rule-delete"; keyword: string };
 
 const REGISTER_RE = /^\s*registrar\s+categoria\s*:\s*(.+?)\s*$/;
 const RENAME_RE = /^\s*renombrar\s+categoria\s*:\s*(.+?)\s+a\s*:\s*(.+?)\s*$/;
+const DELETE_CATEGORY_RE = /^\s*borrar\s+categoria\s*:\s*(.+?)\s*$/;
 const ASSOCIATE_RE = /^\s*asociar\s+palabra\s*:\s*(.+?)\s+a\s+categoria\s*:\s*(.+?)\s*$/;
 const LIST_RE = /^\s*listar\s+categorias\s*$/;
 const CONFIGURAR_RE = /^\s*configurar\s+categorias\s*$/;
+const MENU_RE = /^\s*menu\s*$/;
+const START_RE = /^\s*start\s*$/;
+const AYUDA_RE = /^\s*ayuda\s*$/;
+const SAVINGS_RULE_RE = /^\s*registrar\s+ahorro\s*:\s*(.+?)\s+al\s+(-?\d+(?:[.,]\d+)?)%\s*$/;
+// D10 — savings-rule management commands. The delete regex keyword is
+// "ahorro" (never "categoria"), so it cannot collide with `borrar categoria:`.
+const SAVINGS_RULE_LIST_RE = /^\s*listar\s+ahorros\s*$/;
+const SAVINGS_RULE_DELETE_RE = /^\s*borrar\s+ahorro\s*:\s*(.+?)\s*$/;
 
 /**
- * Recognizes the five owner commands on accent- and case-insensitive text
+ * v2 — detection-only classifier for the legacy text category-CRUD commands
+ * (design D8, spec telegram-bot "Bot Commands"): `registrar categoria:`,
+ * `renombrar categoria:` and `asociar palabra:` MUST NOT be recognized as
+ * commands anymore — a message carrying one gets the educational redirect to
+ * the 🗂 Administrar categorías button and never creates or renames anything.
+ * Returns the kind (never the values: detection-only, nothing is stripped or
+ * executed). Same regexes and non-empty guards as the former command branches.
+ */
+export type LegacyCategoryCrud = { kind: "register" | "rename" | "associate" };
+
+export function parseLegacyCategoryCrud(text: string): LegacyCategoryCrud | null {
+  const syntaxNormalized = normalizeCommandSyntax(text);
+  const normalized = normalizeForMatch(syntaxNormalized);
+
+  const register = REGISTER_RE.exec(normalized);
+  if (register !== null && register[1] !== undefined && register[1].length > 0) {
+    return { kind: "register" };
+  }
+
+  const rename = RENAME_RE.exec(normalized);
+  if (rename !== null) {
+    return { kind: "rename" };
+  }
+
+  const associate = ASSOCIATE_RE.exec(normalized);
+  if (associate !== null) {
+    return { kind: "associate" };
+  }
+
+  return null;
+}
+
+/**
+ * D12 — normalizes a leading `/` (bot-command syntax) and `_`→space before
+ * the existing regexes match: "/menu" → "menu", "/listar_categorias" →
+ * "listar categorias". Keeps the existing regexes as the single parser
+ * surface for `/listar_categorias` and "listar categorias".
+ */
+function normalizeCommandSyntax(text: string): string {
+  return text.replace(/^\//, "").replaceAll("_", " ");
+}
+
+/**
+ * Recognizes the owner commands on accent- and case-insensitive text
  * (D3). Values are sliced from the ORIGINAL text at the indices found on the
  * normalized text, so spelling is preserved ("Café" stays "Café").
  * Returns null when the text is not a command (falls through to registration).
  */
 export function parseCommand(text: string): TelegramCommand | null {
-  const normalized = normalizeForMatch(text);
+  // D12 — the leading `/` and `_` separators are normalized BEFORE matching;
+  // value extraction slices from the syntax-normalized text so indices map 1:1.
+  const syntaxNormalized = normalizeCommandSyntax(text);
+  const normalized = normalizeForMatch(syntaxNormalized);
 
   if (CONFIGURAR_RE.test(normalized)) {
     return { type: "configurar" };
@@ -28,27 +87,43 @@ export function parseCommand(text: string): TelegramCommand | null {
   if (LIST_RE.test(normalized)) {
     return { type: "list" };
   }
-
-  const register = REGISTER_RE.exec(normalized);
-  if (register !== null && register[1] !== undefined && register[1].length > 0) {
-    return { type: "register", name: sliceFromOriginal(text, normalized, register[1]) };
+  if (MENU_RE.test(normalized)) {
+    return { type: "menu" };
+  }
+  // /start (always sent by Telegram when the user opens the bot) behaves as
+  // the main menu — the first thing a new user sees are the action buttons.
+  if (START_RE.test(normalized)) {
+    return { type: "start" };
+  }
+  if (AYUDA_RE.test(normalized)) {
+    return { type: "ayuda" };
   }
 
-  const rename = RENAME_RE.exec(normalized);
-  if (rename !== null) {
+  const savingsRule = SAVINGS_RULE_RE.exec(normalized);
+  if (savingsRule !== null) {
+    const percent = Number(savingsRule[2]!.replace(",", "."));
+    // D10: only 0 < percent <= 100 defines a rule; an out-of-range percent is
+    // still a recognized command and is rejected (nothing stored, no fallthrough).
+    if (!Number.isFinite(percent) || percent <= 0 || percent > 100) {
+      return { type: "savings-rule-invalid" };
+    }
     return {
-      type: "rename",
-      from: sliceFromOriginal(text, normalized, rename[1]!),
-      to: sliceFromOriginal(text, normalized, rename[2]!),
+      type: "savings-rule",
+      keyword: sliceFromOriginal(syntaxNormalized, normalized, savingsRule[1]!),
+      percent,
     };
   }
 
-  const associate = ASSOCIATE_RE.exec(normalized);
-  if (associate !== null) {
+  // D10 — savings-rule management commands (`listar ahorros`, `borrar ahorro:`).
+  if (SAVINGS_RULE_LIST_RE.test(normalized)) {
+    return { type: "savings-rule-list" };
+  }
+
+  const savingsRuleDelete = SAVINGS_RULE_DELETE_RE.exec(normalized);
+  if (savingsRuleDelete !== null && savingsRuleDelete[1] !== undefined && savingsRuleDelete[1].length > 0) {
     return {
-      type: "associate",
-      keyword: sliceFromOriginal(text, normalized, associate[1]!),
-      category: sliceFromOriginal(text, normalized, associate[2]!),
+      type: "savings-rule-delete",
+      keyword: sliceFromOriginal(syntaxNormalized, normalized, savingsRuleDelete[1]),
     };
   }
 
@@ -59,4 +134,117 @@ export function parseCommand(text: string): TelegramCommand | null {
 function sliceFromOriginal(original: string, normalized: string, value: string): string {
   const index = normalized.indexOf(value);
   return original.slice(index, index + value.length);
+}
+
+/**
+ * D10 — parses the free-form percent the owner types after `[Otro]` in the
+ * INGRESO confirmation: an optional `%` suffix and a comma (or dot) decimal
+ * separator are accepted. Returns the percent when `0 < percent <= 100`, or
+ * null when the input is empty, non-numeric, or out of range (nothing stored).
+ */
+export function parseSavingsPercentInput(input: string | number): number | null {
+  const raw = String(input).trim().replace(/%\s*$/, "").replace(",", ".");
+  if (raw.length === 0) {
+    return null;
+  }
+  const percent = Number(raw);
+  if (!Number.isFinite(percent) || percent <= 0 || percent > 100) {
+    return null;
+  }
+  return percent;
+}
+
+/**
+ * D4 — shared-expense-split parser. Resolves the sender's share of a COMPARTIDO
+ * as a percent valid only in `1..99`, or null (invalid → re-prompt). Own es-AR
+ * parsing on purpose (do NOT reuse `parseSavingsPercentInput`, whose `.`/`,`
+ * are decimals): here a `%` suffix is a percent, a bare number `<= 100` is a
+ * percent, and a bare number `> 100` or a currency-formatted value
+ * (`$45.000`, `45.000 ars`, dotted thousands) is an amount whose percent is
+ * `amount / total * 100`. Valid only when the resolved percent lands in `1..99`
+ * (implied amount `> 0` and `< total`, so the owner never keeps the whole bill).
+ */
+export function parseSharedContributionInput(input: string, total: number): number | null {
+  const trimmed = input.trim();
+  if (trimmed.length === 0) {
+    return null;
+  }
+
+  const hasPercentSign = /%\s*$/.test(trimmed);
+  const hasCurrencyMark = /^\s*\$/.test(trimmed) || /\bars\s*$/i.test(trimmed);
+
+  // es-AR numeric core: strip the currency/percent marks, . = thousands,
+  // , = decimal separator (`45.000` → 45000, `45,5` → 45.5).
+  const core = trimmed
+    .replace(/^\s*\$/, "")
+    .replace(/\bars\s*$/i, "")
+    .replace(/%\s*$/, "")
+    .replace(/\./g, "")
+    .replace(",", ".")
+    .trim();
+  if (!/^-?\d+(\.\d+)?$/.test(core)) {
+    return null;
+  }
+  const value = Number(core);
+  if (!Number.isFinite(value) || value <= 0) {
+    return null;
+  }
+
+  const isPercentBySize = !hasPercentSign && !hasCurrencyMark && value <= 100;
+  const percent = hasPercentSign || isPercentBySize ? value : (value / total) * 100;
+
+  if (!Number.isFinite(percent) || percent < 1 || percent > 99) {
+    return null;
+  }
+  // Fractional percents are valid (D9); trim floating-point tails for the
+  // persisted payload without changing representable values like 50 or 45.5.
+  return Math.round(percent * 10000) / 10000;
+}
+
+/**
+ * One setup-reply entry after command classification (design D11): plain names
+ * and `registrar categoria: X` are CREATE entries (identical effect), while
+ * delete/rename commands carry their own semantics. Execution happens in
+ * `handleSetupReply` via the guarded CategoryService — never as literals.
+ */
+export type SetupBatchEntry =
+  | { kind: "create"; name: string }
+  | { kind: "delete"; name: string }
+  | { kind: "rename"; from: string; to: string };
+
+/**
+ * Pure parser for a setup reply: splits on commas/newlines, then classifies
+ * each token against the batch-command regexes (delete/rename) before falling
+ * back to plain create names. Values are sliced from the ORIGINAL text so
+ * spelling is preserved. Returns an empty array when nothing remains.
+ */
+export function parseSetupBatchCommand(body: string): SetupBatchEntry[] {
+  const raw = body
+    .split(/[\n,]+/)
+    .map((token) => token.trim())
+    .filter((token) => token.length > 0);
+  return raw.map((token) => {
+    const normalized = normalizeForMatch(token);
+
+    const del = DELETE_CATEGORY_RE.exec(normalized);
+    if (del !== null && del[1] !== undefined && del[1].length > 0) {
+      return { kind: "delete", name: sliceFromOriginal(token, normalized, del[1]) };
+    }
+
+    const rename = RENAME_RE.exec(normalized);
+    if (rename !== null) {
+      return {
+        kind: "rename",
+        from: sliceFromOriginal(token, normalized, rename[1]!),
+        to: sliceFromOriginal(token, normalized, rename[2]!),
+      };
+    }
+
+    const register = REGISTER_RE.exec(normalized);
+    if (register !== null && register[1] !== undefined && register[1].length > 0) {
+      return { kind: "create", name: sliceFromOriginal(token, normalized, register[1]) };
+    }
+
+    return { kind: "create", name: token };
+  });
 }

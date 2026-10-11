@@ -1,13 +1,18 @@
 import {
   categoryListSchema,
+  expenseSchema,
+  householdMembersSchema,
   listMovementsSchema,
   movementSchema,
   movementSummarySchema,
 } from "@rita/contracts";
 import type {
+  Expense,
+  HouseholdMember,
   Movement,
   MovementSummary,
   OwnerCategory,
+  VisibilityFilter,
 } from "@rita/contracts";
 import { z } from "zod";
 
@@ -44,16 +49,32 @@ export class ApiError extends Error {
 
 /** Client-side movement list filters, mapped onto `/movements` query params. */
 export type MovementListFilters = {
-  type?: "EXPENSE" | "INCOME";
+  type?: "EXPENSE" | "INCOME" | "SAVINGS";
+  status?: "PAID" | "PENDING";
   from?: string;
   to?: string;
   category?: string;
   q?: string;
+  /** Visibility select state; `undefined` means the default `all`. */
+  visibility?: VisibilityFilter;
 };
 
 /** Fields that may be updated on a movement via `PATCH /movements/:id`. */
 export type MovementPatch = {
   amount?: number;
+  note?: string | null;
+  category?: string | null;
+};
+
+/**
+ * Payload for the "Agregar previsto" form. `occurredAt` is derived client-side
+ * (the load date) because the API derives the planned target month from it
+ * (load month + 1, Buenos Aires); `type`/`status` are pinned to the planned
+ * contract (EXPENSE + PENDING) and never travel through this input. Planned
+ * expenses are INDIVIDUAL by design: no visibility field ever travels here.
+ */
+export type PlannedMovementInput = {
+  amount: number;
   note?: string | null;
   category?: string | null;
 };
@@ -129,10 +150,27 @@ async function request<T>(
   return parsed.data;
 }
 
-export function fetchMovementSummary(ownerId: string): Promise<MovementSummary> {
+/**
+ * Household members for the viewer selector. The proxy rewrites `/api/*` to the
+ * API root, so this hits `GET /household/members` (chatIds never travel).
+ */
+export function fetchHouseholdMembers(): Promise<HouseholdMember[]> {
   return request(
     "GET",
-    `/api/movements/summary?${new URLSearchParams({ ownerId })}`,
+    "/api/household/members",
+    undefined,
+    {},
+    householdMembersSchema,
+  );
+}
+
+export function fetchMovementSummary(
+  ownerId: string,
+  visibility: VisibilityFilter = "mine",
+): Promise<MovementSummary> {
+  return request(
+    "GET",
+    `/api/movements/summary?${new URLSearchParams({ ownerId, visibility })}`,
     undefined,
     {},
     movementSummarySchema,
@@ -142,6 +180,7 @@ export function fetchMovementSummary(ownerId: string): Promise<MovementSummary> 
 export function fetchMovements(
   ownerId: string,
   filters: MovementListFilters = {},
+  visibility: VisibilityFilter = "mine",
 ): Promise<Movement[]> {
   const params: Record<string, string> = {};
   if (filters.type) params.type = filters.type;
@@ -149,9 +188,10 @@ export function fetchMovements(
   if (filters.to) params.to = filters.to;
   if (filters.category) params.category = filters.category;
   if (filters.q) params.q = filters.q;
+  if (filters.status) params.status = filters.status;
   return request(
     "GET",
-    `/api/movements?${new URLSearchParams({ ownerId, ...params })}`,
+    `/api/movements?${new URLSearchParams({ ownerId, ...params, visibility })}`,
     undefined,
     {},
     listMovementsSchema,
@@ -186,4 +226,46 @@ export function deleteMovement(id: string, ownerId: string): Promise<void> {
   return request("DELETE", `/api/movements/${id}`, undefined, {
     "x-owner-id": ownerId,
   });
+}
+
+/**
+ * D8/D11 — "Agregar previsto" reuses the existing registration path
+ * `POST /expenses` with the planned contract pinned (`type: "EXPENSE"`,
+ * `status: "PENDING"`). The endpoint answers with the legacy Expense shape, so
+ * the response validates against `expenseSchema`, not `movementSchema`.
+ */
+export function createPlannedMovement(
+  ownerId: string,
+  input: PlannedMovementInput,
+): Promise<Expense> {
+  return request(
+    "POST",
+    "/api/expenses",
+    {
+      amount: input.amount,
+      category: input.category ?? null,
+      note: input.note?.trim() ? input.note : null,
+      // The planned row is anchored to the load date; the API derives the
+      // target month as load month + 1 (BA).
+      occurredAt: new Date().toISOString(),
+      type: "EXPENSE",
+      status: "PENDING",
+    },
+    { "x-owner-id": ownerId },
+    expenseSchema,
+  );
+}
+
+/** D5 — the mark-paid transition; 409/404 surface as `ApiError("http")`. */
+export function markMovementPaid(
+  id: string,
+  ownerId: string,
+): Promise<Movement> {
+  return request(
+    "POST",
+    `/api/movements/${id}/paid`,
+    undefined,
+    { "x-owner-id": ownerId },
+    movementSchema,
+  );
 }

@@ -1,6 +1,11 @@
 import { buildApp } from "./app";
 import { env } from "./config/env";
-import { createTelegramBot, redactToken, registerGracefulStop } from "./features/telegram/telegram.bot";
+import {
+  createTelegramBot,
+  redactToken,
+  registerGracefulStop,
+  startTelegramBot,
+} from "./features/telegram/telegram.bot";
 
 const app = buildApp({ logger: true });
 const bot = createTelegramBot(env.TELEGRAM_BOT_TOKEN, app.telegramService);
@@ -21,7 +26,9 @@ try {
   process.exit(1);
 }
 
-void bot.start().catch((error: unknown) => {
+// D12 — startTelegramBot registers setMyCommands (tolerating failures) and
+// then starts the polling loop.
+void startTelegramBot(bot).catch((error: unknown) => {
   app.log.error(redactToken(error instanceof Error ? error.message : String(error), env.TELEGRAM_BOT_TOKEN));
   process.exit(1);
 });

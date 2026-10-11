@@ -1,4 +1,4 @@
-import type { MovementType } from "@rita/contracts";
+import type { MovementType, VisibilityFilter } from "@rita/contracts";
 
 import type { MovementListFilters } from "../../infra/api";
 
@@ -7,43 +7,57 @@ export type MovementFiltersProps = {
   onChange: (filters: MovementListFilters) => void;
 };
 
+const CONTROL_CLASS =
+  "h-9 rounded-control border border-border bg-surface px-3 text-sm text-ink shadow-sm transition-colors focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent-soft";
+const LABEL_CLASS =
+  "text-xs font-semibold tracking-wide text-ink-faint uppercase";
+
 export function MovementFilters({ value, onChange }: MovementFiltersProps) {
   const update = (patch: Partial<MovementListFilters>) =>
     onChange({ ...value, ...patch });
 
+  // "Previstos" is the synthetic option: EXPENSE + PENDING. It has no wire value
+  // of its own, so it is recognized from the two underlying filter fields.
+  const typeFilterValue =
+    value.type === "EXPENSE" && value.status === "PENDING"
+      ? "PREVISTO"
+      : (value.type ?? "");
+
   return (
     <div className="flex flex-wrap items-end gap-x-6 gap-y-4 px-4 py-4 sm:px-6">
       <div className="flex flex-col gap-1.5">
-        <label
-          htmlFor="movement-type-filter"
-          className="text-xs font-semibold tracking-wide text-ink-faint uppercase"
-        >
+        <label htmlFor="movement-type-filter" className={LABEL_CLASS}>
           Tipo
         </label>
         <select
           id="movement-type-filter"
           aria-label="Tipo"
-          value={value.type ?? ""}
-          onChange={(event) =>
+          value={typeFilterValue}
+          onChange={(event) => {
+            const next = event.target.value;
+            if (next === "PREVISTO") {
+              update({ type: "EXPENSE", status: "PENDING" });
+              return;
+            }
+            // Any explicit type resets status so switching back to Gasto (or
+            // any other option) clears the planned sub-filter.
             update({
-              type: (event.target.value || undefined) as
-                | MovementType
-                | undefined,
-            })
-          }
-          className="h-9 rounded-lg border border-border bg-surface px-3 text-sm text-ink shadow-sm transition-colors focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent-soft"
+              type: (next || undefined) as MovementType | undefined,
+              status: undefined,
+            });
+          }}
+          className={CONTROL_CLASS}
         >
           <option value="">Todos</option>
           <option value="INCOME">Ingreso</option>
           <option value="EXPENSE">Gasto</option>
+          <option value="PREVISTO">Previstos</option>
+          <option value="SAVINGS">Ahorro</option>
         </select>
       </div>
 
       <div className="flex flex-col gap-1.5">
-        <label
-          htmlFor="movement-from-filter"
-          className="text-xs font-semibold tracking-wide text-ink-faint uppercase"
-        >
+        <label htmlFor="movement-from-filter" className={LABEL_CLASS}>
           Desde
         </label>
         <input
@@ -54,15 +68,12 @@ export function MovementFilters({ value, onChange }: MovementFiltersProps) {
           onChange={(event) =>
             update({ from: event.target.value || undefined })
           }
-          className="h-9 rounded-lg border border-border bg-surface px-3 text-sm text-ink shadow-sm transition-colors focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent-soft"
+          className={CONTROL_CLASS}
         />
       </div>
 
       <div className="flex flex-col gap-1.5">
-        <label
-          htmlFor="movement-to-filter"
-          className="text-xs font-semibold tracking-wide text-ink-faint uppercase"
-        >
+        <label htmlFor="movement-to-filter" className={LABEL_CLASS}>
           Hasta
         </label>
         <input
@@ -71,15 +82,12 @@ export function MovementFilters({ value, onChange }: MovementFiltersProps) {
           type="date"
           value={value.to ?? ""}
           onChange={(event) => update({ to: event.target.value || undefined })}
-          className="h-9 rounded-lg border border-border bg-surface px-3 text-sm text-ink shadow-sm transition-colors focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent-soft"
+          className={CONTROL_CLASS}
         />
       </div>
 
       <div className="flex flex-col gap-1.5">
-        <label
-          htmlFor="movement-category-filter"
-          className="text-xs font-semibold tracking-wide text-ink-faint uppercase"
-        >
+        <label htmlFor="movement-category-filter" className={LABEL_CLASS}>
           Categoría
         </label>
         <input
@@ -89,15 +97,12 @@ export function MovementFilters({ value, onChange }: MovementFiltersProps) {
           onChange={(event) =>
             update({ category: event.target.value || undefined })
           }
-          className="h-9 rounded-lg border border-border bg-surface px-3 text-sm text-ink shadow-sm transition-colors focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent-soft"
+          className={CONTROL_CLASS}
         />
       </div>
 
       <div className="flex flex-col gap-1.5">
-        <label
-          htmlFor="movement-q-filter"
-          className="text-xs font-semibold tracking-wide text-ink-faint uppercase"
-        >
+        <label htmlFor="movement-q-filter" className={LABEL_CLASS}>
           Texto
         </label>
         <input
@@ -105,14 +110,33 @@ export function MovementFilters({ value, onChange }: MovementFiltersProps) {
           aria-label="Texto"
           value={value.q ?? ""}
           onChange={(event) => update({ q: event.target.value || undefined })}
-          className="h-9 rounded-lg border border-border bg-surface px-3 text-sm text-ink shadow-sm transition-colors focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent-soft"
+          className={CONTROL_CLASS}
         />
+      </div>
+
+      <div className="flex flex-col gap-1.5">
+        <label htmlFor="movement-visibility-filter" className={LABEL_CLASS}>
+          Visibilidad
+        </label>
+        <select
+          id="movement-visibility-filter"
+          aria-label="Visibilidad"
+          value={value.visibility ?? "mine"}
+          onChange={(event) =>
+            update({ visibility: event.target.value as VisibilityFilter })
+          }
+          className={CONTROL_CLASS}
+        >
+          <option value="all">Todos</option>
+          <option value="mine">Míos</option>
+          <option value="shared">Compartidos</option>
+        </select>
       </div>
 
       <button
         type="button"
         onClick={() => onChange({})}
-        className="inline-flex h-9 items-center rounded-lg border border-border bg-surface px-4 text-sm font-semibold text-ink transition-colors hover:bg-canvas focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
+        className="inline-flex h-9 items-center rounded-control border border-border bg-surface px-4 text-sm font-semibold text-ink-soft transition-colors hover:bg-surface-raised hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-soft"
       >
         Limpiar
       </button>

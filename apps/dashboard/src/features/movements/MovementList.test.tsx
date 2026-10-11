@@ -1,24 +1,30 @@
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import type { ReactElement } from "react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { Movement } from "@rita/contracts";
+import type { HouseholdMember, Movement } from "@rita/contracts";
 
 import {
   ApiError,
   deleteMovement,
   fetchCategories,
+  fetchHouseholdMembers,
   fetchMovements,
+  markMovementPaid,
   patchMovement,
 } from "../../infra/api";
-import { MovementList } from "./MovementList";
+import { ViewerProvider } from "../household/ViewerContext";
+import { MovementAmount, MovementList } from "./MovementList";
 
 vi.mock("../../infra/api", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../infra/api")>()),
   fetchMovements: vi.fn(),
   fetchCategories: vi.fn(),
+  fetchHouseholdMembers: vi.fn(),
   patchMovement: vi.fn(),
   deleteMovement: vi.fn(),
+  markMovementPaid: vi.fn(),
 }));
 
 const movements: Movement[] = [
@@ -46,10 +52,142 @@ const movements: Movement[] = [
   },
 ];
 
+/** A SHARED split pair plus a legacy SHARED row without sharedTotal (Phase 6). */
+const splitMovements: Movement[] = [
+  {
+    id: "sp1",
+    ownerId: "rita",
+    registrantId: "rita",
+    visibility: "SHARED",
+    amount: 1000,
+    currency: "ARS",
+    type: "EXPENSE",
+    category: "super",
+    note: "compra familiar",
+    sharedTotal: 2000,
+    occurredAt: new Date("2026-08-10T12:00:00Z"),
+    createdAt: new Date("2026-08-10T12:00:00Z"),
+  },
+  {
+    id: "sp2",
+    ownerId: "edgardo",
+    registrantId: "edgardo",
+    visibility: "SHARED",
+    amount: 1000,
+    currency: "ARS",
+    type: "EXPENSE",
+    category: "super",
+    note: "compra familiar",
+    sharedTotal: 2000,
+    occurredAt: new Date("2026-08-11T12:00:00Z"),
+    createdAt: new Date("2026-08-11T12:00:00Z"),
+  },
+  {
+    id: "legacy-shared",
+    ownerId: "rita",
+    registrantId: "rita",
+    visibility: "SHARED",
+    amount: 500,
+    currency: "ARS",
+    type: "EXPENSE",
+    category: "casa",
+    note: "legacy",
+    occurredAt: new Date("2026-08-12T12:00:00Z"),
+    createdAt: new Date("2026-08-12T12:00:00Z"),
+  },
+];
+
 const fetchMovementsMock = vi.mocked(fetchMovements);
 const fetchCategoriesMock = vi.mocked(fetchCategories);
+const fetchHouseholdMembersMock = vi.mocked(fetchHouseholdMembers);
 const patchMovementMock = vi.mocked(patchMovement);
 const deleteMovementMock = vi.mocked(deleteMovement);
+const markMovementPaidMock = vi.mocked(markMovementPaid);
+
+/** A PENDING EXPENSE row plus a regular PAID row for contrast. */
+const pendingMovements: Movement[] = [
+  {
+    id: "p1",
+    ownerId: "default",
+    amount: 2500,
+    currency: "ARS",
+    type: "EXPENSE",
+    category: "alquiler",
+    note: null,
+    occurredAt: new Date("2026-08-13T12:00:00Z"),
+    createdAt: new Date("2026-08-13T12:00:00Z"),
+    status: "PENDING",
+  },
+  {
+    id: "e1",
+    ownerId: "default",
+    amount: 1200,
+    currency: "ARS",
+    type: "EXPENSE",
+    category: "alquiler",
+    note: null,
+    occurredAt: new Date("2026-08-12T12:00:00Z"),
+    createdAt: new Date("2026-08-12T12:00:00Z"),
+  },
+];
+
+const duo: HouseholdMember[] = [
+  { ownerId: "rita", name: "Rita" },
+  { ownerId: "edgardo", name: "Edgardo" },
+];
+
+/** Renders inside a real ViewerProvider with a resolved household. */
+function renderWithViewer(ui: ReactElement, members: HouseholdMember[]) {
+  fetchHouseholdMembersMock.mockResolvedValue(members);
+  return render(<ViewerProvider>{ui}</ViewerProvider>);
+}
+
+const sharedMovements: Movement[] = [
+  {
+    id: "es1",
+    ownerId: "edgardo",
+    registrantId: "edgardo",
+    visibility: "SHARED",
+    amount: 2500,
+    currency: "ARS",
+    type: "EXPENSE",
+    category: "mercado",
+    note: "compra familiar",
+    occurredAt: new Date("2026-08-10T12:00:00Z"),
+    createdAt: new Date("2026-08-10T12:00:00Z"),
+  },
+  {
+    id: "es2",
+    ownerId: "rita",
+    registrantId: "rita",
+    visibility: "SHARED",
+    amount: 5000,
+    currency: "ARS",
+    type: "INCOME",
+    category: "sueldo",
+    note: null,
+    occurredAt: new Date("2026-08-11T12:00:00Z"),
+    createdAt: new Date("2026-08-11T12:00:00Z"),
+  },
+  {
+    id: "m3",
+    ownerId: "rita",
+    amount: 700,
+    currency: "ARS",
+    type: "EXPENSE",
+    category: "taxi",
+    note: null,
+    occurredAt: new Date("2026-08-12T12:00:00Z"),
+    createdAt: new Date("2026-08-12T12:00:00Z"),
+  },
+];
+
+beforeEach(() => {
+  // Single-member default so existing tests keep the fixed "default" viewer.
+  fetchHouseholdMembersMock.mockResolvedValue([
+    { ownerId: "default", name: "Rita" },
+  ]);
+});
 
 afterEach(() => {
   vi.clearAllMocks();
@@ -89,6 +227,31 @@ describe("MovementList", () => {
     expect(table.getByText("$ 1.200,00")).toBeInTheDocument();
   });
 
+  it("renders a SAVINGS row with the Ahorro label and badge", async () => {
+    fetchMovementsMock.mockResolvedValue([
+      {
+        id: "s1",
+        ownerId: "default",
+        amount: 100,
+        currency: "ARS",
+        type: "SAVINGS",
+        category: "ahorro",
+        note: "ahorro del mes",
+        occurredAt: new Date("2026-08-12T12:00:00Z"),
+        createdAt: new Date("2026-08-12T12:00:00Z"),
+      },
+    ]);
+
+    render(<MovementList />);
+
+    await waitFor(() => expect(screen.getByRole("table")).toBeInTheDocument());
+    const table = within(screen.getByRole("table"));
+    const row = within(table.getAllByRole("row")[1]!);
+    expect(row.getByText("Ahorro")).toBeInTheDocument();
+    expect(row.getByText("ahorro")).toBeInTheDocument();
+    expect(row.getByText("$ 100,00")).toBeInTheDocument();
+  });
+
   it("shows a Spanish empty state when there are no movements", async () => {
     fetchMovementsMock.mockResolvedValue([]);
 
@@ -125,21 +288,25 @@ describe("MovementList", () => {
     await waitFor(() => expect(screen.getByRole("table")).toBeInTheDocument());
 
     await user.selectOptions(screen.getByLabelText("Tipo"), "EXPENSE");
+    await user.selectOptions(screen.getByLabelText("Visibilidad"), "shared");
 
     await waitFor(() =>
-      expect(fetchMovementsMock).toHaveBeenLastCalledWith("default", {
-        type: "EXPENSE",
-      }),
+      expect(fetchMovementsMock).toHaveBeenLastCalledWith(
+        "default",
+        { type: "EXPENSE" },
+        "shared",
+      ),
     );
 
     await user.click(screen.getByRole("button", { name: /limpiar/i }));
 
     await waitFor(() =>
-      expect(fetchMovementsMock).toHaveBeenLastCalledWith("default", {}),
+      expect(fetchMovementsMock).toHaveBeenLastCalledWith("default", {}, "mine"),
     );
   });
 
   it("exposes edit and delete actions on every movement row", async () => {
+    const user = userEvent.setup();
     fetchMovementsMock.mockResolvedValue(movements);
     fetchCategoriesMock.mockResolvedValue([]);
 
@@ -148,18 +315,40 @@ describe("MovementList", () => {
 
     const rows = screen.getAllByRole("row");
     expect(rows).toHaveLength(3); // header + 2 movement rows
+    await user.click(within(rows[1]!).getByRole("button", { name: /abrir acciones/i }));
     expect(
       within(rows[1]!).getByRole("button", { name: /editar/i }),
     ).toBeInTheDocument();
     expect(
       within(rows[1]!).getByRole("button", { name: /eliminar/i }),
     ).toBeInTheDocument();
+    await user.click(within(rows[2]!).getByRole("button", { name: /abrir acciones/i }));
     expect(
       within(rows[2]!).getByRole("button", { name: /editar/i }),
     ).toBeInTheDocument();
     expect(
       within(rows[2]!).getByRole("button", { name: /eliminar/i }),
     ).toBeInTheDocument();
+  });
+
+  it("closes the actions menu when clicking outside it", async () => {
+    const user = userEvent.setup();
+    fetchMovementsMock.mockResolvedValue(movements);
+
+    render(<MovementList />);
+    await waitFor(() => expect(screen.getByRole("table")).toBeInTheDocument());
+
+    const firstRow = within(screen.getAllByRole("row")[1]!);
+    await user.click(
+      firstRow.getByRole("button", { name: /abrir acciones/i }),
+    );
+    expect(screen.getByRole("menu", { name: /acciones del movimiento/i })).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: /cerrar acciones/i }));
+
+    expect(
+      screen.queryByRole("menu", { name: /acciones del movimiento/i }),
+    ).toBeNull();
   });
 
   it("edits a movement from the row and bumps refresh on success", async () => {
@@ -176,6 +365,7 @@ describe("MovementList", () => {
     await waitFor(() => expect(screen.getByRole("table")).toBeInTheDocument());
 
     const firstRow = within(screen.getAllByRole("row")[1]!);
+    await user.click(firstRow.getByRole("button", { name: /abrir acciones/i }));
     await user.click(firstRow.getByRole("button", { name: /editar/i }));
 
     const form = await screen.findByRole("form", { name: "Editar movimiento" });
@@ -202,6 +392,7 @@ describe("MovementList", () => {
     await waitFor(() => expect(screen.getByRole("table")).toBeInTheDocument());
 
     const firstRow = within(screen.getAllByRole("row")[1]!);
+    await user.click(firstRow.getByRole("button", { name: /abrir acciones/i }));
     await user.click(firstRow.getByRole("button", { name: /eliminar/i }));
 
     const dialog = screen.getByRole("dialog");
@@ -226,6 +417,7 @@ describe("MovementList", () => {
     await waitFor(() => expect(screen.getByRole("table")).toBeInTheDocument());
 
     const firstRow = within(screen.getAllByRole("row")[1]!);
+    await user.click(firstRow.getByRole("button", { name: /abrir acciones/i }));
     await user.click(firstRow.getByRole("button", { name: /eliminar/i }));
     await user.click(
       within(screen.getByRole("dialog")).getByRole("button", {
@@ -249,6 +441,7 @@ describe("MovementList", () => {
     await waitFor(() => expect(screen.getByRole("table")).toBeInTheDocument());
 
     const firstRow = within(screen.getAllByRole("row")[1]!);
+    await user.click(firstRow.getByRole("button", { name: /abrir acciones/i }));
     await user.click(firstRow.getByRole("button", { name: /eliminar/i }));
     await user.click(
       within(screen.getByRole("dialog")).getByRole("button", {
@@ -262,5 +455,210 @@ describe("MovementList", () => {
     expect(onMutated).not.toHaveBeenCalled();
     expect(screen.getAllByRole("row")).toHaveLength(3);
     expect(screen.getByRole("dialog")).toBeInTheDocument();
+  });
+
+  it("shows a SHARED badge with the registrant's name only on shared rows", async () => {
+    fetchMovementsMock.mockResolvedValue(sharedMovements);
+
+    renderWithViewer(<MovementList />, duo);
+    await waitFor(() => expect(screen.getByRole("table")).toBeInTheDocument());
+
+    expect(screen.getAllByLabelText(/Movimiento compartido/)).toHaveLength(2);
+
+    // The individual row (newest, sorted first) carries no badge.
+    const rows = screen.getAllByRole("row");
+    expect(within(rows[1]!).queryByLabelText(/Movimiento compartido/)).toBeNull();
+  });
+
+  it("renders partner rows read-only and keeps actions on the viewer's own rows", async () => {
+    const user = userEvent.setup();
+    fetchMovementsMock.mockResolvedValue(sharedMovements);
+
+    renderWithViewer(<MovementList />, duo);
+    await waitFor(() => expect(screen.getByRole("table")).toBeInTheDocument());
+
+    const rows = screen.getAllByRole("row");
+    // rows[1]: own INDIVIDUAL row (viewer rita) → actions available
+    await user.click(within(rows[1]!).getByRole("button", { name: /abrir acciones/i }));
+    expect(
+      within(rows[1]!).getByRole("button", { name: /editar/i }),
+    ).toBeInTheDocument();
+    expect(
+      within(rows[1]!).getByRole("button", { name: /eliminar/i }),
+    ).toBeInTheDocument();
+    // rows[2]: own SHARED row (registrant rita) → actions available
+    await user.click(within(rows[2]!).getByRole("button", { name: /abrir acciones/i }));
+    expect(
+      within(rows[2]!).getByRole("button", { name: /editar/i }),
+    ).toBeInTheDocument();
+    // rows[3]: partner SHARED row (registrant edgardo) → read-only
+    expect(
+      within(rows[3]!).queryByRole("button", { name: /editar/i }),
+    ).toBeNull();
+    expect(
+      within(rows[3]!).queryByRole("button", { name: /eliminar/i }),
+    ).toBeNull();
+    expect(screen.getAllByLabelText(/Movimiento compartido/)).toHaveLength(2);
+  });
+
+  it("renders a PENDING row with the Previsto badge and a Marcar pagado action on own rows", async () => {
+    const user = userEvent.setup();
+    fetchMovementsMock.mockResolvedValue(pendingMovements);
+
+    render(<MovementList />);
+    await waitFor(() => expect(screen.getByRole("table")).toBeInTheDocument());
+
+    const rows = screen.getAllByRole("row");
+    const pendingRow = within(rows[1]!); // newest first: the PENDING row
+    expect(pendingRow.getByText("Previsto")).toBeInTheDocument();
+    await user.click(pendingRow.getByRole("button", { name: /abrir acciones/i }));
+    expect(
+      pendingRow.getByRole("button", { name: /marcar pagado/i }),
+    ).toBeInTheDocument();
+
+    const paidRow = within(rows[2]!);
+    expect(paidRow.queryByText("Previsto")).toBeNull();
+    expect(
+      paidRow.queryByRole("button", { name: /marcar pagado/i }),
+    ).toBeNull();
+  });
+
+  it("keeps the Marcar pagado action off partner rows", async () => {
+    const user = userEvent.setup();
+    const partnerPending: Movement[] = [
+      {
+        id: "pp1",
+        ownerId: "edgardo",
+        registrantId: "edgardo",
+        visibility: "SHARED",
+        amount: 1500,
+        currency: "ARS",
+        type: "EXPENSE",
+        category: "expensas",
+        note: null,
+        occurredAt: new Date("2026-08-13T12:00:00Z"),
+        createdAt: new Date("2026-08-13T12:00:00Z"),
+        status: "PENDING",
+      },
+      {
+        id: "p2",
+        ownerId: "rita",
+        registrantId: "rita",
+        visibility: "SHARED",
+        amount: 2500,
+        currency: "ARS",
+        type: "EXPENSE",
+        category: "alquiler",
+        note: null,
+        occurredAt: new Date("2026-08-12T12:00:00Z"),
+        createdAt: new Date("2026-08-12T12:00:00Z"),
+        status: "PENDING",
+      },
+    ];
+    fetchMovementsMock.mockResolvedValue(partnerPending);
+
+    renderWithViewer(<MovementList />, duo);
+    await waitFor(() => expect(screen.getByRole("table")).toBeInTheDocument());
+
+    const rows = screen.getAllByRole("row");
+    // rows[1] = the partner's PENDING row (newest, occurredAt 08-13) → read-only.
+    expect(
+      within(rows[1]!).queryByRole("button", { name: /marcar pagado/i }),
+    ).toBeNull();
+    // rows[2] = the viewer's own PENDING row → keeps the action.
+    await user.click(within(rows[2]!).getByRole("button", { name: /abrir acciones/i }));
+    expect(
+      within(rows[2]!).getByRole("button", { name: /marcar pagado/i }),
+    ).toBeInTheDocument();
+  });
+
+  it("marks a pending row paid and bumps refresh on success", async () => {
+    const user = userEvent.setup();
+    fetchMovementsMock.mockResolvedValue(pendingMovements);
+    markMovementPaidMock.mockResolvedValue({
+      ...pendingMovements[0]!,
+      status: "PAID",
+    });
+    const onMutated = vi.fn();
+
+    render(<MovementList onMutated={onMutated} refreshToken={0} />);
+    await waitFor(() => expect(screen.getByRole("table")).toBeInTheDocument());
+
+    const pendingRow = within(screen.getAllByRole("row")[1]!);
+    await user.click(pendingRow.getByRole("button", { name: /abrir acciones/i }));
+    await user.click(
+      pendingRow.getByRole("button", { name: /marcar pagado/i }),
+    );
+
+    await waitFor(() =>
+      expect(markMovementPaidMock).toHaveBeenCalledWith("p1", "default"),
+    );
+    await waitFor(() => expect(onMutated).toHaveBeenCalledTimes(1));
+  });
+
+  it("shows a Spanish error and keeps the row when mark-paid returns 409", async () => {
+    const user = userEvent.setup();
+    fetchMovementsMock.mockResolvedValue(pendingMovements);
+    markMovementPaidMock.mockRejectedValue(
+      new ApiError("http", { status: 409 }),
+    );
+    const onMutated = vi.fn();
+
+    render(<MovementList onMutated={onMutated} />);
+    await waitFor(() => expect(screen.getByRole("table")).toBeInTheDocument());
+
+    const pendingRow = within(screen.getAllByRole("row")[1]!);
+    await user.click(pendingRow.getByRole("button", { name: /abrir acciones/i }));
+    await user.click(
+      pendingRow.getByRole("button", { name: /marcar pagado/i }),
+    );
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      /ya no está pendiente|no se pudo marcar/i,
+    );
+    expect(onMutated).not.toHaveBeenCalled();
+    // The row stays rendered as PENDING.
+    expect(
+      within(screen.getAllByRole("row")[1]!).getByText("Previsto"),
+    ).toBeInTheDocument();
+  });
+});
+
+describe("MovementAmount (shared-expense-split Phase 6, task 6.1)", () => {
+  it("shows the original total below the share in italics (es-AR)", () => {
+    render(<MovementAmount amount={1000} sharedTotal={2000} />);
+
+    expect(screen.getByText("$ 1.000,00")).toBeInTheDocument();
+    const total = screen.getByText("$ 2.000,00");
+    expect(total.tagName).toBe("EM");
+    expect(total.textContent?.replace(/\u00A0/g, " ")).toBe("$ 2.000,00");
+  });
+
+  it("renders the plain amount with no annotation when sharedTotal is absent", () => {
+    const { container } = render(<MovementAmount amount={700} />);
+
+    expect(screen.getByText("$ 700,00")).toBeInTheDocument();
+    expect(container.querySelector("em")).toBeNull();
+  });
+
+  it("annotates the list 'Monto' cell of a split row and leaves legacy rows unannotated", async () => {
+    fetchMovementsMock.mockResolvedValue(splitMovements);
+
+    renderWithViewer(<MovementList />, duo);
+    await waitFor(() => expect(screen.getByRole("table")).toBeInTheDocument());
+
+    // Newest first: legacy-shared (08-12) → partner split (08-11) → own split (08-10).
+    const rows = screen.getAllByRole("row");
+    // rita's split row (viewer rita): total below in italics + "vos" badge.
+    expect(within(rows[3]!).getByText("$ 2.000,00").tagName).toBe("EM");
+    expect(within(rows[3]!).getByText("vos")).toBeInTheDocument();
+    // edgardo's split row: total below in italics + "Edgardo" badge.
+    expect(within(rows[2]!).getByText("$ 2.000,00").tagName).toBe("EM");
+    expect(within(rows[2]!).getByText("Edgardo")).toBeInTheDocument();
+    // Legacy SHARED row (no sharedTotal): amount only, no total annotation,
+    // but the owner badge still tells whose half it is.
+    expect(within(rows[1]!).queryByText("$ 2.000,00")).toBeNull();
+    expect(within(rows[1]!).getByText("$ 500,00")).toBeInTheDocument();
+    expect(within(rows[1]!).getByText("vos")).toBeInTheDocument();
   });
 });

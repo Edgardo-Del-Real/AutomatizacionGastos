@@ -1,6 +1,6 @@
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { Movement, MovementSummary } from "@rita/contracts";
 
@@ -8,6 +8,7 @@ import {
   ApiError,
   deleteMovement,
   fetchCategories,
+  fetchHouseholdMembers,
   fetchMovementSummary,
   fetchMovements,
   patchMovement,
@@ -19,6 +20,7 @@ vi.mock("./infra/api", async (importOriginal) => ({
   fetchMovementSummary: vi.fn(),
   fetchMovements: vi.fn(),
   fetchCategories: vi.fn(),
+  fetchHouseholdMembers: vi.fn(),
   patchMovement: vi.fn(),
   deleteMovement: vi.fn(),
 }));
@@ -28,15 +30,17 @@ const summary: MovementSummary = {
     income: 3000,
     expenses: 1500,
     balance: 1500,
+    savings: 0,
     avgPerMonth: 750,
     avgPerMovement: 500,
     maxAmount: 1200,
     count: 6,
+    countThisMonth: 2,
   },
   mom: {
     months: [
-      { month: "2026-06", income: 2000, expenses: 1000, balance: 1000 },
-      { month: "2026-07", income: 1000, expenses: 500, balance: 1500 },
+      { month: "2026-06", income: 2000, expenses: 1000, balance: 1000, savings: 0 },
+      { month: "2026-07", income: 1000, expenses: 500, balance: 1500, savings: 0 },
     ],
   },
   daily: [
@@ -68,6 +72,7 @@ const summary: MovementSummary = {
     ],
     income: [],
   },
+  planned: { month: "2026-08", total: 0 },
 };
 
 const emptySummary: MovementSummary = {
@@ -75,15 +80,18 @@ const emptySummary: MovementSummary = {
     income: 0,
     expenses: 0,
     balance: 0,
+    savings: 0,
     avgPerMonth: 0,
     avgPerMovement: 0,
     maxAmount: 0,
     count: 0,
+    countThisMonth: 0,
   },
   mom: { months: [] },
   daily: [],
   categories: [],
   top: { expenses: [], income: [] },
+  planned: { month: "2026-08", total: 0 },
 };
 
 const movements: Movement[] = [
@@ -114,51 +122,103 @@ const movements: Movement[] = [
 const fetchMovementSummaryMock = vi.mocked(fetchMovementSummary);
 const fetchMovementsMock = vi.mocked(fetchMovements);
 const fetchCategoriesMock = vi.mocked(fetchCategories);
+const fetchHouseholdMembersMock = vi.mocked(fetchHouseholdMembers);
 const patchMovementMock = vi.mocked(patchMovement);
 const deleteMovementMock = vi.mocked(deleteMovement);
+
+beforeEach(() => {
+  // Single-member household: existing tests keep the fixed "default" viewer.
+  fetchHouseholdMembersMock.mockResolvedValue([
+    { ownerId: "default", name: "Rita" },
+  ]);
+});
 
 afterEach(() => {
   vi.clearAllMocks();
 });
 
 describe("App", () => {
-  it("renders every section in order with Spanish labels and es-AR amounts", async () => {
+  it("renders a section navigation with four buttons and shows KPIs by default", async () => {
     fetchMovementSummaryMock.mockResolvedValue(summary);
-    fetchMovementsMock.mockResolvedValue(movements);
+    fetchCategoriesMock.mockResolvedValue([]);
 
     render(<App />);
 
-    await waitFor(() => expect(screen.getByRole("table")).toBeInTheDocument());
-
     // Spanish header.
-    expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent(
-      "Rita Dashboard",
+    expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent("Rita");
+    expect(screen.getByText("Tus finanzas, en orden")).toBeInTheDocument();
+
+    const nav = screen.getByRole("navigation", {
+      name: "Secciones del dashboard",
+    });
+    const buttons = within(nav).getAllByRole("button");
+    expect(buttons.map((button) => button.textContent)).toEqual([
+      "Resumen",
+      "Análisis",
+      "Movimientos",
+    ]);
+    expect(screen.getByRole("button", { name: "Resumen" })).toHaveAttribute(
+      "aria-current",
+      "page",
     );
-    expect(screen.getByText("Resumen de ingresos y gastos")).toBeInTheDocument();
 
-    const headings = screen
-      .getAllByRole("heading")
-      .map((h) => h.textContent ?? "");
-    const kpi = headings.indexOf("Ingresos");
-    const mom = headings.indexOf("Comparación mes a mes");
-    const daily = headings.indexOf("Actividad diaria");
-    const category = headings.indexOf("Desglose por categoría");
-    const top = headings.indexOf("Principales movimientos");
-    const list = headings.indexOf("Movimientos");
-
-    expect(kpi).toBeGreaterThanOrEqual(0);
-    expect(mom).toBeGreaterThan(kpi);
-    expect(daily).toBeGreaterThan(mom);
-    expect(category).toBeGreaterThan(daily);
-    expect(top).toBeGreaterThan(category);
-    expect(list).toBeGreaterThan(top);
-
-    // es-AR amounts render.
-    expect(screen.getAllByText("$ 1.500,00").length).toBeGreaterThan(0);
-    expect(screen.getAllByText("$ 3.000,00").length).toBeGreaterThan(0);
+    await waitFor(() =>
+      expect(screen.getByRole("heading", { name: "Ingresos" })).toBeInTheDocument(),
+    );
+    expect(screen.queryByRole("table")).toBeNull();
   });
 
-  it("shows a Spanish empty state for an empty summary while the list still renders", async () => {
+  it("shows only the charts section when Análisis is selected", async () => {
+    const user = userEvent.setup();
+    fetchMovementSummaryMock.mockResolvedValue(summary);
+    fetchCategoriesMock.mockResolvedValue([]);
+
+    render(<App />);
+    await waitFor(() =>
+      expect(screen.getByRole("heading", { name: "Ingresos" })).toBeInTheDocument(),
+    );
+
+    await user.click(screen.getByRole("button", { name: "Análisis" }));
+
+    expect(
+      screen.getByRole("heading", { name: "¿Dónde está tu dinero?" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("heading", {
+        name: "Evolución del saldo acumulado",
+      }),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Ingresos" })).toBeNull();
+    expect(screen.queryByRole("table")).toBeNull();
+    expect(screen.getByRole("button", { name: "Análisis" })).toHaveAttribute(
+      "aria-current",
+      "page",
+    );
+  });
+
+  it("shows the movement list (with its own fetch) when Movimientos is selected", async () => {
+    const user = userEvent.setup();
+    fetchMovementSummaryMock.mockResolvedValue(summary);
+    fetchMovementsMock.mockResolvedValue(movements);
+    fetchCategoriesMock.mockResolvedValue([]);
+
+    render(<App />);
+    expect(fetchMovementSummaryMock).toHaveBeenCalledTimes(1);
+    expect(fetchMovementsMock).not.toHaveBeenCalled();
+
+    await user.click(screen.getByRole("button", { name: "Movimientos" }));
+
+    await waitFor(() => expect(screen.getByRole("table")).toBeInTheDocument());
+    expect(fetchMovementsMock).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole("heading", { name: "Movimientos" })).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Ingresos" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Movimientos" })).toHaveAttribute(
+      "aria-current",
+      "page",
+    );
+  });
+
+  it("shows a Spanish empty state for an empty summary in the default section", async () => {
     fetchMovementSummaryMock.mockResolvedValue(emptySummary);
     fetchMovementsMock.mockResolvedValue(movements);
 
@@ -167,9 +227,9 @@ describe("App", () => {
     await waitFor(() =>
       expect(screen.getByText("No hay movimientos aún.")).toBeInTheDocument(),
     );
-    // No partial charts, but the separate list section still renders.
-    expect(screen.queryByText("Comparación mes a mes")).toBeNull();
-    expect(await screen.findByRole("table")).toBeInTheDocument();
+    // No partial charts and the list section is not mounted.
+    expect(screen.queryByText("¿Dónde está tu dinero?")).toBeNull();
+    expect(screen.queryByRole("table")).toBeNull();
   });
 
   it("shows a Spanish error with retry for the summary and recovers", async () => {
@@ -178,6 +238,7 @@ describe("App", () => {
       .mockRejectedValueOnce(new ApiError("network"))
       .mockResolvedValueOnce(summary);
     fetchMovementsMock.mockResolvedValue(movements);
+    fetchCategoriesMock.mockResolvedValue([]);
 
     render(<App />);
 
@@ -187,12 +248,13 @@ describe("App", () => {
     await user.click(screen.getByRole("button", { name: /reintentar/i }));
 
     await waitFor(() =>
-      expect(screen.getByText("Comparación mes a mes")).toBeInTheDocument(),
+      expect(screen.getByRole("heading", { name: "Ingresos" })).toBeInTheDocument(),
     );
     expect(fetchMovementSummaryMock).toHaveBeenCalledTimes(2);
   });
 
-  it("surfaces an error state for a malformed summary without crashing or rendering partial data", async () => {
+  it("surfaces an error state for a malformed summary without rendering partial data", async () => {
+    const user = userEvent.setup();
     // A contract mismatch surfaces as a validation ApiError, not partial data.
     fetchMovementSummaryMock.mockRejectedValue(
       new ApiError("validation", { issues: [] }),
@@ -205,10 +267,13 @@ describe("App", () => {
     expect(alert).toHaveTextContent(/no se pudieron cargar los indicadores/i);
 
     // No partial KPI cards / charts render from the malformed payload.
-    expect(screen.queryByText("Comparación mes a mes")).toBeNull();
+    expect(screen.queryByRole("heading", { name: "Ingresos" })).toBeNull();
+    expect(screen.queryByText("¿Dónde está tu dinero?")).toBeNull();
     expect(screen.queryByText("$ 1.500,00")).toBeNull();
+    expect(screen.queryByRole("table")).toBeNull();
 
-    // The independent movement list section still renders.
+    // The independent movement list section is still reachable via navigation.
+    await user.click(screen.getByRole("button", { name: "Movimientos" }));
     expect(await screen.findByRole("table")).toBeInTheDocument();
   });
 
@@ -220,12 +285,21 @@ describe("App", () => {
     deleteMovementMock.mockResolvedValue(undefined);
 
     render(<App />);
+    await user.click(screen.getByRole("button", { name: "Movimientos" }));
     await waitFor(() => expect(screen.getByRole("table")).toBeInTheDocument());
     expect(fetchMovementsMock).toHaveBeenCalledTimes(1);
     expect(fetchMovementSummaryMock).toHaveBeenCalledTimes(1);
 
     const firstRow = within(screen.getAllByRole("row")[1]!);
-    await user.click(firstRow.getByRole("button", { name: /eliminar/i }));
+    await user.click(
+      firstRow.getByRole("button", { name: "Abrir acciones del movimiento" }),
+    );
+    await user.click(
+      within(screen.getByRole("menu", { name: "Acciones del movimiento" })).getByRole(
+        "button",
+        { name: /eliminar/i },
+      ),
+    );
     await user.click(
       within(screen.getByRole("dialog")).getByRole("button", {
         name: /eliminar/i,
@@ -250,10 +324,19 @@ describe("App", () => {
     patchMovementMock.mockResolvedValue(movements[0]!);
 
     render(<App />);
+    await user.click(screen.getByRole("button", { name: "Movimientos" }));
     await waitFor(() => expect(screen.getByRole("table")).toBeInTheDocument());
 
     const firstRow = within(screen.getAllByRole("row")[1]!);
-    await user.click(firstRow.getByRole("button", { name: /editar/i }));
+    await user.click(
+      firstRow.getByRole("button", { name: "Abrir acciones del movimiento" }),
+    );
+    await user.click(
+      within(screen.getByRole("menu", { name: "Acciones del movimiento" })).getByRole(
+        "button",
+        { name: /editar/i },
+      ),
+    );
     const form = await screen.findByRole("form", { name: "Editar movimiento" });
     await user.clear(within(form).getByLabelText("Nota"));
     await user.type(within(form).getByLabelText("Nota"), "sueldo agosto");
@@ -268,5 +351,158 @@ describe("App", () => {
     await waitFor(() =>
       expect(fetchMovementSummaryMock).toHaveBeenCalledTimes(2),
     );
+  });
+
+  it("renders no viewer selector for a single-member household", async () => {
+    fetchMovementSummaryMock.mockResolvedValue(summary);
+    fetchCategoriesMock.mockResolvedValue([]);
+
+    render(<App />);
+
+    await waitFor(() =>
+      expect(fetchMovementSummaryMock).toHaveBeenLastCalledWith(
+        "default",
+        "mine",
+      ),
+    );
+    expect(screen.queryByLabelText("Ver como")).toBeNull();
+  });
+
+  it("switching the viewer re-queries the list and the summary with the new owner", async () => {
+    const user = userEvent.setup();
+    fetchHouseholdMembersMock.mockResolvedValue([
+      { ownerId: "rita", name: "Rita" },
+      { ownerId: "edgardo", name: "Edgardo" },
+    ]);
+    fetchMovementSummaryMock.mockResolvedValue(summary);
+    fetchMovementsMock.mockResolvedValue(movements);
+    fetchCategoriesMock.mockResolvedValue([]);
+
+    render(<App />);
+
+    // No persisted viewer and VITE_OWNER_ID ("default") is not a member, so the
+    // viewer falls back to the first member.
+    await waitFor(() =>
+      expect(fetchMovementSummaryMock).toHaveBeenLastCalledWith("rita", "mine"),
+    );
+
+    await user.click(screen.getByRole("button", { name: "Movimientos" }));
+    await waitFor(() =>
+      expect(fetchMovementsMock).toHaveBeenLastCalledWith("rita", {}, "mine"),
+    );
+
+    await user.selectOptions(screen.getByLabelText("Ver como"), "edgardo");
+
+    await waitFor(() =>
+      expect(fetchMovementSummaryMock).toHaveBeenLastCalledWith(
+        "edgardo",
+        "mine",
+      ),
+    );
+    await waitFor(() =>
+      expect(fetchMovementsMock).toHaveBeenLastCalledWith(
+        "edgardo",
+        {},
+        "mine",
+      ),
+    );
+    expect(window.localStorage.getItem("rita.viewer")).toBe("edgardo");
+  });
+
+  it("the hoisted visibility filter re-queries the list and the summary together", async () => {
+    const user = userEvent.setup();
+    fetchMovementSummaryMock.mockResolvedValue(summary);
+    fetchMovementsMock.mockResolvedValue(movements);
+    fetchCategoriesMock.mockResolvedValue([]);
+
+    render(<App />);
+    await waitFor(() =>
+      expect(fetchMovementSummaryMock).toHaveBeenLastCalledWith(
+        "default",
+        "mine",
+      ),
+    );
+
+    await user.click(screen.getByRole("button", { name: "Movimientos" }));
+    await waitFor(() => expect(screen.getByRole("table")).toBeInTheDocument());
+
+    await user.selectOptions(screen.getByLabelText("Visibilidad"), "shared");
+
+    await waitFor(() =>
+      expect(fetchMovementSummaryMock).toHaveBeenLastCalledWith(
+        "default",
+        "shared",
+      ),
+    );
+    await waitFor(() =>
+      expect(fetchMovementsMock).toHaveBeenLastCalledWith(
+        "default",
+        {},
+        "shared",
+      ),
+    );
+
+    await user.click(screen.getByRole("button", { name: /limpiar/i }));
+
+    await waitFor(() =>
+      expect(fetchMovementSummaryMock).toHaveBeenLastCalledWith(
+        "default",
+        "mine",
+      ),
+    );
+    await waitFor(() =>
+      expect(fetchMovementsMock).toHaveBeenLastCalledWith("default", {}, "mine"),
+    );
+  });
+
+  it("renders the planned section after the KPI cards in the kpis tab", async () => {
+    fetchMovementSummaryMock.mockResolvedValue({
+      ...summary,
+      planned: { month: "2026-09", total: 4000 },
+    });
+    fetchCategoriesMock.mockResolvedValue([]);
+
+    render(<App />);
+
+    const kpisHeading = await screen.findByRole("heading", {
+      name: "Ingresos",
+    });
+    const plannedHeading = screen.getByRole("heading", {
+      name: "Gastos fijos previstos",
+    });
+
+    // D9: the planned section renders immediately after the KPI cards (the
+    // KPI heading precedes the planned heading in document order).
+    expect(
+      plannedHeading.compareDocumentPosition(kpisHeading) &
+        Node.DOCUMENT_POSITION_PRECEDING,
+    ).toBeTruthy();
+    expect(screen.getByText("Pendientes — se suman al mes en que los pagues.")).toBeInTheDocument();
+    expect(screen.getByText("$ 4.000,00")).toBeInTheDocument();
+  });
+
+  it("always shows the planned section for a PENDING-only summary", async () => {
+    // First-day usage path: the owner's only movements are planned expenses,
+    // so mom/daily are empty (PENDING is excluded from those aggregates) but
+    // planned.total > 0. The planned total must stay visible; the KPI area may
+    // render its empty state or the zeroed cards — either way the planned
+    // section is present below it.
+    fetchMovementSummaryMock.mockResolvedValue({
+      ...emptySummary,
+      planned: { month: "2026-09", total: 4000 },
+    });
+    fetchMovementsMock.mockResolvedValue(movements);
+    fetchCategoriesMock.mockResolvedValue([]);
+
+    render(<App />);
+
+    expect(
+      await screen.findByRole("heading", { name: "Gastos fijos previstos" }),
+    ).toBeInTheDocument();
+    expect(screen.getByText("Pendientes — se suman al mes en que los pagues.")).toBeInTheDocument();
+    expect(screen.getByText("$ 4.000,00")).toBeInTheDocument();
+    expect(
+      screen.getByRole("form", { name: "Agregar previsto" }),
+    ).toBeInTheDocument();
   });
 });

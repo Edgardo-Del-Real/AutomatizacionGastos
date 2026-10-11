@@ -58,7 +58,7 @@ describe("ExpenseService", () => {
 
     const result = await service.createExpense(input, ownerId);
 
-    expect(mockCreate).toHaveBeenCalledWith({ ownerId, ...input });
+    expect(mockCreate).toHaveBeenCalledWith({ ownerId, ...input, visibility: "INDIVIDUAL" });
     expect(result).toBe(expense);
   });
 
@@ -69,6 +69,24 @@ describe("ExpenseService", () => {
     await service.createExpense(input, ownerId);
 
     expect(mockCreate).toHaveBeenCalledWith(expect.objectContaining({ ownerId, amount: 50, currency: "ARS" }));
+  });
+
+  it("persists an out-of-band visibility option as SHARED (AD7)", async () => {
+    const input = { amount: 250, occurredAt: new Date("2026-08-01T12:00:00.000Z") };
+    mockCreate.mockResolvedValue(makeExpense());
+
+    await service.createExpense(input, ownerId, { visibility: "SHARED" });
+
+    expect(mockCreate).toHaveBeenCalledWith(expect.objectContaining({ ownerId, visibility: "SHARED" }));
+  });
+
+  it("defaults the visibility to INDIVIDUAL when no option is given", async () => {
+    const input = { amount: 250, occurredAt: new Date("2026-08-01T12:00:00.000Z") };
+    mockCreate.mockResolvedValue(makeExpense());
+
+    await service.createExpense(input, ownerId);
+
+    expect(mockCreate).toHaveBeenCalledWith(expect.objectContaining({ ownerId, visibility: "INDIVIDUAL" }));
   });
 
   it("rejects an invalid payload with ValidationFailedError and does not call the repository", async () => {

@@ -1,21 +1,79 @@
-import { Prisma } from "@prisma/client";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ExpenseService } from "../expenses/expenses.service";
 import type { ProcessedMessageRepository } from "../messages/message.repository";
 import type { MovementService } from "../movements/movements.service";
 import type { CategoryService } from "../categories/categories.service";
+import type { SavingsRuleService } from "../savings/savings.service";
+import type { HouseholdService } from "../household/household.service";
 import type { BotStateRepository, BotStateRecord } from "./bot-state.repository";
-import { TelegramService } from "./telegram.service";
+import type { ConversationEnvelope } from "./bot-brain";
+import type { InlineKeyboard } from "./telegram.parser";
+import { ConflictError, NotFoundError, ValidationFailedError } from "../../infra/errors";
+import { ReservedCategoryError } from "../categories/reserved";
+import {
+  alreadyProcessedReply,
+  ayudaReply,
+  callbackUnavailableReply,
+  capturePromptReply,
+  captureShapedRedirectReply,
+  categoryAdminReply,
+  categoryCreatedReply,
+  categoryCrudRedirectReply,
+  categoryDeleteConfirmReply,
+  categoryDeletedReply,
+  categoryGoneReply,
+  categoryNamePromptReply,
+  categoryRenamedReply,
+  compartidoPrefixRedirectReply,
+  correctionEmptyReply,
+  deleteCancelledReply,
+  deleteConfirmReply,
+  deletedMovementReply,
+  duplicateCategoryReply,
+  expenseAdminReply,
+  greetingReply,
+  markPaidAlreadyReply,
+  markPaidReply,
+  menuReply,
+  movementCorrectionDoneReply,
+  movementMissingReply,
+  nothingToDeleteReply,
+  plannedReply,
+  previewAskCategoryReply,
+  previewConfirmReply,
+  previewReply,
+  previstoPrefixRedirectReply,
+  queryRedirectReply,
+  questionDroppedReply,
+  reportsMenuReply,
+  reservedCategoryReply,
+  savingsAdminReply,
+  savingsOverrideRedirectReply,
+  savingsRuleDeletedReply,
+  savingsRuleDeleteConfirmReply,
+  savingsRuleDeletePickReply,
+  savingsRuleDefinedReply,
+  savingsRuleGoneReply,
+  savingsRuleInvalidReply,
+  savingsRuleMissingReply,
+  savingsRulePromptReply,
+  savingsRulesListReply,
+  selectionAbandonedReply,
+  setupQuestionReply,
+  successReply,
+  unresolvableReply,
+} from "./reply-text";
+import {
+  capturePayloadSchema,
+  categoryNamePayloadSchema,
+  previewPayloadSchema,
+  savingsRuleDeletePayloadSchema,
+  TelegramService,
+} from "./telegram.service";
+import { BOT_STATES } from "./bot-state.repository";
 
 const OWNER_CHAT_ID = 123456789;
 const ownerId = "default";
-
-function uniqueViolation(): Prisma.PrismaClientKnownRequestError {
-  return new Prisma.PrismaClientKnownRequestError(
-    "Unique constraint failed on the fields: (`chatId`,`messageId`)",
-    { code: "P2002", clientVersion: "6.0.0", meta: { target: ["chatId_messageId"] } },
-  );
-}
 
 function textUpdate(overrides?: { fromId?: number; chatId?: number; messageId?: number; text?: string; chatType?: string }): unknown {
   const fromId = overrides?.fromId ?? OWNER_CHAT_ID;
@@ -31,32 +89,75 @@ function textUpdate(overrides?: { fromId?: number; chatId?: number; messageId?: 
   };
 }
 
+function callbackUpdate(overrides?: { fromId?: number; chatId?: number; messageId?: number; data?: string }): unknown {
+  const fromId = overrides?.fromId ?? OWNER_CHAT_ID;
+  return {
+    update_id: 9000,
+    callback_query: {
+      id: "cb_1",
+      chat_instance: "987654321",
+      from: { id: fromId, is_bot: false, first_name: "Rita" },
+      message: {
+        message_id: overrides?.messageId ?? 77,
+        chat: { id: overrides?.chatId ?? fromId, type: "private", first_name: "Rita" },
+        date: 1712803046,
+        text: "preview",
+      },
+      data: overrides?.data ?? "m:new",
+    },
+  };
+}
+
 type Harness = {
   service: TelegramService;
-  messageRepository: ProcessedMessageRepository;
-  expenseService: ExpenseService;
-  movementService: MovementService;
-  categoryService: CategoryService;
   botStateRepository: BotStateRepository;
   mockRecord: ReturnType<typeof vi.fn>;
   mockCreateExpense: ReturnType<typeof vi.fn>;
   mockUpdateMovement: ReturnType<typeof vi.fn>;
+  mockListMovements: ReturnType<typeof vi.fn>;
+  mockMarkMovementPaid: ReturnType<typeof vi.fn>;
+  mockDeleteExpense: ReturnType<typeof vi.fn>;
+  mockGetSummary: ReturnType<typeof vi.fn>;
   mockListCategories: ReturnType<typeof vi.fn>;
-  mockMatchNote: ReturnType<typeof vi.fn>;
   mockCreateCategory: ReturnType<typeof vi.fn>;
-  mockAssociateKeyword: ReturnType<typeof vi.fn>;
+  mockDeleteCategory: ReturnType<typeof vi.fn>;
   mockRenameCategory: ReturnType<typeof vi.fn>;
   mockEnsureOtro: ReturnType<typeof vi.fn>;
+  mockEnsureAhorro: ReturnType<typeof vi.fn>;
+  mockResolveSplit: ReturnType<typeof vi.fn>;
+  mockDefineRule: ReturnType<typeof vi.fn>;
+  mockListRules: ReturnType<typeof vi.fn>;
+  mockDeleteRule: ReturnType<typeof vi.fn>;
+  mockCreateIncomeWithSavings: ReturnType<typeof vi.fn>;
+  mockCreateSharedSplit: ReturnType<typeof vi.fn>;
   mockSetState: ReturnType<typeof vi.fn>;
+  mockBrainInterpret: ReturnType<typeof vi.fn>;
+  mockBrainReply: ReturnType<typeof vi.fn>;
   mockLogger: ReturnType<typeof vi.fn>;
   replies: string[];
-  reply: (text: string) => Promise<void>;
+  keyboards: (InlineKeyboard | undefined)[];
+  edits: (number | undefined)[];
+  sentIds: number[];
+  reply: (text: string, keyboard?: InlineKeyboard, editMessageId?: number) => Promise<number | undefined>;
 };
 
-function makeHarness(): Harness {
+function makeHarness(options?: { noBrain?: boolean }): Harness {
   const replies: string[] = [];
-  const reply = async (text: string): Promise<void> => {
+  const keyboards: (InlineKeyboard | undefined)[] = [];
+  const edits: (number | undefined)[] = [];
+  const sentIds: number[] = [];
+  // New messages get a monotonic id (1001, 1002, ...); edits return undefined.
+  let nextMessageId = 1000;
+  const reply = async (text: string, keyboard?: InlineKeyboard, editMessageId?: number): Promise<number | undefined> => {
     replies.push(text);
+    keyboards.push(keyboard);
+    edits.push(editMessageId);
+    if (editMessageId === undefined) {
+      const id = ++nextMessageId;
+      sentIds.push(id);
+      return id;
+    }
+    return undefined;
   };
 
   let storedState: BotStateRecord | null = null;
@@ -74,6 +175,12 @@ function makeHarness(): Harness {
       createdAt: new Date(),
       type: "EXPENSE",
     })),
+    deleteExpense: vi.fn(async () => undefined),
+    createIncomeWithSavings: vi.fn(async () => ({
+      net: { id: "net-1", ownerId, amount: 850, currency: "ARS", category: null, note: null, occurredAt: new Date(), createdAt: new Date(), type: "INCOME" },
+      savings: { id: "sav-1", ownerId, amount: 150, currency: "ARS", category: "ahorro", note: null, occurredAt: new Date(), createdAt: new Date(), type: "SAVINGS" },
+    })),
+    createSharedExpenseSplit: vi.fn(async () => ({ sender: 1000, partner: 1000 })),
   } as unknown as ExpenseService;
   const movementService = {
     updateMovement: vi.fn(async (ownerIdArg: string, id: string, patch: unknown) => ({
@@ -88,26 +195,61 @@ function makeHarness(): Harness {
       type: "EXPENSE",
       ...(patch as Record<string, unknown>),
     })),
+    listMovements: vi.fn(async () => []),
+    markMovementPaid: vi.fn(async (id: string) => ({
+      id,
+      ownerId,
+      amount: 100,
+      currency: "ARS",
+      category: null,
+      note: null,
+      occurredAt: new Date(),
+      createdAt: new Date(),
+      type: "EXPENSE" as const,
+      status: "PAID" as const,
+    })),
+    getSummary: vi.fn(async () => emptySummary()),
   } as unknown as MovementService;
   const categoryService = {
     listCategories: vi.fn(async () => []),
+    listKeywordRules: vi.fn(async () => []),
     matchNote: vi.fn(async () => null),
     createCategory: vi.fn(async (owner: string, name: string) => ({
       id: `cat-${name}`,
       ownerId: owner,
       name,
+      type: "NORMAL",
+      createdAt: new Date(),
+    })),
+    deleteCategory: vi.fn(async (owner: string, name: string) => ({
+      id: `cat-${name}`,
+      ownerId: owner,
+      name,
+      type: "NORMAL",
+      createdAt: new Date(),
+    })),
+    renameCategory: vi.fn(async (owner: string, from: string, to: string) => ({
+      id: `cat-${to}`,
+      ownerId: owner,
+      name: to,
+      type: "NORMAL",
       createdAt: new Date(),
     })),
     associateKeyword: vi.fn(async () => undefined),
-    renameCategory: vi.fn(async () => null),
-    ensureOtro: vi.fn(async (owner: string) => ({
-      id: "otro-id",
-      ownerId: owner,
-      name: "otro",
-      createdAt: new Date(),
-    })),
-    assertOwnerCategory: vi.fn(async () => undefined),
+    ensureOtro: vi.fn(async () => undefined),
+    ensureAhorro: vi.fn(async () => undefined),
   } as unknown as CategoryService;
+  const savingsService = {
+    defineRule: vi.fn(async () => ({ id: "r1", ownerId, keyword: "x", percent: 10 })),
+    matchNote: vi.fn(async () => null),
+    resolveSplit: vi.fn(async () => ({ kind: "whole" })),
+    computeSplit: vi.fn((gross: number, percent: number) => ({
+      net: gross - (gross * percent) / 100,
+      savings: (gross * percent) / 100,
+    })),
+    listRules: vi.fn(async () => []),
+    deleteRule: vi.fn(async () => null),
+  } as unknown as SavingsRuleService;
   const botStateRepository = {
     get: vi.fn(async () => storedState),
     set: vi.fn(async (state: BotStateRecord) => {
@@ -117,524 +259,1775 @@ function makeHarness(): Harness {
       storedState = null;
     }),
   } as unknown as BotStateRepository;
-  const mockLogger = vi.fn();
+  const household = {
+    resolveOwnerByChatId: vi.fn((fromId: number) => (fromId === OWNER_CHAT_ID ? ownerId : null)),
+    partnerOf: vi.fn(() => null),
+  } as unknown as HouseholdService;
+  const brain = options?.noBrain
+    ? undefined
+    : {
+        interpret: vi.fn(async () => null),
+        reply: vi.fn(async () => null),
+      };
+  const logger = vi.fn();
 
   const service = new TelegramService({
     messageRepository,
     expenseService,
     movementService,
     categoryService,
+    savingsService,
     botStateRepository,
-    ownerChatId: OWNER_CHAT_ID,
-    ownerId,
-    logger: mockLogger,
+    household,
+    logger,
+    ...(brain === undefined ? {} : { brain }),
   });
 
   return {
     service,
-    messageRepository,
-    expenseService,
-    movementService,
-    categoryService,
     botStateRepository,
     mockRecord: vi.mocked(messageRepository.recordProcessed),
     mockCreateExpense: vi.mocked(expenseService.createExpense),
     mockUpdateMovement: vi.mocked(movementService.updateMovement),
+    mockListMovements: vi.mocked(movementService.listMovements),
+    mockMarkMovementPaid: vi.mocked(movementService.markMovementPaid),
+    mockDeleteExpense: vi.mocked(expenseService.deleteExpense),
+    mockGetSummary: vi.mocked(movementService.getSummary),
     mockListCategories: vi.mocked(categoryService.listCategories),
-    mockMatchNote: vi.mocked(categoryService.matchNote),
     mockCreateCategory: vi.mocked(categoryService.createCategory),
-    mockAssociateKeyword: vi.mocked(categoryService.associateKeyword),
+    mockDeleteCategory: vi.mocked(categoryService.deleteCategory),
     mockRenameCategory: vi.mocked(categoryService.renameCategory),
     mockEnsureOtro: vi.mocked(categoryService.ensureOtro),
+    mockEnsureAhorro: vi.mocked(categoryService.ensureAhorro),
+    mockResolveSplit: vi.mocked(savingsService.resolveSplit),
+    mockDefineRule: vi.mocked(savingsService.defineRule),
+    mockListRules: vi.mocked(savingsService.listRules),
+    mockDeleteRule: vi.mocked(savingsService.deleteRule),
+    mockCreateIncomeWithSavings: vi.mocked(expenseService.createIncomeWithSavings),
+    mockCreateSharedSplit: vi.mocked(expenseService.createSharedExpenseSplit),
     mockSetState: vi.mocked(botStateRepository.set),
-    mockLogger,
+    mockBrainInterpret: vi.mocked(brain?.interpret ?? vi.fn()),
+    mockBrainReply: vi.mocked(brain?.reply ?? vi.fn()),
+    mockLogger: logger,
     replies,
+    keyboards,
+    edits,
+    sentIds,
     reply,
   };
 }
 
-describe("TelegramService state machine", () => {
+function emptySummary() {
+  return {
+    kpis: { income: 0, expenses: 0, balance: 0, count: 0, maxAmount: 0 },
+    byCategory: [],
+    mom: { months: [] },
+    daily: [],
+    planned: { month: "2026-10", total: 0 },
+    categories: [],
+  };
+}
+
+function seedHarnessCategories(h: Harness, names: string[]): void {
+  h.mockListCategories.mockResolvedValue(
+    names.map((name, index) => ({
+      id: `c${index}`,
+      ownerId,
+      name,
+      type: "NORMAL",
+      createdAt: new Date(),
+      keywords: [],
+    })),
+  );
+}
+
+/** Enters `awaiting_capture{type}` through a menu tap. */
+async function seedAwaitingCapture(h: Harness, type: "REAL" | "PENDING" | "INGRESO" | "COMPARTIDO"): Promise<void> {
+  seedHarnessCategories(h, ["Cafe", "Transporte"]);
+  const menu = { REAL: "m:new", PENDING: "m:prev", INGRESO: "m:inc", COMPARTIDO: "m:shr" }[type];
+  await h.service.handleCallback(callbackUpdate({ data: menu }), h.reply);
+}
+
+describe("payload schemas (v2)", () => {
+  it("parses a capture payload with the menu-chosen type", () => {
+    const result = capturePayloadSchema.safeParse({ type: "INGRESO" });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.type).toBe("INGRESO");
+    }
+  });
+
+  it("rejects an unknown capture type", () => {
+    expect(capturePayloadSchema.safeParse({ type: "DUDOSO" }).success).toBe(false);
+  });
+
+  it("parses a preview payload with category null and a save token", () => {
+    const result = previewPayloadSchema.safeParse({
+      amount: 2500,
+      note: "alquiler",
+      type: "PENDING",
+      category: null,
+      saveToken: "a1b2c3d4",
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it("rejects a preview payload with a bad token", () => {
+    expect(
+      previewPayloadSchema.safeParse({
+        amount: 2500,
+        note: null,
+        type: "REAL",
+        category: "Cafe",
+        saveToken: "zz",
+      }).success,
+    ).toBe(false);
+  });
+
+  it("decodes a legacy preview payload without the savings field (D5: absent = no override)", () => {
+    const result = previewPayloadSchema.safeParse({
+      amount: 1000,
+      note: "sueldo",
+      type: "INGRESO",
+      category: "Sueldo",
+      saveToken: "a1b2c3d4",
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.savings).toBeUndefined();
+    }
+  });
+
+  it("decodes a preview payload with the savings disabled override", () => {
+    const result = previewPayloadSchema.safeParse({
+      amount: 1000,
+      note: "sueldo",
+      type: "INGRESO",
+      category: "Sueldo",
+      saveToken: "a1b2c3d4",
+      savings: { kind: "disabled" },
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.savings).toEqual({ kind: "disabled" });
+    }
+  });
+
+  it("decodes a preview payload with a percent override and rejects out-of-range percents", () => {
+    const valid = previewPayloadSchema.safeParse({
+      amount: 1000,
+      note: "sueldo",
+      type: "INGRESO",
+      category: "Sueldo",
+      saveToken: "a1b2c3d4",
+      savings: { kind: "percent", percent: 15 },
+    });
+    expect(valid.success).toBe(true);
+    if (valid.success) {
+      expect(valid.data.savings).toEqual({ kind: "percent", percent: 15 });
+    }
+    expect(
+      previewPayloadSchema.safeParse({
+        amount: 1000,
+        note: "sueldo",
+        type: "INGRESO",
+        category: "Sueldo",
+        saveToken: "a1b2c3d4",
+        savings: { kind: "percent", percent: 0 },
+      }).success,
+    ).toBe(false);
+    expect(
+      previewPayloadSchema.safeParse({
+        amount: 1000,
+        note: "sueldo",
+        type: "INGRESO",
+        category: "Sueldo",
+        saveToken: "a1b2c3d4",
+        savings: { kind: "percent", percent: 150 },
+      }).success,
+    ).toBe(false);
+  });
+
+  it("parses a category-name payload with the preview flow", () => {
+    const result = categoryNamePayloadSchema.safeParse({
+      flow: "preview",
+      preview: { amount: 2500, note: null, type: "REAL", category: null, saveToken: "a1b2c3d4" },
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.flow).toBe("preview");
+    }
+  });
+
+  it("declares the eight v2 bot states and drops the removed dialog states", () => {
+    for (const state of [
+      "idle",
+      "awaiting_setup",
+      "awaiting_capture",
+      "awaiting_preview",
+      "awaiting_category_name",
+      "awaiting_movement_selection",
+      "awaiting_category_selection",
+      "awaiting_delete_confirmation",
+    ]) {
+      expect(BOT_STATES).toContain(state);
+    }
+    expect(BOT_STATES).not.toContain("awaiting_category");
+    expect(BOT_STATES).not.toContain("awaiting_registration");
+    expect(BOT_STATES).not.toContain("awaiting_amount_confirmation");
+  });
+});
+
+describe("TelegramService.handleCallback (v2 callback routing)", () => {
   let h: Harness;
 
   beforeEach(() => {
     h = makeHarness();
   });
 
-  it("enters awaiting_setup for a valid registration when the owner has no categories, without persisting (D7)", async () => {
-    await h.service.handleUpdate(textUpdate(), h.reply);
+  it("returns true for a known callback and dispatches it", async () => {
+    seedHarnessCategories(h, ["Cafe"]);
 
-    expect(h.mockCreateExpense).not.toHaveBeenCalled();
-    expect(h.mockSetState).toHaveBeenCalledWith({
-      ownerId,
-      state: "awaiting_setup",
-      pendingMovementId: null,
-      pendingNote: null,
-    });
-    expect(h.replies.join("\n")).toContain("categorías");
+    expect(await h.service.handleCallback(callbackUpdate({ data: "m:new" }), h.reply)).toBe(true);
+    expect(h.replies.at(-1)).toBe(capturePromptReply());
   });
 
-  it("creates the listed categories plus 'otro' from a newline-separated setup reply", async () => {
+  it("returns false for an unknown chat callback without replying", async () => {
+    expect(
+      await h.service.handleCallback(callbackUpdate({ fromId: 999, data: "m:new" }), h.reply),
+    ).toBe(false);
+    expect(h.replies).toHaveLength(0);
+  });
+
+  it("returns false for a non-callback update", async () => {
+    expect(await h.service.handleCallback(textUpdate(), h.reply)).toBe(false);
+    expect(h.replies).toHaveLength(0);
+  });
+
+  it("replies honestly for an unknown action prefix and changes no state", async () => {
+    seedHarnessCategories(h, ["Cafe"]);
+
+    expect(await h.service.handleCallback(callbackUpdate({ data: "zz:1" }), h.reply)).toBe(true);
+    expect(h.replies.at(-1)).toBe(callbackUnavailableReply());
+    expect(h.mockSetState).not.toHaveBeenCalled();
+  });
+
+  it("answers a stale type-toggle callback honestly (pv:typ is gone; no matching preview state)", async () => {
+    seedHarnessCategories(h, ["Cafe"]);
+
+    await h.service.handleCallback(callbackUpdate({ data: "pv:typ:r:abcdef12" }), h.reply);
+    expect(h.replies.at(-1)).toBe(alreadyProcessedReply());
+  });
+});
+
+describe("TelegramService menu taps (v2 capture type memory)", () => {
+  let h: Harness;
+
+  beforeEach(() => {
+    h = makeHarness();
+    seedHarnessCategories(h, ["Cafe", "Transporte"]);
+  });
+
+  it.each([
+    ["m:new", "REAL"],
+    ["m:prev", "PENDING"],
+    ["m:inc", "INGRESO"],
+    ["m:shr", "COMPARTIDO"],
+  ] as const)("persists capture type %s and prompts for monto+nota", async (data, type) => {
+    await h.service.handleCallback(callbackUpdate({ data }), h.reply);
+
+    const lastCall = h.mockSetState.mock.calls.at(-1)?.[0] as BotStateRecord;
+    expect(lastCall.state).toBe("awaiting_capture");
+    const payload = capturePayloadSchema.parse(JSON.parse(lastCall.pendingNote ?? "{}"));
+    expect(payload.type).toBe(type);
+    expect(h.replies.at(-1)).toBe(capturePromptReply());
+  });
+
+  it("supersedes an open preview when a type tap arrives", async () => {
+    await seedAwaitingCapture(h, "REAL");
+    await h.service.handleUpdate(textUpdate({ text: "30000 gym", messageId: 2 }), h.reply);
+    expect(h.replies.at(-1)).toContain("¿Guardamos?");
+
+    await h.service.handleCallback(callbackUpdate({ data: "m:inc", messageId: 88 }), h.reply);
+
+    const lastCall = h.mockSetState.mock.calls.at(-1)?.[0] as BotStateRecord;
+    expect(lastCall.state).toBe("awaiting_capture");
+    expect(capturePayloadSchema.parse(JSON.parse(lastCall.pendingNote ?? "{}")).type).toBe("INGRESO");
+    expect(h.replies.at(-1)).toBe(capturePromptReply());
+  });
+
+  it("sends the setup question when the owner has zero categories", async () => {
+    h.mockListCategories.mockResolvedValue([]);
+
+    await h.service.handleCallback(callbackUpdate({ data: "m:new" }), h.reply);
+
+    const lastCall = h.mockSetState.mock.calls.at(-1)?.[0] as BotStateRecord;
+    expect(lastCall.state).toBe("awaiting_setup");
+    expect(h.replies.at(-1)).toBe(setupQuestionReply([]));
+  });
+
+  it("opens the expense-admin sub-menu and supersedes any pending flow", async () => {
+    await seedAwaitingCapture(h, "REAL");
+
+    await h.service.handleCallback(callbackUpdate({ data: "m:adm", messageId: 88 }), h.reply);
+
+    const lastCall = h.mockSetState.mock.calls.at(-1)?.[0] as BotStateRecord;
+    expect(lastCall.state).toBe("idle");
+    expect(h.replies.at(-1)).toBe(expenseAdminReply());
+    const kb = h.keyboards.at(-1) as InlineKeyboard;
+    expect(kb[0]?.[0]?.text).toBe("🗑 Borrar gasto");
+    expect(kb[1]?.[0]?.text).toBe("✏️ Corregir categoría");
+    expect(kb[2]?.[0]?.text).toBe("💵 Marcar como pagado");
+  });
+
+  it("opens the category-admin sub-menu", async () => {
+    await h.service.handleCallback(callbackUpdate({ data: "m:cats" }), h.reply);
+
+    expect(h.replies.at(-1)).toBe(categoryAdminReply());
+    const kb = h.keyboards.at(-1) as InlineKeyboard;
+    expect(kb.map((row) => row[0]?.text)).toEqual(["➕ Crear categoría", "✏️ Renombrar categoría", "🗑 Borrar categoría"]);
+  });
+
+  it("opens the reports sub-menu with the five queries", async () => {
+    await h.service.handleCallback(callbackUpdate({ data: "m:rep" }), h.reply);
+
+    expect(h.replies.at(-1)).toBe(reportsMenuReply());
+    const kb = h.keyboards.at(-1) as InlineKeyboard;
+    expect(kb.map((row) => row[0]?.text)).toEqual([
+      "Últimos movimientos",
+      "Saldo",
+      "Resumen del mes",
+      "Ahorro del mes",
+      "Gastos previstos",
+    ]);
+  });
+
+  it("sends the static help for m:help with the 💰 Ahorro sub-menu button", async () => {
+    await h.service.handleCallback(callbackUpdate({ data: "m:help" }), h.reply);
+    expect(h.replies.at(-1)).toBe(ayudaReply());
+    const kb = h.keyboards.at(-1) as InlineKeyboard;
+    const ahorroButton = kb.flat().find((button) => button.text === "💰 Ahorro");
+    expect(ahorroButton?.callback_data).toBe("sa:menu");
+  });
+});
+
+describe("TelegramService capture chain (awaiting_capture → awaiting_preview)", () => {
+  let h: Harness;
+
+  beforeEach(() => {
+    h = makeHarness();
+    seedHarnessCategories(h, ["Cafe", "Transporte"]);
+  });
+
+  it("parses '30000 gym' into a preview with the menu-chosen type and ZERO LLM calls", async () => {
+    await seedAwaitingCapture(h, "REAL");
+    h.mockBrainInterpret.mockClear();
+
+    await h.service.handleUpdate(textUpdate({ text: "30000 gym", messageId: 2 }), h.reply);
+
+    expect(h.mockBrainInterpret).not.toHaveBeenCalled();
+    expect(h.mockCreateExpense).not.toHaveBeenCalled();
+    const lastCall = h.mockSetState.mock.calls.at(-1)?.[0] as BotStateRecord;
+    expect(lastCall.state).toBe("awaiting_preview");
+    const payload = previewPayloadSchema.parse(JSON.parse(lastCall.pendingNote ?? "{}"));
+    expect(payload).toMatchObject({ amount: 30000, note: "gym", type: "REAL", category: null });
+    expect(payload.saveToken).toMatch(/^[0-9a-f]{8}$/);
+    expect(h.replies.at(-1)).toBe(previewReply(30000, "gym", "REAL"));
+    const kb = h.keyboards.at(-1) as InlineKeyboard;
+    expect(kb[0]?.[0]?.text).toBe("Cafe");
+    expect(kb[1]?.[0]?.text).toBe("Transporte");
+    expect(kb[2]?.[0]?.text).toBe("➕ Crear categoría");
+    // Two-step flow: the initial preview has NO Guardar/Corregir rows — those
+    // live ONLY on the confirmation message that follows a category tap.
+    expect(kb).toHaveLength(3);
+    const previewLabels = kb.flat().map((button) => button.text);
+    expect(previewLabels).not.toContain("✅ Guardar");
+    expect(previewLabels).not.toContain("✏️ Corregir");
+  });
+
+  it("carries the PENDING type from the 📅 tap into the preview", async () => {
+    await seedAwaitingCapture(h, "PENDING");
+
+    await h.service.handleUpdate(textUpdate({ text: "2500 alquiler", messageId: 2 }), h.reply);
+
+    const lastCall = h.mockSetState.mock.calls.at(-1)?.[0] as BotStateRecord;
+    const payload = previewPayloadSchema.parse(JSON.parse(lastCall.pendingNote ?? "{}"));
+    expect(payload.type).toBe("PENDING");
+  });
+
+  it("re-prompts for the amount on a message without a parseable amount, registering nothing and never calling the brain", async () => {
+    await seedAwaitingCapture(h, "REAL");
+    h.mockBrainInterpret.mockClear();
+
+    await h.service.handleUpdate(textUpdate({ text: "gym", messageId: 2 }), h.reply);
+
+    expect(h.mockCreateExpense).not.toHaveBeenCalled();
+    expect(h.mockBrainInterpret).not.toHaveBeenCalled();
+    expect(h.replies.at(-1)).toBe(capturePromptReply());
+    const state = await h.botStateRepository.get(ownerId);
+    expect(state?.state).toBe("awaiting_capture");
+  });
+
+  it("recovers a corrupt capture payload to idle without registering", async () => {
+    await h.service.handleCallback(callbackUpdate({ data: "m:new" }), h.reply);
     h.mockSetState.mockClear();
+    await h.botStateRepository.set({
+      ownerId,
+      state: "awaiting_capture",
+      pendingMovementId: null,
+      pendingNote: "not-json",
+    } as BotStateRecord);
+
+    await h.service.handleUpdate(textUpdate({ text: "30000 gym", messageId: 2 }), h.reply);
+
+    expect(h.mockCreateExpense).not.toHaveBeenCalled();
+    const lastCall = h.mockSetState.mock.calls.at(-1)?.[0] as BotStateRecord;
+    expect(lastCall.state).toBe("idle");
+  });
+});
+
+describe("TelegramService preview callbacks (v2)", () => {
+  let h: Harness;
+
+  beforeEach(() => {
+    h = makeHarness();
+    seedHarnessCategories(h, ["Cafe", "Transporte"]);
+  });
+
+  async function openPreview(): Promise<{ token: string }> {
+    await seedAwaitingCapture(h, "REAL");
+    await h.service.handleUpdate(textUpdate({ text: "30000 gym", messageId: 2 }), h.reply);
+    const state = await h.botStateRepository.get(ownerId);
+    const payload = previewPayloadSchema.parse(JSON.parse(state?.pendingNote ?? "{}"));
+    return { token: payload.saveToken };
+  }
+
+  it("selects a category via cat:<id> and sends a NEW confirmation message", async () => {
+    await openPreview();
+    h.mockSetState.mockClear();
+
+    await h.service.handleCallback(callbackUpdate({ data: "cat:c0", messageId: 90 }), h.reply);
+
+    const lastCall = h.mockSetState.mock.calls.at(-1)?.[0] as BotStateRecord;
+    expect(lastCall.state).toBe("awaiting_preview");
+    const payload = previewPayloadSchema.parse(JSON.parse(lastCall.pendingNote ?? "{}"));
+    expect(payload.category).toBe("Cafe");
+    // The confirmation's message id is persisted (the id the port returned
+    // for the NEW confirmation message).
+    expect(payload.confirmMessageId).toBe(h.sentIds.at(-1));
+    // Two-step flow: the tap sends a NEW confirmation message (no preview edit)
+    // with the full data and the Guardar/Corregir rows.
+    expect(h.replies.at(-1)).toBe(previewConfirmReply(30000, "gym", "REAL", "Cafe"));
+    expect(h.edits.at(-1)).toBeUndefined();
+    const kb = h.keyboards.at(-1) as InlineKeyboard;
+    // D7: category rows first, then ➕ Crear categoría, then Guardar/Corregir.
+    expect(kb[0]?.[0]?.text).toBe("Cafe");
+    expect(kb.at(-1)?.[0]?.text).toBe("✅ Guardar");
+    expect(kb.at(-1)?.[1]?.text).toBe("✏️ Corregir");
+  });
+
+  it("a different category tap edits the CONFIRMATION message with the new category", async () => {
+    await openPreview();
+    await h.service.handleCallback(callbackUpdate({ data: "cat:c0", messageId: 90 }), h.reply);
+
+    await h.service.handleCallback(callbackUpdate({ data: "cat:c1", messageId: 91 }), h.reply);
+
+    const lastCall = h.mockSetState.mock.calls.at(-1)?.[0] as BotStateRecord;
+    const payload = previewPayloadSchema.parse(JSON.parse(lastCall.pendingNote ?? "{}"));
+    expect(payload.category).toBe("Transporte");
+    expect(payload.confirmMessageId).toBe(h.sentIds.at(-1));
+    // The confirmation message is edited (not the preview) to the new category.
+    expect(h.replies.at(-1)).toBe(previewConfirmReply(30000, "gym", "REAL", "Transporte"));
+    expect(h.edits.at(-1)).toBe(payload.confirmMessageId);
+  });
+
+  it("gates Guardar until a category is selected: nothing registers and the preview asks", async () => {
+    const { token } = await openPreview();
+
+    await h.service.handleCallback(callbackUpdate({ data: `pv:save:${token}` }), h.reply);
+
+    expect(h.mockCreateExpense).not.toHaveBeenCalled();
+    expect(h.replies.at(-1)).toBe(previewAskCategoryReply());
+    const state = await h.botStateRepository.get(ownerId);
+    expect(state?.state).toBe("awaiting_preview");
+  });
+
+  it("registers with the previewed facts after a category is selected and returns to the menu", async () => {
+    const { token } = await openPreview();
+    await h.service.handleCallback(callbackUpdate({ data: "cat:c0", messageId: 90 }), h.reply);
+
+    await h.service.handleCallback(callbackUpdate({ data: `pv:save:${token}` }), h.reply);
+
+    expect(h.mockCreateExpense).toHaveBeenCalledWith(
+      expect.objectContaining({ amount: 30000, note: "gym", category: "Cafe", type: "EXPENSE" }),
+      ownerId,
+      { visibility: "INDIVIDUAL" },
+    );
+    expect(h.replies.at(-1)).toBe(menuReply());
+    expect(h.replies.at(-2)).toBe(successReply(30000, "gym", "Cafe"));
+    const state = await h.botStateRepository.get(ownerId);
+    expect(state?.state).toBe("idle");
+  });
+
+  it("is idempotent: a retried Guardar with a consumed token replies already processed", async () => {
+    const { token } = await openPreview();
+    await h.service.handleCallback(callbackUpdate({ data: "cat:c0", messageId: 90 }), h.reply);
+    h.mockSetState.mockClear();
+
+    await h.service.handleCallback(callbackUpdate({ data: `pv:save:${token}` }), h.reply);
+    await h.service.handleCallback(callbackUpdate({ data: `pv:save:${token}` }), h.reply);
+
+    expect(h.mockCreateExpense).toHaveBeenCalledTimes(1);
+    expect(h.replies.at(-1)).toBe(alreadyProcessedReply());
+  });
+
+  it("Corregir reopens capture with the SAME type", async () => {
+    await seedAwaitingCapture(h, "PENDING");
+    await h.service.handleUpdate(textUpdate({ text: "2500 alquiler", messageId: 2 }), h.reply);
+    const state = await h.botStateRepository.get(ownerId);
+    const payload = previewPayloadSchema.parse(JSON.parse(state?.pendingNote ?? "{}"));
+
+    await h.service.handleCallback(callbackUpdate({ data: `pv:edit:${payload.saveToken}` }), h.reply);
+
+    const lastCall = h.mockSetState.mock.calls.at(-1)?.[0] as BotStateRecord;
+    expect(lastCall.state).toBe("awaiting_capture");
+    expect(capturePayloadSchema.parse(JSON.parse(lastCall.pendingNote ?? "{}")).type).toBe("PENDING");
+    expect(h.replies.at(-1)).toBe(capturePromptReply());
+  });
+
+  it("➕ Crear categoría enters awaiting_category_name with the preview flow", async () => {
+    const { token } = await openPreview();
+
+    await h.service.handleCallback(callbackUpdate({ data: `pv:catnew:${token}` }), h.reply);
+
+    const lastCall = h.mockSetState.mock.calls.at(-1)?.[0] as BotStateRecord;
+    expect(lastCall.state).toBe("awaiting_category_name");
+    const payload = categoryNamePayloadSchema.parse(JSON.parse(lastCall.pendingNote ?? "{}"));
+    expect(payload.flow).toBe("preview");
+    expect(payload.preview?.amount).toBe(30000);
+    expect(h.replies.at(-1)).toBe(categoryNamePromptReply("preview"));
+  });
+
+  it("creates the category from the preview name and shows the confirmation with it selected", async () => {
+    const { token } = await openPreview();
+    await h.service.handleCallback(callbackUpdate({ data: `pv:catnew:${token}` }), h.reply);
+
+    await h.service.handleUpdate(textUpdate({ text: "Gimnasio", messageId: 3 }), h.reply);
+
+    expect(h.mockCreateCategory).toHaveBeenCalledWith(ownerId, "Gimnasio", "EXPENSE");
+    const lastCall = h.mockSetState.mock.calls.at(-1)?.[0] as BotStateRecord;
+    expect(lastCall.state).toBe("awaiting_preview");
+    const payload = previewPayloadSchema.parse(JSON.parse(lastCall.pendingNote ?? "{}"));
+    expect(payload.category).toBe("Gimnasio");
+    // Step 2: the created category is selected and the confirmation shows.
+    expect(h.replies.at(-1)).toBe(previewConfirmReply(30000, "gym", "REAL", "Gimnasio"));
+    expect(h.edits.at(-1)).toBeUndefined();
+  });
+
+  it("rejects a reserved name: redirect, nothing created, preview stays without a selection", async () => {
+    const { token } = await openPreview();
+    await h.service.handleCallback(callbackUpdate({ data: `pv:catnew:${token}` }), h.reply);
+    h.mockCreateCategory.mockRejectedValue(
+      new ReservedCategoryError('Category "previsto" is the reserved concept "previsto"', "previsto"),
+    );
+
+    await h.service.handleUpdate(textUpdate({ text: "previsto", messageId: 3 }), h.reply);
+
+    expect(h.replies.at(-1)).toBe(previewReply(30000, "gym", "REAL"));
+    expect(h.replies.at(-2)).toBe(reservedCategoryReply("previsto", "previsto"));
+    const state = await h.botStateRepository.get(ownerId);
+    const payload = previewPayloadSchema.parse(JSON.parse(state?.pendingNote ?? "{}"));
+    expect(payload.category).toBeNull();
+  });
+
+  it("rejects a duplicate name and keeps the preview without a selection", async () => {
+    const { token } = await openPreview();
+    await h.service.handleCallback(callbackUpdate({ data: `pv:catnew:${token}` }), h.reply);
+    h.mockCreateCategory.mockRejectedValue(new ValidationFailedError('Category "Gimnasio" already exists'));
+
+    await h.service.handleUpdate(textUpdate({ text: "Gimnasio", messageId: 3 }), h.reply);
+
+    expect(h.replies.at(-1)).toBe(previewReply(30000, "gym", "REAL"));
+    expect(h.replies.at(-2)).toBe(duplicateCategoryReply("Gimnasio"));
+    const state = await h.botStateRepository.get(ownerId);
+    const payload = previewPayloadSchema.parse(JSON.parse(state?.pendingNote ?? "{}"));
+    expect(payload.category).toBeNull();
+  });
+});
+
+describe("TelegramService movement type mapping (v2)", () => {
+  let h: Harness;
+
+  beforeEach(() => {
+    h = makeHarness();
+    seedHarnessCategories(h, ["Cafe"]);
+  });
+
+  async function saveCapture(type: "REAL" | "PENDING" | "INGRESO" | "COMPARTIDO", text: string): Promise<void> {
+    await seedAwaitingCapture(h, type);
+    await h.service.handleUpdate(textUpdate({ text, messageId: 2 }), h.reply);
+    const state = await h.botStateRepository.get(ownerId);
+    const payload = previewPayloadSchema.parse(JSON.parse(state?.pendingNote ?? "{}"));
+    await h.service.handleCallback(callbackUpdate({ data: "cat:c0", messageId: 90 }), h.reply);
+    await h.service.handleCallback(callbackUpdate({ data: `pv:save:${payload.saveToken}` }), h.reply);
+  }
+
+  it("REAL registers EXPENSE + PAID + INDIVIDUAL", async () => {
+    await saveCapture("REAL", "14000 pasaje");
+
+    expect(h.mockCreateExpense).toHaveBeenCalledWith(
+      expect.objectContaining({ amount: 14000, note: "pasaje", category: "Cafe", type: "EXPENSE" }),
+      ownerId,
+      { visibility: "INDIVIDUAL" },
+    );
+    expect(h.replies.at(-2)).toBe(successReply(14000, "pasaje", "Cafe"));
+  });
+
+  it("PENDING registers EXPENSE + PENDING + INDIVIDUAL and confirms as previsto", async () => {
+    await saveCapture("PENDING", "2500 alquiler");
+
+    expect(h.mockCreateExpense).toHaveBeenCalledWith(
+      expect.objectContaining({ amount: 2500, note: "alquiler", category: "Cafe", type: "EXPENSE", status: "PENDING" }),
+      ownerId,
+      { visibility: "INDIVIDUAL" },
+    );
+    expect(h.replies.at(-2)).toBe(plannedReply(2500, "alquiler", "Cafe"));
+  });
+
+  it("INGRESO registers INCOME + PAID + INDIVIDUAL when no rule matches (resolveSplit whole)", async () => {
+    h.mockResolveSplit.mockResolvedValue({ kind: "whole" });
+
+    await saveCapture("INGRESO", "cobro sueldo de entrenuts 1000");
+
+    // The savings rule ALWAYS applies to INGRESO (no per-message overrides):
+    // resolveSplit runs with the neutral override and yields whole here.
+    expect(h.mockResolveSplit).toHaveBeenCalledWith(ownerId, "cobro sueldo de entrenuts", { kind: "none" });
+    expect(h.mockCreateExpense).toHaveBeenCalledWith(
+      expect.objectContaining({ amount: 1000, note: "cobro sueldo de entrenuts", category: "Cafe", type: "INCOME" }),
+      ownerId,
+      { visibility: "INDIVIDUAL" },
+    );
+  });
+
+  it("a manual percent override in the preview payload supersedes the rule via savePreview (D5)", async () => {
+    h.mockResolveSplit.mockResolvedValue({ kind: "split", percent: 15 });
+    await seedAwaitingCapture(h, "INGRESO");
+    await h.service.handleUpdate(textUpdate({ text: "cobro sueldo de entrenuts 1000", messageId: 2 }), h.reply);
+
+    const state = await h.botStateRepository.get(ownerId);
+    const payload = previewPayloadSchema.parse(JSON.parse(state?.pendingNote ?? "{}"));
+    const withOverride = { ...payload, savings: { kind: "percent", percent: 15 } };
+    await h.botStateRepository.set({
+      ownerId,
+      state: "awaiting_preview",
+      pendingMovementId: null,
+      pendingNote: JSON.stringify(withOverride),
+    } as BotStateRecord);
+
+    await h.service.handleCallback(callbackUpdate({ data: "cat:c0", messageId: 90 }), h.reply);
+    await h.service.handleCallback(callbackUpdate({ data: `pv:save:${payload.saveToken}` }), h.reply);
+
+    expect(h.mockResolveSplit).toHaveBeenCalledWith(ownerId, "cobro sueldo de entrenuts", {
+      kind: "percent",
+      percent: 15,
+    });
+    expect(h.mockCreateIncomeWithSavings).toHaveBeenCalledWith(
+      expect.objectContaining({ netCategory: "Cafe", savingsCategory: "ahorro", percent: 15 }),
+    );
+  });
+
+  it("COMPARTIDO without a partner registers EXPENSE + PAID + SHARED (legacy single row)", async () => {
+    await saveCapture("COMPARTIDO", "2000 super");
+
+    expect(h.mockCreateExpense).toHaveBeenCalledWith(
+      expect.objectContaining({
+        amount: 2000,
+        note: "super",
+        category: "Cafe",
+        type: "EXPENSE",
+      }),
+      ownerId,
+      { visibility: "SHARED" },
+    );
+    // Legacy no-partner path: no sharedTotal on the single row.
+    const legacyArgs = h.mockCreateExpense.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(Object.hasOwn(legacyArgs, "sharedTotal")).toBe(false);
+    expect(h.mockCreateSharedSplit).not.toHaveBeenCalled();
+  });
+
+  it("the save confirmation always returns to the menu", async () => {
+    await saveCapture("REAL", "14000 pasaje");
+
+    expect(h.replies.at(-1)).toBe(menuReply());
+  });
+});
+
+describe("TelegramService idle routing (v2 pre-checks and brain classification)", () => {
+  let h: Harness;
+
+  beforeEach(() => {
+    h = makeHarness();
+    seedHarnessCategories(h, ["Cafe", "Transporte"]);
+  });
+
+  it("redirects capture-shaped text to ➕ Nuevo gasto with the menu and NEVER calls the brain", async () => {
+    h.mockBrainInterpret.mockClear();
+
+    await h.service.handleUpdate(textUpdate({ text: "14000 pasaje", messageId: 1 }), h.reply);
+
+    expect(h.mockBrainInterpret).not.toHaveBeenCalled();
+    expect(h.mockCreateExpense).not.toHaveBeenCalled();
+    expect(h.replies.at(-2)).toBe(captureShapedRedirectReply());
+    expect(h.replies.at(-1)).toBe(menuReply());
+  });
+
+  it("redirects an amount-only message the same way", async () => {
+    await h.service.handleUpdate(textUpdate({ text: "30000", messageId: 1 }), h.reply);
+
+    expect(h.replies.at(-2)).toBe(captureShapedRedirectReply());
+  });
+
+  it("redirects the previsto: prefix to the 📅 button with the menu and zero LLM", async () => {
+    h.mockBrainInterpret.mockClear();
+
+    await h.service.handleUpdate(textUpdate({ text: "previsto: 2500 alquiler", messageId: 1 }), h.reply);
+
+    expect(h.mockBrainInterpret).not.toHaveBeenCalled();
+    expect(h.mockCreateExpense).not.toHaveBeenCalled();
+    expect(h.replies.at(-2)).toBe(previstoPrefixRedirectReply());
+    expect(h.replies.at(-1)).toBe(menuReply());
+  });
+
+  it("redirects the compartido: prefix to the 👥 button with the menu and zero LLM", async () => {
+    h.mockBrainInterpret.mockClear();
+
+    await h.service.handleUpdate(textUpdate({ text: "compartido: 2000 super", messageId: 1 }), h.reply);
+
+    expect(h.mockBrainInterpret).not.toHaveBeenCalled();
+    expect(h.mockCreateExpense).not.toHaveBeenCalled();
+    expect(h.replies.at(-2)).toBe(compartidoPrefixRedirectReply());
+    expect(h.replies.at(-1)).toBe(menuReply());
+  });
+
+  it("redirects savings-override text to the automatic rule with the menu and zero LLM", async () => {
+    h.mockBrainInterpret.mockClear();
+
+    await h.service.handleUpdate(textUpdate({ text: "sin ahorro cobro sueldo de entrenuts 1000", messageId: 1 }), h.reply);
+
+    expect(h.mockBrainInterpret).not.toHaveBeenCalled();
+    expect(h.mockCreateExpense).not.toHaveBeenCalled();
+    expect(h.replies.at(-2)).toBe(savingsOverrideRedirectReply());
+    expect(h.replies.at(-1)).toBe(menuReply());
+  });
+
+  it.each(["registrar categoria: Salud", "renombrar categoria: Cafe a: Cafeteria", "asociar palabra: uber a categoria: Transporte"] as const)(
+    "redirects legacy text CRUD %s to the 🗂 button with the menu and zero LLM",
+    async (text) => {
+      h.mockBrainInterpret.mockClear();
+
+      await h.service.handleUpdate(textUpdate({ text, messageId: 1 }), h.reply);
+
+      expect(h.mockBrainInterpret).not.toHaveBeenCalled();
+      expect(h.mockCreateCategory).not.toHaveBeenCalled();
+      expect(h.mockRenameCategory).not.toHaveBeenCalled();
+      expect(h.replies.at(-2)).toBe(categoryCrudRedirectReply());
+      expect(h.replies.at(-1)).toBe(menuReply());
+    },
+  );
+
+  it("routes a query-classified message through the executor and returns to the menu", async () => {
+    h.mockGetSummary.mockResolvedValue({
+      ...emptySummary(),
+      kpis: { income: 2000, expenses: 500, balance: 1500, count: 2, maxAmount: 2000 },
+    });
+    h.mockBrainInterpret.mockResolvedValue({ intent: "query_balance", amount: null, note: null } satisfies ConversationEnvelope);
+
+    await h.service.handleUpdate(textUpdate({ text: "cuánto gasté", messageId: 1 }), h.reply);
+
+    expect(h.mockCreateExpense).not.toHaveBeenCalled();
+    expect(h.replies.at(-1)).toBe(menuReply());
+    expect(h.replies.at(-2)).toContain("1.500");
+  });
+
+  it("greets warmly and shows the menu for a greeting-classified message", async () => {
+    h.mockBrainInterpret.mockResolvedValue({ intent: "greeting", amount: null, note: null } satisfies ConversationEnvelope);
+
+    await h.service.handleUpdate(textUpdate({ text: "hola", messageId: 1 }), h.reply);
+
+    expect(h.replies.at(-2)).toBe(greetingReply());
+    expect(h.replies.at(-1)).toBe(menuReply());
+  });
+
+  it("shows the static help for a help-classified message", async () => {
+    h.mockBrainInterpret.mockResolvedValue({ intent: "help", amount: null, note: null } satisfies ConversationEnvelope);
+
+    await h.service.handleUpdate(textUpdate({ text: "qué sabés hacer?", messageId: 1 }), h.reply);
+
+    expect(h.replies.at(-2)).toBe(ayudaReply());
+    expect(h.replies.at(-1)).toBe(menuReply());
+  });
+
+  it("replies unresolvable plus the menu for off_topic and for a null brain", async () => {
+    h.mockBrainInterpret.mockResolvedValue({ intent: "off_topic", amount: null, note: null } satisfies ConversationEnvelope);
+    await h.service.handleUpdate(textUpdate({ text: "que lindo día", messageId: 1 }), h.reply);
+
+    expect(h.replies.at(-2)).toBe(unresolvableReply());
+    expect(h.replies.at(-1)).toBe(menuReply());
+
+    h.mockBrainInterpret.mockResolvedValue(null);
+    await h.service.handleUpdate(textUpdate({ text: "otra cosa", messageId: 2 }), h.reply);
+
+    expect(h.replies.at(-2)).toBe(unresolvableReply());
+  });
+
+  it("sends the query redirect plus the menu when the query executor fails", async () => {
+    h.mockBrainInterpret.mockResolvedValue({ intent: "query_balance", amount: null, note: null } satisfies ConversationEnvelope);
+    h.mockGetSummary.mockRejectedValue(new Error("db down"));
+
+    await h.service.handleUpdate(textUpdate({ text: "cuánto gasté", messageId: 1 }), h.reply);
+
+    expect(h.replies.at(-2)).toBe(queryRedirectReply());
+    expect(h.replies.at(-1)).toBe(menuReply());
+  });
+
+  it("sends a query brain reply verbatim when the brain writes one (fixed template otherwise)", async () => {
+    h.mockGetSummary.mockResolvedValue({
+      ...emptySummary(),
+      kpis: { income: 2000, expenses: 500, balance: 1500, count: 2, maxAmount: 2000 },
+    });
+    h.mockBrainInterpret.mockResolvedValue({ intent: "query_balance", amount: null, note: null } satisfies ConversationEnvelope);
+    h.mockBrainReply.mockResolvedValue("Tu balance es $ 1.500,00.");
+
+    await h.service.handleUpdate(textUpdate({ text: "cuánto gasté", messageId: 1 }), h.reply);
+
+    expect(h.mockBrainReply).toHaveBeenCalledWith(
+      expect.objectContaining({ intent: "query_balance", ok: true, action: "answered" }),
+    );
+    expect(h.replies.at(-2)).toBe("Tu balance es $ 1.500,00.");
+    expect(h.replies.at(-1)).toBe(menuReply());
+  });
+
+  it("sends a greeting brain reply verbatim and always closes with the menu", async () => {
+    h.mockBrainInterpret.mockResolvedValue({ intent: "greeting", amount: null, note: null } satisfies ConversationEnvelope);
+    h.mockBrainReply.mockResolvedValue("¡Hola! Soy Rita, tu bot de gastos.");
+
+    await h.service.handleUpdate(textUpdate({ text: "hola", messageId: 1 }), h.reply);
+
+    expect(h.replies.at(-2)).toBe("¡Hola! Soy Rita, tu bot de gastos.");
+    expect(h.replies.at(-1)).toBe(menuReply());
+  });
+
+  it("routes deterministically without a brain (GROQ_API_KEY unset): redirects pre-checks and falls back to unresolvable", async () => {
+    const hNoBrain = makeHarness({ noBrain: true });
+    seedHarnessCategories(hNoBrain, ["Cafe", "Transporte"]);
+
+    // Capture-shaped text still redirects (no brain needed).
+    await hNoBrain.service.handleUpdate(textUpdate({ text: "14000 pasaje", messageId: 1 }), hNoBrain.reply);
+    expect(hNoBrain.replies.at(-2)).toBe(captureShapedRedirectReply());
+    expect(hNoBrain.replies.at(-1)).toBe(menuReply());
+
+    // A non-capture message falls back to the deterministic off_topic reply + menu.
+    await hNoBrain.service.handleUpdate(textUpdate({ text: "que lindo día", messageId: 2 }), hNoBrain.reply);
+    expect(hNoBrain.replies.at(-2)).toBe(unresolvableReply());
+    expect(hNoBrain.replies.at(-1)).toBe(menuReply());
+  });
+
+  it("the setup gate precedes idle routing: no categories → awaiting_setup, no parser, no brain", async () => {
+    h.mockListCategories.mockResolvedValue([]);
+    h.mockBrainInterpret.mockClear();
+
     await h.service.handleUpdate(textUpdate({ text: "$2500 cafe", messageId: 1 }), h.reply);
+
+    expect(h.mockBrainInterpret).not.toHaveBeenCalled();
+    const lastCall = h.mockSetState.mock.calls.at(-1)?.[0] as BotStateRecord;
+    expect(lastCall.state).toBe("awaiting_setup");
+    expect(h.replies.at(-1)).toBe(setupQuestionReply([]));
+  });
+});
+
+describe("TelegramService state machine recovery (v2)", () => {
+  let h: Harness;
+
+  beforeEach(() => {
+    h = makeHarness();
+    seedHarnessCategories(h, ["Cafe"]);
+  });
+
+  it.each(["awaiting_registration", "awaiting_category", "awaiting_amount_confirmation"] as const)(
+    "recovers a removed %s payload to idle with the dropped reply, consuming the message",
+    async (removedState) => {
+      await h.botStateRepository.set({
+        ownerId,
+        state: removedState,
+        pendingMovementId: "mov-1",
+        pendingNote: "{}",
+      } as BotStateRecord);
+      h.mockSetState.mockClear();
+
+      await h.service.handleUpdate(textUpdate({ text: "30000 gym", messageId: 1 }), h.reply);
+
+      expect(h.mockCreateExpense).not.toHaveBeenCalled();
+      expect(h.mockBrainInterpret).not.toHaveBeenCalled();
+      const lastCall = h.mockSetState.mock.calls.at(-1)?.[0] as BotStateRecord;
+      expect(lastCall.state).toBe("idle");
+      expect(lastCall.pendingMovementId).toBeNull();
+      expect(lastCall.pendingNote).toBeNull();
+      expect(h.replies.at(-1)).toBe(questionDroppedReply());
+    },
+  );
+
+  it("recovers an unknown persisted state string to idle", async () => {
+    await h.botStateRepository.set({
+      ownerId,
+      state: "awaiting_whatever",
+      pendingMovementId: null,
+      pendingNote: null,
+    } as unknown as BotStateRecord);
+
+    await h.service.handleUpdate(textUpdate({ text: "30000 gym", messageId: 1 }), h.reply);
+
+    expect(h.mockCreateExpense).not.toHaveBeenCalled();
+    expect(h.replies.at(-1)).toBe(questionDroppedReply());
+  });
+
+  it("a new text during a preview abandons it and idle-routes the text (never capture)", async () => {
+    await seedAwaitingCapture(h, "REAL");
+    await h.service.handleUpdate(textUpdate({ text: "30000 gym", messageId: 2 }), h.reply);
+
+    await h.service.handleUpdate(textUpdate({ text: "14000 pasaje", messageId: 3 }), h.reply);
+
+    const state = await h.botStateRepository.get(ownerId);
+    expect(state?.state).toBe("idle");
+    expect(h.mockCreateExpense).not.toHaveBeenCalled();
+    expect(h.replies.at(-1)).toBe(menuReply());
+  });
+
+  it("a new text during the delete gate abandons it: nothing deleted, then idle-route", async () => {
+    const payload = {
+      action: "delete_expense",
+      candidates: [{ id: "m1", amount: 2500, note: "alquiler", date: "2026-09-19" }],
+    };
+    await h.botStateRepository.set({
+      ownerId,
+      state: "awaiting_movement_selection",
+      pendingMovementId: null,
+      pendingNote: JSON.stringify(payload),
+    });
+    await h.service.handleCallback(callbackUpdate({ data: "dk:m1" }), h.reply);
+    const state = await h.botStateRepository.get(ownerId);
+    expect(state?.state).toBe("awaiting_delete_confirmation");
+
+    await h.service.handleUpdate(textUpdate({ text: "14000 pasaje", messageId: 3 }), h.reply);
+
+    expect(h.mockDeleteExpense).not.toHaveBeenCalled();
+    const after = await h.botStateRepository.get(ownerId);
+    expect(after?.state).toBe("idle");
+  });
+
+  it("a new text during a movement pick abandons it to the menu, changing nothing", async () => {
+    const payload = {
+      action: "delete_expense",
+      candidates: [{ id: "m1", amount: 2500, note: "alquiler", date: "2026-09-19" }],
+    };
+    await h.botStateRepository.set({
+      ownerId,
+      state: "awaiting_movement_selection",
+      pendingMovementId: null,
+      pendingNote: JSON.stringify(payload),
+    });
+
+    await h.service.handleUpdate(textUpdate({ text: "hola", messageId: 1 }), h.reply);
+
+    expect(h.mockDeleteExpense).not.toHaveBeenCalled();
+    expect(h.replies.at(-2)).toBe(selectionAbandonedReply());
+    expect(h.replies.at(-1)).toBe(menuReply());
+    const state = await h.botStateRepository.get(ownerId);
+    expect(state?.state).toBe("idle");
+  });
+});
+
+describe("TelegramService delete gate (dk/dc, unchanged from v1)", () => {
+  let h: Harness;
+
+  beforeEach(() => {
+    h = makeHarness();
+    seedHarnessCategories(h, ["Cafe"]);
+    h.mockListMovements.mockResolvedValue([
+      { id: "m1", ownerId, amount: 2500, currency: "ARS", category: "Cafe", note: "alquiler", occurredAt: new Date("2026-09-19T12:00:00Z"), createdAt: new Date(), type: "EXPENSE" },
+    ]);
+  });
+
+  /** Opens a delete pick (Phase 6 re-enters this via am:del; here the payload is seeded directly). */
+  async function openDeletePick(): Promise<void> {
+    const payload = {
+      action: "delete_expense",
+      candidates: [{ id: "m1", amount: 2500, note: "alquiler", date: "2026-09-19" }],
+    };
+    await h.botStateRepository.set({
+      ownerId,
+      state: "awaiting_movement_selection",
+      pendingMovementId: null,
+      pendingNote: JSON.stringify(payload),
+    });
+  }
+
+  it("a pick opens the confirmation gate and nothing is deleted yet", async () => {
+    await openDeletePick();
+    await h.service.handleCallback(callbackUpdate({ data: "dk:m1" }), h.reply);
+
+    const state = await h.botStateRepository.get(ownerId);
+    expect(state?.state).toBe("awaiting_delete_confirmation");
+    expect(h.mockDeleteExpense).not.toHaveBeenCalled();
+    expect(h.replies.at(-1)).toBe(deleteConfirmReply(2500, "alquiler", null));
+    const kb = h.keyboards.at(-1) as InlineKeyboard;
+    expect(kb[0]?.[0]?.text).toBe("❌ Cancelar");
+    expect(kb[0]?.[1]?.text).toBe("🗑 Borrar");
+  });
+
+  it("dc:ok deletes the persisted target and returns to the menu", async () => {
+    await openDeletePick();
+    await h.service.handleCallback(callbackUpdate({ data: "dk:m1" }), h.reply);
+
+    await h.service.handleCallback(callbackUpdate({ data: "dc:ok:m1" }), h.reply);
+
+    expect(h.mockDeleteExpense).toHaveBeenCalledWith("m1", ownerId);
+    expect(h.replies.at(-2)).toBe(deletedMovementReply(2500, "alquiler", null));
+    expect(h.replies.at(-1)).toBe(menuReply());
+  });
+
+  it("dc:no cancels without deleting and returns to the menu", async () => {
+    await openDeletePick();
+    await h.service.handleCallback(callbackUpdate({ data: "dk:m1" }), h.reply);
+
+    await h.service.handleCallback(callbackUpdate({ data: "dc:no:m1" }), h.reply);
+
+    expect(h.mockDeleteExpense).not.toHaveBeenCalled();
+    expect(h.replies.at(-2)).toBe(deleteCancelledReply());
+    expect(h.replies.at(-1)).toBe(menuReply());
+  });
+
+  it("a 404 on confirm replies movement missing", async () => {
+    h.mockDeleteExpense.mockRejectedValue(new NotFoundError("Expense m1 not found"));
+    await openDeletePick();
+    await h.service.handleCallback(callbackUpdate({ data: "dk:m1" }), h.reply);
+
+    await h.service.handleCallback(callbackUpdate({ data: "dc:ok:m1" }), h.reply);
+
+    expect(h.replies.at(-2)).toBe(movementMissingReply());
+  });
+});
+
+describe("TelegramService commands (v2 surface)", () => {
+  let h: Harness;
+
+  beforeEach(() => {
+    h = makeHarness();
+    seedHarnessCategories(h, ["Cafe", "Transporte"]);
+  });
+
+  it("the menu command abandons any pending flow and renders the eight-button menu", async () => {
+    await seedAwaitingCapture(h, "REAL");
+    h.mockSetState.mockClear();
+
+    await h.service.handleUpdate(textUpdate({ text: "menu", messageId: 2 }), h.reply);
+
+    const lastCall = h.mockSetState.mock.calls.at(-1)?.[0] as BotStateRecord;
+    expect(lastCall.state).toBe("idle");
+    expect(h.replies.at(-1)).toBe(menuReply());
+    const kb = h.keyboards.at(-1) as InlineKeyboard;
+    expect(kb.map((row) => row[0]?.text)).toEqual([
+      "➕ Nuevo gasto",
+      "📅 Gasto previsto",
+      "➕ Ingreso",
+      "👥 Compartido",
+      "🗂 Administrar categorías",
+      "🧾 Administrar gastos",
+      "📊 Reportes",
+      "❓ Ayuda",
+    ]);
+  });
+
+  it("/start renders the same eight-button menu", async () => {
+    await h.service.handleUpdate(textUpdate({ text: "/start", messageId: 1 }), h.reply);
+
+    const kb = h.keyboards.at(-1) as InlineKeyboard;
+    expect(kb).toHaveLength(8);
+  });
+
+  it("ayuda replies with the static help", async () => {
+    await h.service.handleUpdate(textUpdate({ text: "/ayuda", messageId: 1 }), h.reply);
+
+    expect(h.replies.at(-1)).toBe(ayudaReply());
+  });
+
+  it("ayuda replies with the static help offline (no brain, GROQ_API_KEY unset)", async () => {
+    const hNoBrain = makeHarness({ noBrain: true });
+    seedHarnessCategories(hNoBrain, ["Cafe"]);
+
+    await hNoBrain.service.handleUpdate(textUpdate({ text: "/ayuda", messageId: 1 }), hNoBrain.reply);
+
+    expect(hNoBrain.replies.at(-1)).toBe(ayudaReply());
+    expect(hNoBrain.replies.at(-1)).toContain("Nuevo gasto");
+    expect(hNoBrain.replies.at(-1)).not.toContain("previsto:");
+  });
+
+  it("lists the categories", async () => {
+    seedHarnessCategories(h, ["Cafe", "Transporte"]);
+
+    await h.service.handleUpdate(textUpdate({ text: "listar categorias", messageId: 1 }), h.reply);
+
+    expect(h.replies.at(-1)).toContain("Cafe");
+    expect(h.replies.at(-1)).toContain("Transporte");
+  });
+
+  it("configurar opens the setup question listing the existing categories", async () => {
+    seedHarnessCategories(h, ["Cafe", "Transporte"]);
+
+    await h.service.handleUpdate(textUpdate({ text: "/configurar_categorias", messageId: 1 }), h.reply);
+
+    expect(h.replies.at(-1)).toBe(setupQuestionReply(["Cafe", "Transporte"]));
+    const state = await h.botStateRepository.get(ownerId);
+    expect(state?.state).toBe("awaiting_setup");
+  });
+
+  it("defines a savings rule via the command", async () => {
+    await h.service.handleUpdate(textUpdate({ text: "registrar ahorro: entrenuts al 10%", messageId: 1 }), h.reply);
+
+    expect(h.mockDefineRule).toHaveBeenCalledWith(ownerId, "entrenuts", 10);
+    expect(h.replies.at(-1)).toContain("entrenuts");
+  });
+
+  it("rejects an out-of-range savings-rule percent", async () => {
+    await h.service.handleUpdate(textUpdate({ text: "registrar ahorro: entrenuts al 150%", messageId: 1 }), h.reply);
+
+    expect(h.mockDefineRule).not.toHaveBeenCalled();
+    expect(h.replies.at(-1)).toContain("0");
+  });
+});
+
+describe("TelegramService savings admin sub-menu (sa:*) and delete gate (svdel:*)", () => {
+  let h: Harness;
+
+  beforeEach(() => {
+    h = makeHarness();
+    seedHarnessCategories(h, ["Cafe"]);
+  });
+
+  it("sa:menu supersedes any pending flow and opens the three-action sub-menu", async () => {
+    await h.service.handleCallback(callbackUpdate({ data: "m:inc" }), h.reply);
+
+    await h.service.handleCallback(callbackUpdate({ data: "sa:menu" }), h.reply);
+
+    const state = await h.botStateRepository.get(ownerId);
+    expect(state?.state).toBe("idle");
+    expect(h.replies.at(-1)).toBe(savingsAdminReply());
+    const kb = h.keyboards.at(-1) as InlineKeyboard;
+    expect(kb.map((row) => row[0]?.callback_data)).toEqual(["sa:new", "sa:list", "sa:del"]);
+  });
+
+  it("sa:new enters awaiting_savings_rule with the syntax prompt", async () => {
+    await h.service.handleCallback(callbackUpdate({ data: "sa:new" }), h.reply);
+
+    const state = await h.botStateRepository.get(ownerId);
+    expect(state?.state).toBe("awaiting_savings_rule");
+    expect(h.replies.at(-1)).toBe(savingsRulePromptReply());
+  });
+
+  it("sa:list replies the owner's rules and returns to the menu", async () => {
+    h.mockListRules.mockResolvedValue([
+      { id: "r1", ownerId, keyword: "entrenuts", percent: 10, createdAt: new Date() },
+      { id: "r2", ownerId, keyword: "sueldo", percent: 5, createdAt: new Date() },
+    ]);
+
+    await h.service.handleCallback(callbackUpdate({ data: "sa:list" }), h.reply);
+
+    expect(h.mockListRules).toHaveBeenCalledWith(ownerId);
+    expect(h.replies.at(-2)).toBe(savingsRulesListReply([
+      { keyword: "entrenuts", percent: 10 },
+      { keyword: "sueldo", percent: 5 },
+    ]));
+    expect(h.replies.at(-1)).toBe(menuReply());
+  });
+
+  it("sa:del with no rules replies the empty list and returns to the menu", async () => {
+    h.mockListRules.mockResolvedValue([]);
+
+    await h.service.handleCallback(callbackUpdate({ data: "sa:del" }), h.reply);
+
+    expect(h.replies.at(-2)).toBe(savingsRulesListReply([]));
+    expect(h.replies.at(-1)).toBe(menuReply());
+  });
+
+  it("sa:del renders the rules as pick buttons sa:dl:<id>", async () => {
+    h.mockListRules.mockResolvedValue([
+      { id: "rule-abc", ownerId, keyword: "entrenuts", percent: 10, createdAt: new Date() },
+    ]);
+
+    await h.service.handleCallback(callbackUpdate({ data: "sa:del" }), h.reply);
+
+    expect(h.replies.at(-1)).toBe(savingsRuleDeletePickReply([{ keyword: "entrenuts", percent: 10 }]));
+    const kb = h.keyboards.at(-1) as InlineKeyboard;
+    expect(kb[0]?.[0]?.callback_data).toBe("sa:dl:rule-abc");
+  });
+
+  it("sa:dl:<id> enters awaiting_savings_delete with the rule persisted and shows the confirm gate", async () => {
+    h.mockListRules.mockResolvedValue([
+      { id: "rule-abc", ownerId, keyword: "entrenuts", percent: 10, createdAt: new Date() },
+    ]);
+
+    await h.service.handleCallback(callbackUpdate({ data: "sa:dl:rule-abc" }), h.reply);
+
+    const state = await h.botStateRepository.get(ownerId);
+    expect(state?.state).toBe("awaiting_savings_delete");
+    const payload = savingsRuleDeletePayloadSchema.parse(JSON.parse(state?.pendingNote ?? "{}"));
+    expect(payload.rule).toMatchObject({ id: "rule-abc", keyword: "entrenuts", percent: 10 });
+    expect(h.replies.at(-1)).toBe(savingsRuleDeleteConfirmReply("entrenuts", 10));
+    const kb = h.keyboards.at(-1) as InlineKeyboard;
+    expect(kb[0]?.map((button) => button.callback_data)).toEqual(["svdel:no:rule-abc", "svdel:ok:rule-abc"]);
+  });
+
+  it("a stale sa:dl pick of a deleted rule replies gone (stateless pick)", async () => {
+    h.mockListRules.mockResolvedValue([]);
+
+    await h.service.handleCallback(callbackUpdate({ data: "sa:dl:rule-gone" }), h.reply);
+
+    expect(h.replies.at(-1)).toBe(savingsRuleGoneReply());
+    expect(h.replies.at(-1)).not.toBe(menuReply());
+  });
+
+  it("svdel:ok deletes the persisted rule (idle first), confirms and returns to the menu", async () => {
+    h.mockListRules.mockResolvedValue([
+      { id: "rule-abc", ownerId, keyword: "entrenuts", percent: 10, createdAt: new Date() },
+    ]);
+    h.mockDeleteRule.mockResolvedValue({ id: "rule-abc", ownerId, keyword: "entrenuts", percent: 10, createdAt: new Date() });
+    await h.service.handleCallback(callbackUpdate({ data: "sa:dl:rule-abc" }), h.reply);
+
+    await h.service.handleCallback(callbackUpdate({ data: "svdel:ok:rule-abc" }), h.reply);
+
+    expect(h.mockDeleteRule).toHaveBeenCalledWith(ownerId, "entrenuts");
+    const state = await h.botStateRepository.get(ownerId);
+    expect(state?.state).toBe("idle");
+    expect(h.replies.at(-2)).toBe(savingsRuleDeletedReply("entrenuts"));
+    expect(h.replies.at(-1)).toBe(menuReply());
+  });
+
+  it("svdel:ok on a rule deleted meanwhile replies missing and returns to the menu", async () => {
+    h.mockListRules.mockResolvedValue([
+      { id: "rule-abc", ownerId, keyword: "entrenuts", percent: 10, createdAt: new Date() },
+    ]);
+    h.mockDeleteRule.mockResolvedValue(null);
+    await h.service.handleCallback(callbackUpdate({ data: "sa:dl:rule-abc" }), h.reply);
+
+    await h.service.handleCallback(callbackUpdate({ data: "svdel:ok:rule-abc" }), h.reply);
+
+    expect(h.mockDeleteRule).toHaveBeenCalledWith(ownerId, "entrenuts");
+    expect(h.replies.at(-2)).toBe(savingsRuleMissingReply("entrenuts"));
+    expect(h.replies.at(-1)).toBe(menuReply());
+  });
+
+  it("svdel:no cancels (idle, nothing deleted) and returns to the menu", async () => {
+    h.mockListRules.mockResolvedValue([
+      { id: "rule-abc", ownerId, keyword: "entrenuts", percent: 10, createdAt: new Date() },
+    ]);
+    await h.service.handleCallback(callbackUpdate({ data: "sa:dl:rule-abc" }), h.reply);
+
+    await h.service.handleCallback(callbackUpdate({ data: "svdel:no:rule-abc" }), h.reply);
+
+    expect(h.mockDeleteRule).not.toHaveBeenCalled();
+    const state = await h.botStateRepository.get(ownerId);
+    expect(state?.state).toBe("idle");
+    expect(h.replies.at(-2)).toBe(deleteCancelledReply());
+    expect(h.replies.at(-1)).toBe(menuReply());
+  });
+
+  it("gates svdel by state+rule id: a mismatched confirm replies already processed", async () => {
+    h.mockListRules.mockResolvedValue([
+      { id: "rule-abc", ownerId, keyword: "entrenuts", percent: 10, createdAt: new Date() },
+    ]);
+    await h.service.handleCallback(callbackUpdate({ data: "sa:dl:rule-abc" }), h.reply);
+
+    await h.service.handleCallback(callbackUpdate({ data: "svdel:ok:rule-other" }), h.reply);
+
+    expect(h.mockDeleteRule).not.toHaveBeenCalled();
+    expect(h.replies.at(-1)).toBe(alreadyProcessedReply());
+  });
+
+  it("a savings command during awaiting_savings_rule closes the state, executes and appends the menu", async () => {
+    await h.service.handleCallback(callbackUpdate({ data: "sa:new" }), h.reply);
+
+    await h.service.handleUpdate(textUpdate({ text: "registrar ahorro: entrenuts al 10%", messageId: 2 }), h.reply);
+
+    expect(h.mockDefineRule).toHaveBeenCalledWith(ownerId, "entrenuts", 10);
+    const state = await h.botStateRepository.get(ownerId);
+    expect(state?.state).toBe("idle");
+    expect(h.replies.at(-2)).toBe(savingsRuleDefinedReply("entrenuts", 10));
+    expect(h.replies.at(-1)).toBe(menuReply());
+  });
+
+  it("non-command text during awaiting_savings_rule re-prompts and keeps the state", async () => {
+    await h.service.handleCallback(callbackUpdate({ data: "sa:new" }), h.reply);
+
+    await h.service.handleUpdate(textUpdate({ text: "entrenuts 10", messageId: 2 }), h.reply);
+
+    const state = await h.botStateRepository.get(ownerId);
+    expect(state?.state).toBe("awaiting_savings_rule");
+    expect(h.replies.at(-1)).toBe(savingsRulePromptReply());
+  });
+
+  it("an invalid-percent command during awaiting_savings_rule closes the state with the invalid reply and the menu", async () => {
+    await h.service.handleCallback(callbackUpdate({ data: "sa:new" }), h.reply);
+
+    await h.service.handleUpdate(textUpdate({ text: "registrar ahorro: entrenuts al 0%", messageId: 2 }), h.reply);
+
+    expect(h.mockDefineRule).not.toHaveBeenCalled();
+    const state = await h.botStateRepository.get(ownerId);
+    expect(state?.state).toBe("idle");
+    expect(h.replies.at(-2)).toBe(savingsRuleInvalidReply());
+    expect(h.replies.at(-1)).toBe(menuReply());
+  });
+
+  it("a savings command during awaiting_savings_percent closes the state and appends the menu", async () => {
+    await h.service.handleCallback(callbackUpdate({ data: "m:inc" }), h.reply);
+    await h.service.handleUpdate(textUpdate({ text: "cobro sueldo 1000", messageId: 2 }), h.reply);
+    const state = await h.botStateRepository.get(ownerId);
+    const payload = previewPayloadSchema.parse(JSON.parse(state?.pendingNote ?? "{}"));
+    await h.service.handleCallback(callbackUpdate({ data: "cat:c0" }), h.reply);
+    await h.service.handleCallback(callbackUpdate({ data: `sv:other:${payload.saveToken}` }), h.reply);
+
+    await h.service.handleUpdate(textUpdate({ text: "listar ahorros", messageId: 3 }), h.reply);
+
+    expect(h.mockListRules).toHaveBeenCalledWith(ownerId);
+    const after = await h.botStateRepository.get(ownerId);
+    expect(after?.state).toBe("idle");
+    expect(h.replies.at(-2)).toBe(savingsRulesListReply([]));
+    expect(h.replies.at(-1)).toBe(menuReply());
+  });
+
+  it("borrar ahorro: <palabra> deletes the rule with the confirmation and no menu from idle", async () => {
+    h.mockDeleteRule.mockResolvedValue({ id: "r1", ownerId, keyword: "entrenuts", percent: 10, createdAt: new Date() });
+
+    await h.service.handleUpdate(textUpdate({ text: "borrar ahorro: entrenuts", messageId: 1 }), h.reply);
+
+    expect(h.mockDeleteRule).toHaveBeenCalledWith(ownerId, "entrenuts");
+    expect(h.replies.at(-1)).toBe(savingsRuleDeletedReply("entrenuts"));
+  });
+});
+
+describe("TelegramService expense admin chains (am:*)", () => {
+  let h: Harness;
+
+  beforeEach(() => {
+    h = makeHarness();
+    seedHarnessCategories(h, ["Cafe", "Transporte"]);
+    h.mockListMovements.mockResolvedValue([
+      { id: "m1", ownerId, amount: 2500, currency: "ARS", category: "Cafe", note: "alquiler", occurredAt: new Date("2026-09-19T12:00:00Z"), createdAt: new Date(), type: "EXPENSE", status: "PAID" },
+      { id: "m2", ownerId, amount: 3000, currency: "ARS", category: "Cafe", note: "gym", occurredAt: new Date("2026-09-18T12:00:00Z"), createdAt: new Date(), type: "EXPENSE", status: "PENDING" },
+    ]);
+  });
+
+  it("am:del renders the delete window as dk buttons and persists the pick payload", async () => {
+    await h.service.handleCallback(callbackUpdate({ data: "am:del" }), h.reply);
+
+    const state = await h.botStateRepository.get(ownerId);
+    expect(state?.state).toBe("awaiting_movement_selection");
+    const payload = JSON.parse(state?.pendingNote ?? "{}") as { action: string };
+    expect(payload.action).toBe("delete_expense");
+    const kb = h.keyboards.at(-1) as InlineKeyboard;
+    expect(kb[0]?.[0]?.text).toContain("2026-09-19");
+    expect(kb[0]?.[0]?.callback_data).toBe("dk:m1");
+  });
+
+  it("am:del with an empty window replies clearly and returns to the menu", async () => {
+    h.mockListMovements.mockResolvedValue([]);
+
+    await h.service.handleCallback(callbackUpdate({ data: "am:del" }), h.reply);
+
+    expect(h.replies.at(-2)).toBe(nothingToDeleteReply());
+    expect(h.replies.at(-1)).toBe(menuReply());
+  });
+
+  it("am:cor renders the correction window as mc buttons (PENDING excluded)", async () => {
+    await h.service.handleCallback(callbackUpdate({ data: "am:cor" }), h.reply);
+
+    const state = await h.botStateRepository.get(ownerId);
+    const payload = JSON.parse(state?.pendingNote ?? "{}") as { action: string; candidates: { id: string }[] };
+    expect(payload.action).toBe("correct_category");
+    // Only the PAID row appears in the correction window (PENDING excluded).
+    expect(payload.candidates.map((candidate) => candidate.id)).toEqual(["m1"]);
+    const kb = h.keyboards.at(-1) as InlineKeyboard;
+    expect(kb[0]?.[0]?.callback_data).toBe("mc:m1");
+  });
+
+  it("am:cor with no correctable movements replies clearly and returns to the menu", async () => {
+    h.mockListMovements.mockResolvedValue([
+      { id: "m2", ownerId, amount: 3000, currency: "ARS", category: "Cafe", note: "gym", occurredAt: new Date("2026-09-18T12:00:00Z"), createdAt: new Date(), type: "EXPENSE", status: "PENDING" },
+    ]);
+
+    await h.service.handleCallback(callbackUpdate({ data: "am:cor" }), h.reply);
+
+    expect(h.replies.at(-2)).toBe(correctionEmptyReply());
+    expect(h.replies.at(-1)).toBe(menuReply());
+  });
+
+  it("am:pay renders the PENDING window as mp buttons", async () => {
+    await h.service.handleCallback(callbackUpdate({ data: "am:pay" }), h.reply);
+
+    const state = await h.botStateRepository.get(ownerId);
+    const payload = JSON.parse(state?.pendingNote ?? "{}") as { action: string; candidates: { id: string }[] };
+    expect(payload.action).toBe("mark_paid");
+    expect(payload.candidates.map((candidate) => candidate.id)).toEqual(["m2"]);
+    const kb = h.keyboards.at(-1) as InlineKeyboard;
+    expect(kb[0]?.[0]?.callback_data).toBe("mp:m2");
+  });
+
+  it("movement pick lists paginate at 7 rows per page with cp: navigation (design D9)", async () => {
+    const rows = Array.from({ length: 12 }, (_, index) => ({
+      id: `m${index}`,
+      ownerId,
+      amount: 100 + index,
+      currency: "ARS",
+      category: "Cafe",
+      note: null,
+      occurredAt: new Date(Date.UTC(2026, 8, 19, 12) - index * 60_000),
+      createdAt: new Date(),
+      type: "EXPENSE" as const,
+      status: "PAID" as const,
+    }));
+    h.mockListMovements.mockResolvedValue(rows);
+
+    await h.service.handleCallback(callbackUpdate({ data: "am:del" }), h.reply);
+
+    const kb = h.keyboards.at(-1) as InlineKeyboard;
+    // 7 candidate rows + 1 nav row = 8 rows ≤ 8.
+    expect(kb).toHaveLength(8);
+    expect(kb[7]?.[0]?.callback_data).toBe("cp:0");
+    expect(kb[7]?.[2]?.callback_data).toBe("cp:1");
+  });
+});
+
+describe("TelegramService correction chain (mc → cc)", () => {
+  let h: Harness;
+
+  beforeEach(() => {
+    h = makeHarness();
+    seedHarnessCategories(h, ["Cafe", "Transporte"]);
+    h.mockListMovements.mockResolvedValue([
+      { id: "m1", ownerId, amount: 2500, currency: "ARS", category: "Cafe", note: "alquiler", occurredAt: new Date("2026-09-19T12:00:00Z"), createdAt: new Date(), type: "EXPENSE", status: "PAID" },
+    ]);
+  });
+
+  async function openCorrectionPick(): Promise<void> {
+    await h.service.handleCallback(callbackUpdate({ data: "am:cor" }), h.reply);
+  }
+
+  it("mc:<id> enters awaiting_category_selection and renders the cc category row", async () => {
+    await openCorrectionPick();
+
+    await h.service.handleCallback(callbackUpdate({ data: "mc:m1" }), h.reply);
+
+    const state = await h.botStateRepository.get(ownerId);
+    expect(state?.state).toBe("awaiting_category_selection");
+    const payload = JSON.parse(state?.pendingNote ?? "{}") as { movement: { id: string } };
+    expect(payload.movement.id).toBe("m1");
+    const kb = h.keyboards.at(-1) as InlineKeyboard;
+    expect(kb.map((row) => row[0]?.callback_data)).toEqual(["cc:c0", "cc:c1"]);
+  });
+
+  it("cc:<catId> reassigns via updateMovement and returns to the menu", async () => {
+    await openCorrectionPick();
+    await h.service.handleCallback(callbackUpdate({ data: "mc:m1" }), h.reply);
+
+    await h.service.handleCallback(callbackUpdate({ data: "cc:c0" }), h.reply);
+
+    expect(h.mockUpdateMovement).toHaveBeenCalledWith(ownerId, "m1", { category: "Cafe" });
+    expect(h.replies.at(-2)).toBe(movementCorrectionDoneReply("Cafe", 2500, "alquiler"));
+    expect(h.replies.at(-1)).toBe(menuReply());
+    const state = await h.botStateRepository.get(ownerId);
+    expect(state?.state).toBe("idle");
+  });
+
+  it("mc on a stale/closed pick replies already processed", async () => {
+    await h.service.handleCallback(callbackUpdate({ data: "mc:m1" }), h.reply);
+
+    expect(h.replies.at(-1)).toBe(alreadyProcessedReply());
+  });
+});
+
+describe("TelegramService mark-paid chain (mp)", () => {
+  let h: Harness;
+
+  beforeEach(() => {
+    h = makeHarness();
+    seedHarnessCategories(h, ["Cafe"]);
+    h.mockListMovements.mockResolvedValue([
+      { id: "m2", ownerId, amount: 3000, currency: "ARS", category: "Cafe", note: "gym", occurredAt: new Date("2026-09-18T12:00:00Z"), createdAt: new Date(), type: "EXPENSE", status: "PENDING" },
+    ]);
+  });
+
+  it("mp:<id> marks the picked PENDING expense paid and returns to the menu", async () => {
+    await h.service.handleCallback(callbackUpdate({ data: "am:pay" }), h.reply);
+
+    await h.service.handleCallback(callbackUpdate({ data: "mp:m2" }), h.reply);
+
+    expect(h.mockMarkMovementPaid).toHaveBeenCalledWith(ownerId, "m2");
+    expect(h.replies.at(-2)).toBe(markPaidReply(3000, "gym", null));
+    expect(h.replies.at(-1)).toBe(menuReply());
+    const state = await h.botStateRepository.get(ownerId);
+    expect(state?.state).toBe("idle");
+  });
+
+  it("an already-PAID pick replies the 409 conflict notice", async () => {
+    h.mockMarkMovementPaid.mockRejectedValue(new ConflictError("Movement m2 is not a PENDING EXPENSE"));
+    await h.service.handleCallback(callbackUpdate({ data: "am:pay" }), h.reply);
+
+    await h.service.handleCallback(callbackUpdate({ data: "mp:m2" }), h.reply);
+
+    expect(h.replies.at(-2)).toBe(markPaidAlreadyReply());
+    expect(h.replies.at(-1)).toBe(menuReply());
+  });
+});
+
+describe("TelegramService category admin chains (ac:*)", () => {
+  let h: Harness;
+
+  beforeEach(() => {
+    h = makeHarness();
+    seedHarnessCategories(h, ["Cafe", "otro", "Transporte"]);
+  });
+
+  it("ac:new prompts for a name and creates the category through the guarded service", async () => {
+    await h.service.handleCallback(callbackUpdate({ data: "ac:new" }), h.reply);
+
+    const state = await h.botStateRepository.get(ownerId);
+    expect(state?.state).toBe("awaiting_category_name");
+    expect(h.replies.at(-1)).toBe(categoryNamePromptReply("admin_create"));
+
+    await h.service.handleUpdate(textUpdate({ text: "Gimnasio", messageId: 2 }), h.reply);
+
+    expect(h.mockCreateCategory).toHaveBeenCalledWith(ownerId, "Gimnasio");
+    expect(h.replies.at(-2)).toBe(categoryCreatedReply("Gimnasio"));
+    expect(h.replies.at(-1)).toBe(menuReply());
+  });
+
+  it("ac:ren renders only NORMAL categories (no otro/ahorro) as ac:rn picks", async () => {
+    await h.service.handleCallback(callbackUpdate({ data: "ac:ren" }), h.reply);
+
+    const kb = h.keyboards.at(-1) as InlineKeyboard;
+    const buttons = kb.map((row) => row[0]?.text);
+    expect(buttons).toEqual(["Cafe", "Transporte"]);
+    expect(buttons).not.toContain("otro");
+    expect(kb[0]?.[0]?.callback_data).toBe("ac:rn:c0");
+  });
+
+  it("ac:rn:<id> prompts for the new name and renames with the cascade", async () => {
+    await h.service.handleCallback(callbackUpdate({ data: "ac:rn:c0" }), h.reply);
+
+    const state = await h.botStateRepository.get(ownerId);
+    expect(state?.state).toBe("awaiting_category_name");
+    expect(h.replies.at(-1)).toBe(categoryNamePromptReply("admin_rename"));
+
+    await h.service.handleUpdate(textUpdate({ text: "Cafeteria", messageId: 2 }), h.reply);
+
+    expect(h.mockRenameCategory).toHaveBeenCalledWith(ownerId, "Cafe", "Cafeteria");
+    expect(h.replies.at(-2)).toBe(categoryRenamedReply("Cafe", "Cafeteria"));
+    expect(h.replies.at(-1)).toBe(menuReply());
+  });
+
+  it("ac:del renders ac:dl picks; the confirm deletes through the guarded service", async () => {
+    await h.service.handleCallback(callbackUpdate({ data: "ac:del" }), h.reply);
+
+    const kb = h.keyboards.at(-1) as InlineKeyboard;
+    expect(kb[0]?.[0]?.callback_data).toBe("ac:dl:c0");
+
+    await h.service.handleCallback(callbackUpdate({ data: "ac:dl:c0" }), h.reply);
+
+    expect(h.replies.at(-1)).toBe(categoryDeleteConfirmReply("Cafe"));
+    const confirmKb = h.keyboards.at(-1) as InlineKeyboard;
+    expect(confirmKb[0]?.[0]?.callback_data).toBe("ac:no:c0");
+    expect(confirmKb[0]?.[1]?.callback_data).toBe("ac:ok:c0");
+
+    await h.service.handleCallback(callbackUpdate({ data: "ac:ok:c0" }), h.reply);
+
+    expect(h.mockDeleteCategory).toHaveBeenCalledWith(ownerId, "Cafe");
+    expect(h.replies.at(-2)).toBe(categoryDeletedReply("Cafe"));
+    expect(h.replies.at(-1)).toBe(menuReply());
+  });
+
+  it("ac:no cancels the category delete and returns to the menu", async () => {
+    await h.service.handleCallback(callbackUpdate({ data: "ac:del" }), h.reply);
+    await h.service.handleCallback(callbackUpdate({ data: "ac:dl:c0" }), h.reply);
+
+    await h.service.handleCallback(callbackUpdate({ data: "ac:no:c0" }), h.reply);
+
+    expect(h.mockDeleteCategory).not.toHaveBeenCalled();
+    expect(h.replies.at(-2)).toBe(deleteCancelledReply());
+    expect(h.replies.at(-1)).toBe(menuReply());
+  });
+
+  it("a stale ac:ok after the category disappeared replies the honest gone notice", async () => {
+    await h.service.handleCallback(callbackUpdate({ data: "ac:del" }), h.reply);
+    h.mockListCategories.mockResolvedValue([]);
+
+    await h.service.handleCallback(callbackUpdate({ data: "ac:ok:c0" }), h.reply);
+
+    expect(h.mockDeleteCategory).not.toHaveBeenCalled();
+    expect(h.replies.at(-2)).toBe(categoryGoneReply());
+    expect(h.replies.at(-1)).toBe(menuReply());
+  });
+});
+
+describe("TelegramService reports sub-menu (rep:*)", () => {
+  let h: Harness;
+
+  beforeEach(() => {
+    h = makeHarness();
+    seedHarnessCategories(h, ["Cafe"]);
+  });
+
+  it.each([
+    ["rep:recent", "recent", "Todavía no tenés movimientos"],
+    ["rep:balance", "balance", "balance"],
+    ["rep:month", "month", "En "],
+    ["rep:savings", "savings", "ahorraste"],
+    ["rep:planned", "planned", "pendientes"],
+  ] as const)("%s answers from the executed %s query and returns to the menu", async (data, _type, expected) => {
+    await h.service.handleCallback(callbackUpdate({ data }), h.reply);
+
+    expect(h.replies.at(-2)).toContain(expected);
+    expect(h.replies.at(-1)).toBe(menuReply());
+  });
+
+  it("free text after opening the reports sub-menu is answered from real data", async () => {
+    await h.service.handleCallback(callbackUpdate({ data: "m:rep" }), h.reply);
+    h.mockBrainInterpret.mockResolvedValue({ intent: "query", amount: null, note: null, query_type: "savings" } satisfies ConversationEnvelope);
+
+    await h.service.handleUpdate(textUpdate({ text: "cuánto ahorré este mes", messageId: 2 }), h.reply);
+
+    expect(h.replies.at(-2)).toContain("ahorraste");
+    expect(h.replies.at(-1)).toBe(menuReply());
+  });
+});
+
+describe("TelegramService command supersession (menu/start abandon ANY flow)", () => {
+  let h: Harness;
+
+  beforeEach(() => {
+    h = makeHarness();
+    seedHarnessCategories(h, ["Cafe"]);
+  });
+
+  async function seedPendingState(state: string): Promise<void> {
+    switch (state) {
+      case "awaiting_capture":
+        await seedAwaitingCapture(h, "REAL");
+        return;
+      case "awaiting_preview":
+        await seedAwaitingCapture(h, "REAL");
+        await h.service.handleUpdate(textUpdate({ text: "30000 gym", messageId: 2 }), h.reply);
+        return;
+      case "awaiting_category_name": {
+        await seedAwaitingCapture(h, "REAL");
+        await h.service.handleUpdate(textUpdate({ text: "30000 gym", messageId: 2 }), h.reply);
+        const state = await h.botStateRepository.get(ownerId);
+        const payload = previewPayloadSchema.parse(JSON.parse(state?.pendingNote ?? "{}"));
+        await h.service.handleCallback(callbackUpdate({ data: `pv:catnew:${payload.saveToken}` }), h.reply);
+        return;
+      }
+      case "awaiting_movement_selection": {
+        const payload = {
+          action: "delete_expense",
+          candidates: [{ id: "m1", amount: 2500, note: "alquiler", date: "2026-09-19" }],
+        };
+        await h.botStateRepository.set({
+          ownerId,
+          state: "awaiting_movement_selection",
+          pendingMovementId: null,
+          pendingNote: JSON.stringify(payload),
+        });
+        return;
+      }
+      case "awaiting_delete_confirmation": {
+        const payload = {
+          action: "delete_expense",
+          candidates: [{ id: "m1", amount: 2500, note: "alquiler", date: "2026-09-19" }],
+        };
+        await h.botStateRepository.set({
+          ownerId,
+          state: "awaiting_movement_selection",
+          pendingMovementId: null,
+          pendingNote: JSON.stringify(payload),
+        });
+        await h.service.handleCallback(callbackUpdate({ data: "dk:m1" }), h.reply);
+        return;
+      }
+    }
+  }
+
+  it.each([
+    "awaiting_capture",
+    "awaiting_preview",
+    "awaiting_category_name",
+    "awaiting_movement_selection",
+    "awaiting_delete_confirmation",
+  ] as const)("the menu command supersedes %s and renders the eight-button menu", async (state) => {
+    await seedPendingState(state);
+    h.mockSetState.mockClear();
+
+    await h.service.handleUpdate(textUpdate({ text: "menu", messageId: 9 }), h.reply);
+
+    const lastCall = h.mockSetState.mock.calls.at(-1)?.[0] as BotStateRecord;
+    expect(lastCall.state).toBe("idle");
+    expect(lastCall.pendingNote).toBeNull();
+    expect(h.replies.at(-1)).toBe(menuReply());
+    const kb = h.keyboards.at(-1) as InlineKeyboard;
+    expect(kb).toHaveLength(8);
+  });
+
+  it("the start command supersedes the delete gate without deleting anything", async () => {
+    await seedPendingState("awaiting_delete_confirmation");
+    h.mockDeleteExpense.mockClear();
+
+    await h.service.handleUpdate(textUpdate({ text: "/start", messageId: 9 }), h.reply);
+
+    expect(h.mockDeleteExpense).not.toHaveBeenCalled();
+    const state = await h.botStateRepository.get(ownerId);
+    expect(state?.state).toBe("idle");
+    const kb = h.keyboards.at(-1) as InlineKeyboard;
+    expect(kb).toHaveLength(8);
+  });
+});
+
+describe("TelegramService setup flow (awaiting_setup)", () => {
+  let h: Harness;
+
+  beforeEach(() => {
+    h = makeHarness();
+  });
+
+  it("creates the listed categories and returns to idle", async () => {
+    h.mockListCategories.mockResolvedValue([]);
+    await h.service.handleUpdate(textUpdate({ text: "$2500 cafe", messageId: 1 }), h.reply);
+    expect(h.mockSetState.mock.calls.at(-1)?.[0].state).toBe("awaiting_setup");
+
     await h.service.handleUpdate(textUpdate({ text: "Cafe\nTransporte", messageId: 2 }), h.reply);
 
     expect(h.mockCreateCategory).toHaveBeenCalledWith(ownerId, "Cafe");
     expect(h.mockCreateCategory).toHaveBeenCalledWith(ownerId, "Transporte");
-    expect(h.mockEnsureOtro).toHaveBeenCalledWith(ownerId);
-    expect(h.mockSetState).toHaveBeenLastCalledWith({
-      ownerId,
-      state: "idle",
-      pendingMovementId: null,
-      pendingNote: null,
-    });
-    expect(h.replies.at(-1)).toContain("Cafe");
+    // v2: setup never creates the legacy "otro" row (spec movement-categories
+    // "Setup creates no otro for new owners").
+    expect(h.mockEnsureOtro).not.toHaveBeenCalled();
+    const lastCall = h.mockSetState.mock.calls.at(-1)?.[0] as BotStateRecord;
+    expect(lastCall.state).toBe("idle");
+    expect(h.replies.at(-1)).not.toContain("otro");
   });
 
-  it("accepts comma-separated setup replies", async () => {
+  it("executes a batch delete command without creating a literal", async () => {
+    h.mockListCategories.mockResolvedValue([]);
     await h.service.handleUpdate(textUpdate({ text: "$2500 cafe", messageId: 1 }), h.reply);
-    await h.service.handleUpdate(textUpdate({ text: "Cafe, Transporte", messageId: 2 }), h.reply);
 
-    expect(h.mockCreateCategory).toHaveBeenCalledWith(ownerId, "Cafe");
-    expect(h.mockCreateCategory).toHaveBeenCalledWith(ownerId, "Transporte");
-    expect(h.mockEnsureOtro).toHaveBeenCalledWith(ownerId);
-  });
+    await h.service.handleUpdate(textUpdate({ text: "borrar categoria: no", messageId: 2 }), h.reply);
 
-  it("dedupes setup names by normalized value", async () => {
-    await h.service.handleUpdate(textUpdate({ text: "$2500 cafe", messageId: 1 }), h.reply);
-    await h.service.handleUpdate(textUpdate({ text: "Cafe\ncafé", messageId: 2 }), h.reply);
-
-    expect(h.mockCreateCategory).toHaveBeenCalledTimes(1);
-    expect(h.mockCreateCategory).toHaveBeenCalledWith(ownerId, "Cafe");
-  });
-
-  it("re-asks and stays in awaiting_setup when the setup reply has no names", async () => {
-    await h.service.handleUpdate(textUpdate({ text: "$2500 cafe", messageId: 1 }), h.reply);
-    const before = h.replies.length;
-    await h.service.handleUpdate(textUpdate({ text: "   ,  ", messageId: 2 }), h.reply);
-
+    expect(h.mockDeleteCategory).toHaveBeenCalledWith(ownerId, "no");
     expect(h.mockCreateCategory).not.toHaveBeenCalled();
-    expect(h.mockSetState).toHaveBeenLastCalledWith({
-      ownerId,
-      state: "awaiting_setup",
-      pendingMovementId: null,
-      pendingNote: null,
-    });
-    expect(h.replies.length).toBeGreaterThan(before);
-  });
-
-  it("skips categories that already exist during setup (append semantics)", async () => {
-    h.mockListCategories
-      .mockResolvedValueOnce([])
-      .mockResolvedValue([
-        { id: "c1", ownerId, name: "Cafe", createdAt: new Date(), keywords: [] },
-      ]);
-    await h.service.handleUpdate(textUpdate({ text: "$2500 cafe", messageId: 1 }), h.reply);
-    await h.service.handleUpdate(textUpdate({ text: "Cafe\nSalud", messageId: 2 }), h.reply);
-
-    expect(h.mockCreateCategory).toHaveBeenCalledTimes(1);
-    expect(h.mockCreateCategory).toHaveBeenCalledWith(ownerId, "Salud");
-    expect(h.mockEnsureOtro).toHaveBeenCalledWith(ownerId);
-  });
-
-  it("handles 'configurar categorias' by entering awaiting_setup without removing existing categories", async () => {
-    h.mockListCategories.mockResolvedValue([
-      { id: "c1", ownerId, name: "Cafe", createdAt: new Date(), keywords: [] },
-    ]);
-
-    await h.service.handleUpdate(textUpdate({ text: "configurar categorias", messageId: 1 }), h.reply);
-
-    expect(h.mockSetState).toHaveBeenCalledWith({
-      ownerId,
-      state: "awaiting_setup",
-      pendingMovementId: null,
-      pendingNote: null,
-    });
-    expect(h.replies.at(-1)).toContain("categorías");
-
-    await h.service.handleUpdate(textUpdate({ text: "Salud", messageId: 2 }), h.reply);
-    expect(h.mockCreateCategory).toHaveBeenCalledWith(ownerId, "Salud");
-    expect(h.mockCreateCategory).not.toHaveBeenCalledWith(ownerId, "Cafe");
-    expect(h.mockSetState).toHaveBeenLastCalledWith({
-      ownerId,
-      state: "idle",
-      pendingMovementId: null,
-      pendingNote: null,
-    });
-  });
-
-  it("creates the movement with 'otro' and enters awaiting_category when nothing matches", async () => {
-    h.mockListCategories.mockResolvedValue([
-      { id: "c1", ownerId, name: "otro", createdAt: new Date(), keywords: [] },
-    ]);
-
-    await h.service.handleUpdate(textUpdate({ text: "$2000 supermercado", messageId: 9 }), h.reply);
-
-    expect(h.mockCreateExpense).toHaveBeenCalledWith(
-      expect.objectContaining({ amount: 2000, category: "otro", type: "EXPENSE" }),
-      ownerId,
-    );
-    expect(h.mockSetState).toHaveBeenLastCalledWith({
-      ownerId,
-      state: "awaiting_category",
-      pendingMovementId: "mov-1",
-      pendingNote: "$ supermercado",
-    });
-    expect(h.replies.at(-1)).toContain("supermercado");
-  });
-
-  it("answers a correction by reassigning the pending movement and learning the note's first word", async () => {
-    h.mockListCategories.mockResolvedValue([
-      { id: "c1", ownerId, name: "otro", createdAt: new Date(), keywords: [] },
-      { id: "c2", ownerId, name: "Transporte", createdAt: new Date(), keywords: [] },
-    ]);
-
-    await h.service.handleUpdate(textUpdate({ text: "$1200 uber viaje", messageId: 9 }), h.reply);
-    await h.service.handleUpdate(textUpdate({ text: "Transporte", messageId: 10 }), h.reply);
-
-    expect(h.mockUpdateMovement).toHaveBeenCalledWith(ownerId, "mov-1", { category: "Transporte" });
-    expect(h.mockAssociateKeyword).toHaveBeenCalledWith(ownerId, "uber", "Transporte");
-    expect(h.mockSetState).toHaveBeenLastCalledWith({
-      ownerId,
-      state: "idle",
-      pendingMovementId: null,
-      pendingNote: null,
-    });
-  });
-
-  it("auto-creates an unknown single-word answer category and applies it (D6 rule 3)", async () => {
-    h.mockListCategories.mockResolvedValue([
-      { id: "c1", ownerId, name: "otro", createdAt: new Date(), keywords: [] },
-    ]);
-    h.mockCreateCategory.mockResolvedValue({
-      id: "cat-Mascotas",
-      ownerId,
-      name: "Mascotas",
-      createdAt: new Date(),
-    });
-
-    await h.service.handleUpdate(textUpdate({ text: "$8000 veterinaria", messageId: 9 }), h.reply);
-    await h.service.handleUpdate(textUpdate({ text: "Mascotas", messageId: 10 }), h.reply);
-
-    expect(h.mockCreateCategory).toHaveBeenCalledWith(ownerId, "Mascotas");
-    expect(h.mockUpdateMovement).toHaveBeenCalledWith(ownerId, "mov-1", { category: "Mascotas" });
-    expect(h.mockAssociateKeyword).toHaveBeenCalledWith(ownerId, "veterinaria", "Mascotas");
-    expect(h.mockSetState).toHaveBeenLastCalledWith({
-      ownerId,
-      state: "idle",
-      pendingMovementId: null,
-      pendingNote: null,
-    });
-  });
-
-  it("skips keyword learning when the pending note has no significant word", async () => {
-    h.mockListCategories.mockResolvedValue([
-      { id: "c1", ownerId, name: "otro", createdAt: new Date(), keywords: [] },
-    ]);
-
-    await h.service.handleUpdate(textUpdate({ text: "8000", messageId: 9 }), h.reply);
-    await h.service.handleUpdate(textUpdate({ text: "Transporte", messageId: 10 }), h.reply);
-
-    expect(h.mockAssociateKeyword).not.toHaveBeenCalled();
-  });
-
-  it("resolves a correction after a restart by reading the persisted state (restart survival)", async () => {
-    h.mockSetState.mockClear();
-    h.mockListCategories.mockResolvedValue([
-      { id: "c1", ownerId, name: "otro", createdAt: new Date(), keywords: [] },
-      { id: "c2", ownerId, name: "Transporte", createdAt: new Date(), keywords: [] },
-    ]);
-    // The process "restarts": only the persisted state remains.
-    const botStateRepository = h.botStateRepository;
-    await botStateRepository.set({
-      ownerId,
-      state: "awaiting_category",
-      pendingMovementId: "mov-9",
-      pendingNote: "uber viaje",
-    });
-
-    await h.service.handleUpdate(textUpdate({ text: "Transporte", messageId: 42 }), h.reply);
-
-    expect(h.mockUpdateMovement).toHaveBeenCalledWith(ownerId, "mov-9", { category: "Transporte" });
-    expect(h.mockSetState).toHaveBeenLastCalledWith({
-      ownerId,
-      state: "idle",
-      pendingMovementId: null,
-      pendingNote: null,
-    });
-  });
-
-  it("records and creates a matched movement with the matched category and a success reply", async () => {
-    h.mockListCategories.mockResolvedValue([
-      { id: "c1", ownerId, name: "Cafe", createdAt: new Date(), keywords: [] },
-      { id: "c2", ownerId, name: "otro", createdAt: new Date(), keywords: [] },
-    ]);
-    h.mockMatchNote.mockResolvedValue("Cafe");
-
-    await h.service.handleUpdate(textUpdate({ text: "$2500 cafe", messageId: 11 }), h.reply);
-
-    expect(h.mockCreateExpense).toHaveBeenCalledWith(
-      expect.objectContaining({ amount: 2500, category: "Cafe" }),
-      ownerId,
-    );
-    expect(h.replies.at(-1)).toContain("Cafe");
-    expect(h.mockSetState).toHaveBeenLastCalledWith({
-      ownerId,
-      state: "idle",
-      pendingMovementId: null,
-      pendingNote: null,
-    });
-  });
-
-  it("replies with help for an unparseable message and creates nothing", async () => {
-    await h.service.handleUpdate(textUpdate({ text: "hola" }), h.reply);
-
-    expect(h.mockCreateExpense).not.toHaveBeenCalled();
-    expect(h.replies.at(-1)).toContain("No entendí");
-  });
-
-  it("does not reply to a non-owner sender", async () => {
-    await h.service.handleUpdate(textUpdate({ fromId: 987654321 }), h.reply);
-
-    expect(h.mockCreateExpense).not.toHaveBeenCalled();
-    expect(h.replies).toHaveLength(0);
-  });
-
-  it("skips a duplicate message without replying", async () => {
-    h.mockRecord.mockRejectedValue(uniqueViolation());
-
-    await h.service.handleUpdate(textUpdate(), h.reply);
-
-    expect(h.mockCreateExpense).not.toHaveBeenCalled();
-    expect(h.replies).toHaveLength(0);
-  });
-
-  it("tolerates a movement-creation failure by logging and continuing", async () => {
-    h.mockCreateExpense.mockRejectedValue(new Error("db down"));
-    h.mockListCategories.mockResolvedValue([
-      { id: "c1", ownerId, name: "otro", createdAt: new Date(), keywords: [] },
-    ]);
-
-    await expect(h.service.handleUpdate(textUpdate(), h.reply)).resolves.toBeUndefined();
-    expect(h.mockLogger).toHaveBeenCalled();
-  });
-
-  it("tolerates a reply failure by logging and continuing", async () => {
-    const failingReply = async (): Promise<void> => {
-      throw new Error("telegram api down");
-    };
-
-    await expect(h.service.handleUpdate(textUpdate({ text: "hola" }), failingReply)).resolves.toBeUndefined();
-    expect(h.mockLogger).toHaveBeenCalled();
-  });
-
-  it("keeps processing subsequent messages after a reply failure", async () => {
-    const failingReply = async (): Promise<void> => {
-      throw new Error("telegram api down");
-    };
-
-    await h.service.handleUpdate(textUpdate({ text: "hola", messageId: 1 }), failingReply);
-    await h.service.handleUpdate(textUpdate({ text: "hola de nuevo", messageId: 2 }), h.reply);
-
-    expect(h.replies.at(-1)).toContain("No entendí");
-  });
-
-  it("persists the INCOME classification with the fallback category", async () => {
-    h.mockListCategories.mockResolvedValue([
-      { id: "c1", ownerId, name: "otro", createdAt: new Date(), keywords: [] },
-    ]);
-
-    await h.service.handleUpdate(textUpdate({ text: "Recibí $50000 de sueldo", messageId: 12 }), h.reply);
-
-    expect(h.mockCreateExpense).toHaveBeenCalledWith(
-      expect.objectContaining({ amount: 50000, category: "otro", type: "INCOME" }),
-      ownerId,
-    );
-  });
-});
-
-describe("TelegramService ambiguity rules (awaiting_category, D6)", () => {
-  let h: Harness;
-
-  beforeEach(() => {
-    h = makeHarness();
-    h.mockListCategories.mockResolvedValue([
-      { id: "c1", ownerId, name: "otro", createdAt: new Date(), keywords: [] },
-    ]);
-  });
-
-  it('treats a lone "8000" as a NEW registration, not an answer', async () => {
-    await h.service.handleUpdate(textUpdate({ text: "$1000 anterior", messageId: 1 }), h.reply);
-    h.mockCreateExpense.mockClear();
-
-    await h.service.handleUpdate(textUpdate({ text: "8000", messageId: 2 }), h.reply);
-
-    expect(h.mockUpdateMovement).not.toHaveBeenCalled();
-    expect(h.mockCreateExpense).toHaveBeenCalledWith(
-      expect.objectContaining({ amount: 8000, note: null, category: "otro" }),
-      ownerId,
-    );
-    // Re-enters the correction loop with the NEW pending movement.
-    expect(h.mockSetState).toHaveBeenLastCalledWith({
-      ownerId,
-      state: "awaiting_category",
-      pendingMovementId: "mov-1",
-      pendingNote: "8000",
-    });
-  });
-
-  it('a category named "500" beats an amount-shaped answer', async () => {
-    h.mockListCategories.mockResolvedValue([
-      { id: "c1", ownerId, name: "otro", createdAt: new Date(), keywords: [] },
-      { id: "c2", ownerId, name: "500", createdAt: new Date(), keywords: [] },
-    ]);
-
-    await h.service.handleUpdate(textUpdate({ text: "$1000 anterior", messageId: 1 }), h.reply);
-    h.mockCreateExpense.mockClear();
-
-    await h.service.handleUpdate(textUpdate({ text: "500", messageId: 2 }), h.reply);
-
-    expect(h.mockUpdateMovement).toHaveBeenCalledWith(ownerId, "mov-1", { category: "500" });
-    expect(h.mockCreateExpense).not.toHaveBeenCalled();
-    expect(h.mockSetState).toHaveBeenLastCalledWith({
-      ownerId,
-      state: "idle",
-      pendingMovementId: null,
-      pendingNote: null,
-    });
-  });
-
-  it("a multi-word category name is treated as the ANSWER", async () => {
-    h.mockListCategories.mockResolvedValue([
-      { id: "c1", ownerId, name: "otro", createdAt: new Date(), keywords: [] },
-      { id: "c2", ownerId, name: "Gastos fijos", createdAt: new Date(), keywords: [] },
-    ]);
-
-    await h.service.handleUpdate(textUpdate({ text: "$1000 anterior", messageId: 1 }), h.reply);
-    h.mockCreateExpense.mockClear();
-
-    await h.service.handleUpdate(textUpdate({ text: "Gastos fijos", messageId: 2 }), h.reply);
-
-    expect(h.mockUpdateMovement).toHaveBeenCalledWith(ownerId, "mov-1", { category: "Gastos fijos" });
-    expect(h.mockCreateExpense).not.toHaveBeenCalled();
-    expect(h.mockSetState).toHaveBeenLastCalledWith({
-      ownerId,
-      state: "idle",
-      pendingMovementId: null,
-      pendingNote: null,
-    });
-  });
-
-  it('"$8000 super" during a correction is a NEW registration that re-enters the loop', async () => {
-    await h.service.handleUpdate(textUpdate({ text: "$1000 anterior", messageId: 1 }), h.reply);
-    h.mockCreateExpense.mockClear();
-
-    await h.service.handleUpdate(textUpdate({ text: "$8000 super", messageId: 2 }), h.reply);
-
-    expect(h.mockUpdateMovement).not.toHaveBeenCalled();
-    expect(h.mockCreateExpense).toHaveBeenCalledWith(
-      expect.objectContaining({ amount: 8000, note: "$ super", category: "otro" }),
-      ownerId,
-    );
-    expect(h.mockSetState).toHaveBeenLastCalledWith({
-      ownerId,
-      state: "awaiting_category",
-      pendingMovementId: "mov-1",
-      pendingNote: "$ super",
-    });
-  });
-
-  it("a multi-word non-category non-amount reply falls through to the registration path (help)", async () => {
-    await h.service.handleUpdate(textUpdate({ text: "$1000 anterior", messageId: 1 }), h.reply);
-    h.mockCreateExpense.mockClear();
-
-    await h.service.handleUpdate(textUpdate({ text: "no se qué categoría", messageId: 2 }), h.reply);
-
-    expect(h.mockUpdateMovement).not.toHaveBeenCalled();
-    expect(h.mockCreateExpense).not.toHaveBeenCalled();
-    expect(h.replies.at(-1)).toContain("No entendí");
-  });
-});
-
-describe("TelegramService commands", () => {
-  let h: Harness;
-
-  beforeEach(() => {
-    h = makeHarness();
-  });
-
-  it("creates a category via 'registrar categoria: X'", async () => {
-    await h.service.handleUpdate(textUpdate({ text: "registrar categoria: Salud", messageId: 1 }), h.reply);
-
-    expect(h.mockCreateCategory).toHaveBeenCalledWith(ownerId, "Salud");
-    expect(h.replies.at(-1)).toContain("Salud");
-  });
-
-  it("renames a category via 'renombrar categoria: X a: Y'", async () => {
-    h.mockRenameCategory.mockResolvedValue({
-      id: "c1",
-      ownerId,
-      name: "Cafeteria",
-      createdAt: new Date(),
-    });
-
-    await h.service.handleUpdate(
-      textUpdate({ text: "renombrar categoria: Cafe a: Cafeteria", messageId: 1 }),
-      h.reply,
-    );
-
-    expect(h.mockRenameCategory).toHaveBeenCalledWith(ownerId, "Cafe", "Cafeteria");
-    expect(h.replies.at(-1)).toContain("Cafeteria");
-  });
-
-  it("associates a keyword via 'asociar palabra: P a categoria: X'", async () => {
-    await h.service.handleUpdate(
-      textUpdate({ text: "asociar palabra: uber a categoria: Transporte", messageId: 1 }),
-      h.reply,
-    );
-
-    expect(h.mockAssociateKeyword).toHaveBeenCalledWith(ownerId, "uber", "Transporte");
-    expect(h.replies.at(-1)).toContain("uber");
-  });
-
-  it("lists categories via 'listar categorias'", async () => {
-    h.mockListCategories.mockResolvedValue([
-      { id: "c1", ownerId, name: "Cafe", createdAt: new Date(), keywords: ["cafe"] },
-    ]);
-
-    await h.service.handleUpdate(textUpdate({ text: "listar categorias", messageId: 1 }), h.reply);
-
-    expect(h.replies.at(-1)).toContain("Cafe");
-  });
-
-  it("lists an empty category set via 'listar categorias'", async () => {
-    await h.service.handleUpdate(textUpdate({ text: "listar categorias", messageId: 1 }), h.reply);
-
-    expect(h.replies.at(-1)).toBe("No hay categorías.");
-  });
-
-  it("processes commands during awaiting_category without consuming the pending correction", async () => {
-    h.mockListCategories.mockResolvedValue([
-      { id: "c1", ownerId, name: "otro", createdAt: new Date(), keywords: [] },
-    ]);
-    await h.service.handleUpdate(textUpdate({ text: "$1000 anterior", messageId: 1 }), h.reply);
-
-    await h.service.handleUpdate(textUpdate({ text: "listar categorias", messageId: 2 }), h.reply);
-
-    expect(h.mockUpdateMovement).not.toHaveBeenCalled();
-    expect(h.mockSetState).toHaveBeenLastCalledWith({
-      ownerId,
-      state: "awaiting_category",
-      pendingMovementId: "mov-1",
-      pendingNote: "$ anterior",
-    });
-  });
-
-  it("falls through to registration for unrecognized text (not a command)", async () => {
-    h.mockListCategories.mockResolvedValue([
-      { id: "c1", ownerId, name: "otro", createdAt: new Date(), keywords: [] },
-    ]);
-    await h.service.handleUpdate(textUpdate({ text: "$2000 supermercado", messageId: 1 }), h.reply);
-
-    expect(h.mockCreateExpense).toHaveBeenCalled();
   });
 });

@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type {
+  HouseholdMember,
   Movement,
   MovementSummary,
   OwnerCategory,
@@ -8,10 +9,13 @@ import type {
 
 import {
   ApiError,
+  createPlannedMovement,
   deleteMovement,
   fetchCategories,
+  fetchHouseholdMembers,
   fetchMovements,
   fetchMovementSummary,
+  markMovementPaid,
   patchMovement,
 } from "./api";
 
@@ -20,15 +24,17 @@ const validSummary: MovementSummary = {
     income: 3000,
     expenses: 1500,
     balance: 1500,
+    savings: 150,
     avgPerMonth: 1500,
     avgPerMovement: 500,
     maxAmount: 1000,
     count: 3,
+    countThisMonth: 1,
   },
   mom: {
     months: [
-      { month: "2026-06", income: 2000, expenses: 1000, balance: 1000 },
-      { month: "2026-07", income: 1000, expenses: 500, balance: 500 },
+      { month: "2026-06", income: 2000, expenses: 1000, balance: 1000, savings: 0 },
+      { month: "2026-07", income: 1000, expenses: 500, balance: 500, savings: 150 },
     ],
   },
   daily: [
@@ -48,6 +54,7 @@ const validSummary: MovementSummary = {
     expenses: [],
     income: [],
   },
+  planned: { month: "2026-08", total: 0 },
 };
 
 const validMovements: Movement[] = [
@@ -93,18 +100,61 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+describe("fetchHouseholdMembers", () => {
+  it("resolves the members from GET /household/members", async () => {
+    const members: HouseholdMember[] = [
+      { ownerId: "rita", name: "Rita" },
+      { ownerId: "edgardo", name: "Edgardo" },
+    ];
+    fetchMock.mockResolvedValue(jsonResponse(members));
+
+    const result = await fetchHouseholdMembers();
+
+    expect(fetchMock).toHaveBeenCalledWith("/api/household/members");
+    expect(result).toEqual(members);
+  });
+
+  it("throws ApiError validation when a member carries a chatId", async () => {
+    fetchMock.mockResolvedValue(
+      jsonResponse([{ ownerId: "rita", name: "Rita", chatId: 111 }]),
+    );
+
+    await expect(fetchHouseholdMembers()).rejects.toMatchObject({
+      kind: "validation",
+    });
+  });
+
+  it("throws ApiError network when fetch rejects", async () => {
+    fetchMock.mockRejectedValue(new TypeError("Network request failed"));
+
+    await expect(fetchHouseholdMembers()).rejects.toMatchObject({
+      kind: "network",
+    });
+  });
+});
+
 describe("fetchMovementSummary", () => {
-  it("resolves validated summary data for the owner", async () => {
+  it("resolves validated summary data for the owner with default visibility mine", async () => {
     fetchMock.mockResolvedValue(jsonResponse(validSummary));
 
     const summary = await fetchMovementSummary("default");
 
     expect(fetchMock).toHaveBeenCalledWith(
-      "/api/movements/summary?ownerId=default",
+      "/api/movements/summary?ownerId=default&visibility=mine",
     );
     expect(summary.kpis.balance).toBe(1500);
     expect(summary.mom.months).toHaveLength(2);
     expect(summary.daily[0]).toMatchObject({ day: "2026-07-01", balance: 50 });
+  });
+
+  it("sends the requested visibility filter on the summary request", async () => {
+    fetchMock.mockResolvedValue(jsonResponse(validSummary));
+
+    await fetchMovementSummary("default", "shared");
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/movements/summary?ownerId=default&visibility=shared",
+    );
   });
 
   it("throws ApiError validation when kpis is missing", async () => {
@@ -138,12 +188,14 @@ describe("fetchMovementSummary", () => {
 });
 
 describe("fetchMovements", () => {
-  it("resolves validated movements for the owner with no filters", async () => {
+  it("resolves validated movements for the owner with default visibility mine", async () => {
     fetchMock.mockResolvedValue(jsonResponse(validMovements));
 
     const movements = await fetchMovements("acme");
 
-    expect(fetchMock).toHaveBeenCalledWith("/api/movements?ownerId=acme");
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/movements?ownerId=acme&visibility=mine",
+    );
     expect(movements).toHaveLength(2);
     expect(movements[0]).toMatchObject({
       id: "m1",
@@ -154,20 +206,52 @@ describe("fetchMovements", () => {
     expect(movements[0]?.occurredAt).toEqual(new Date("2026-08-10T12:00:00Z"));
   });
 
-  it("builds query params from all active filters", async () => {
+  it("sends the requested visibility filter on the list request", async () => {
+    fetchMock.mockResolvedValue(jsonResponse(validMovements));
+
+    await fetchMovements("default", {}, "mine");
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/movements?ownerId=default&visibility=mine",
+    );
+  });
+
+  it("sends the SAVINGS type filter on the list request", async () => {
+    fetchMock.mockResolvedValue(jsonResponse(validMovements));
+
+    await fetchMovements("default", { type: "SAVINGS" });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/movements?ownerId=default&type=SAVINGS&visibility=mine",
+    );
+  });
+
+  it("sends the PENDING status filter on the list request", async () => {
+    fetchMock.mockResolvedValue(jsonResponse(validMovements));
+
+    await fetchMovements("default", { type: "EXPENSE", status: "PENDING" });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/movements?ownerId=default&type=EXPENSE&status=PENDING&visibility=mine",
+    );
+  });
+
+  it("builds query params from all active filters including visibility", async () => {
     fetchMock.mockResolvedValue(jsonResponse(validMovements));
 
     await fetchMovements("default", {
-      type: "INCOME",
+      type: "EXPENSE",
       from: "2026-08-01",
       to: "2026-08-31",
       category: "sueldo",
       q: "julio",
+      status: "PENDING",
     });
 
-    // URLSearchParams preserves insertion order: ownerId first, then filters.
+    // URLSearchParams preserves insertion order: ownerId first, then filters,
+    // then the visibility filter.
     expect(fetchMock).toHaveBeenCalledWith(
-      "/api/movements?ownerId=default&type=INCOME&from=2026-08-01&to=2026-08-31&category=sueldo&q=julio",
+      "/api/movements?ownerId=default&type=EXPENSE&from=2026-08-01&to=2026-08-31&category=sueldo&q=julio&status=PENDING&visibility=mine",
     );
   });
 
@@ -176,12 +260,14 @@ describe("fetchMovements", () => {
 
     await fetchMovements("default", { q: "" });
 
-    expect(fetchMock).toHaveBeenCalledWith("/api/movements?ownerId=default");
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/movements?ownerId=default&visibility=mine",
+    );
   });
 
   it("throws ApiError validation when a movement is wrong-typed", async () => {
     fetchMock.mockResolvedValue(
-      jsonResponse([{ ...validMovements[0]!, type: "SAVINGS" }]),
+      jsonResponse([{ ...validMovements[0]!, type: "REFUND" }]),
     );
 
     await expect(fetchMovements("default")).rejects.toMatchObject({
@@ -302,6 +388,108 @@ describe("deleteMovement", () => {
     await expect(deleteMovement("m1", "default")).rejects.toMatchObject({
       kind: "http",
       status: 404,
+    });
+  });
+});
+
+describe("createPlannedMovement", () => {
+  it("POSTs a PENDING EXPENSE to /api/expenses and validates the legacy Expense response", async () => {
+    fetchMock.mockResolvedValue(
+      jsonResponse({
+        id: "p1",
+        ownerId: "default",
+        amount: 2500,
+        currency: "ARS",
+        category: "alquiler",
+        note: "alquiler",
+        occurredAt: "2026-08-10T12:00:00.000Z",
+        createdAt: "2026-08-10T12:00:00.000Z",
+      }),
+    );
+
+    const result = await createPlannedMovement("default", {
+      amount: 2500,
+      note: "alquiler",
+      category: "alquiler",
+    });
+
+    const [url, init] = fetchMock.mock.calls[0]! as [string, RequestInit];
+    expect(url).toBe("/api/expenses");
+    expect(init.method).toBe("POST");
+    expect(init.headers).toMatchObject({
+      "x-owner-id": "default",
+      "Content-Type": "application/json",
+    });
+    const body = JSON.parse(String(init.body)) as Record<string, unknown>;
+    expect(body).toMatchObject({
+      amount: 2500,
+      category: "alquiler",
+      note: "alquiler",
+      type: "EXPENSE",
+      status: "PENDING",
+    });
+    // D10: the planned row is anchored to the load date (occurredAt); the API
+    // derives the target month as load month + 1.
+    expect(typeof body.occurredAt).toBe("string");
+    expect(Number.isNaN(Date.parse(body.occurredAt as string))).toBe(false);
+    expect(result).toMatchObject({
+      id: "p1",
+      amount: 2500,
+      category: "alquiler",
+    });
+  });
+
+  it("normalizes an empty note and missing category to null in the payload", async () => {
+    fetchMock.mockResolvedValue(
+      jsonResponse({
+        id: "p2",
+        ownerId: "default",
+        amount: 1000,
+        currency: "ARS",
+        category: null,
+        note: null,
+        occurredAt: "2026-08-10T12:00:00.000Z",
+        createdAt: "2026-08-10T12:00:00.000Z",
+      }),
+    );
+
+    await createPlannedMovement("default", { amount: 1000 });
+
+    const [, init] = fetchMock.mock.calls[0]! as [string, RequestInit];
+    const body = JSON.parse(String(init.body)) as Record<string, unknown>;
+    expect(body).toMatchObject({ note: null, category: null });
+  });
+
+  it("throws ApiError validation when the response is not an Expense shape", async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ id: "p1" }));
+
+    await expect(
+      createPlannedMovement("default", { amount: 100 }),
+    ).rejects.toMatchObject({ kind: "validation" });
+  });
+});
+
+describe("markMovementPaid", () => {
+  it("POSTs /movements/:id/paid with the owner header and resolves the updated movement", async () => {
+    const paid = { ...validMovements[0]!, type: "EXPENSE", status: "PAID" };
+    fetchMock.mockResolvedValue(jsonResponse(paid));
+
+    const result = await markMovementPaid("m1", "default");
+
+    expect(fetchMock).toHaveBeenCalledWith("/api/movements/m1/paid", {
+      method: "POST",
+      headers: { "x-owner-id": "default" },
+    });
+    expect(result.status).toBe("PAID");
+    expect(result.type).toBe("EXPENSE");
+  });
+
+  it("throws ApiError http with 409 when the movement is no longer pending", async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ error: "conflict" }, 409));
+
+    await expect(markMovementPaid("m1", "default")).rejects.toMatchObject({
+      kind: "http",
+      status: 409,
     });
   });
 });

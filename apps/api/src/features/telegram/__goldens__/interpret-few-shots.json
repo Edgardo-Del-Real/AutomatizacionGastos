@@ -1,0 +1,74 @@
+[
+  {
+    "role": "user",
+    "content": "cuánto gasté este mes?"
+  },
+  {
+    "role": "assistant",
+    "content": "{\"intent\":\"query\",\"amount\":null,\"note\":null,\"query_type\":\"month\"}"
+  },
+  {
+    "role": "user",
+    "content": "cuales son las categorias disponibles"
+  },
+  {
+    "role": "assistant",
+    "content": "{\"intent\":\"query\",\"amount\":null,\"note\":null,\"query_type\":\"categories\"}"
+  },
+  {
+    "role": "user",
+    "content": "ultimos movimientos"
+  },
+  {
+    "role": "assistant",
+    "content": "{\"intent\":\"query\",\"amount\":null,\"note\":null,\"query_type\":\"recent\"}"
+  },
+  {
+    "role": "user",
+    "content": "cuanto me queda"
+  },
+  {
+    "role": "assistant",
+    "content": "{\"intent\":\"query\",\"amount\":null,\"note\":null,\"query_type\":\"balance\"}"
+  },
+  {
+    "role": "user",
+    "content": "cuánto ahorré este mes?"
+  },
+  {
+    "role": "assistant",
+    "content": "{\"intent\":\"query\",\"amount\":null,\"note\":null,\"query_type\":\"savings\"}"
+  },
+  {
+    "role": "user",
+    "content": "cuánto tengo previsto?"
+  },
+  {
+    "role": "assistant",
+    "content": "{\"intent\":\"query_planned\",\"amount\":null,\"note\":null}"
+  },
+  {
+    "role": "user",
+    "content": "hola, cómo andás?"
+  },
+  {
+    "role": "assistant",
+    "content": "{\"intent\":\"greeting\",\"amount\":null,\"note\":null}"
+  },
+  {
+    "role": "user",
+    "content": "que lindo día"
+  },
+  {
+    "role": "assistant",
+    "content": "{\"intent\":\"off_topic\",\"amount\":null,\"note\":null}"
+  },
+  {
+    "role": "user",
+    "content": "quiero registrar un gasto"
+  },
+  {
+    "role": "assistant",
+    "content": "{\"intent\":\"off_topic\",\"amount\":null,\"note\":null}"
+  }
+]

@@ -1,4 +1,4 @@
-import { createMovementSchema, type ExpenseSummary } from "@rita/contracts";
+import { createMovementSchema, type ExpenseSummary, type MovementVisibility } from "@rita/contracts";
 import { NotFoundError, ValidationFailedError } from "../../infra/errors";
 import type { ExpenseRepository } from "./expenses.repository";
 import type { Expense } from "./expenses.types";
@@ -8,12 +8,28 @@ const SIX_MONTHS_MS = 6 * 30 * 24 * 60 * 60 * 1000;
 export class ExpenseService {
   constructor(private readonly repository: ExpenseRepository) {}
 
-  async createExpense(input: unknown, ownerId: string): Promise<Expense> {
+  /**
+   * AD7 — create-visibility is OUT-OF-BAND: it never travels in the shared
+   * `createMovementSchema` (which `POST /expenses` also validates), so the
+   * frozen endpoint cannot persist visibility. Defaults to INDIVIDUAL.
+   * The service still accepts `options?.visibility` for the bot's internal
+   * SHARED path (normal shared expenses via the bot keep working); planned
+   * expenses are INDIVIDUAL by design and never pass SHARED here.
+   */
+  async createExpense(
+    input: unknown,
+    ownerId: string,
+    options?: { visibility?: MovementVisibility },
+  ): Promise<Expense> {
     const parsed = createMovementSchema.safeParse(input);
     if (!parsed.success) {
       throw new ValidationFailedError("Invalid expense payload", parsed.error.issues);
     }
-    return this.repository.create({ ownerId, ...parsed.data });
+    return this.repository.create({
+      ownerId,
+      ...parsed.data,
+      visibility: options?.visibility ?? "INDIVIDUAL",
+    });
   }
 
   async getExpense(id: string, ownerId: string): Promise<Expense> {
@@ -39,5 +55,32 @@ export class ExpenseService {
     const from = new Date(Date.now() - SIX_MONTHS_MS);
     const months = await this.repository.summarizeByMonth(ownerId, from);
     return { months };
+  }
+
+  /** D7/D8: delegates the atomic net-INCOME + SAVINGS split to the repository. */
+  async createIncomeWithSavings(data: {
+    ownerId: string;
+    gross: number;
+    percent: number;
+    note: string | null;
+    occurredAt: Date;
+    netCategory: string;
+    savingsCategory: string;
+    visibility: "INDIVIDUAL" | "SHARED";
+  }): Promise<{ net: Expense | null; savings: Expense | null }> {
+    return this.repository.createIncomeWithSavings(data);
+  }
+
+  /** shared-expense-split (D2): delegates the two-row SHARED split. */
+  async createSharedExpenseSplit(data: {
+    ownerId: string;
+    partnerId: string;
+    total: number;
+    percent: number;
+    note: string | null;
+    occurredAt: Date;
+    category: string;
+  }): Promise<{ sender: number; partner: number } | null> {
+    return this.repository.createSharedSplit(data);
   }
 }

@@ -30,3 +30,9 @@ pnpm-debug.log*
 Thumbs.db
 # Local AI runtime state
 .atl/
+
+# Local codegraph index
+.codegraph/
+
+# One-off cleanup backups (runbook: apps/api/src/scripts/cleanup-phantom-data.ts)
+apps/api/.cleanup-backups/

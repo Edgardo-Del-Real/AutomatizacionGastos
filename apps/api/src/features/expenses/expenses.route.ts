@@ -12,6 +12,9 @@ export const expensesRoute: FastifyPluginAsync<ExpensesRouteOptions> = async (ap
 
   app.post("/expenses", async (request, reply) => {
     const ownerId = readOwnerId(request.headers);
+    // AD7 — POST /expenses never persists visibility: a `visibility` key in the
+    // body is ignored (planned expenses are INDIVIDUAL by design). Only the
+    // bot's internal path passes visibility explicitly through the service.
     const expense = await expenseService.createExpense(request.body, ownerId);
     return reply.status(201).send(expense);
   });

@@ -1,12 +1,47 @@
 import type { PrismaClient } from "@prisma/client";
 
-export const BOT_STATES = ["idle", "awaiting_setup", "awaiting_category"] as const;
+/**
+ * v2 state machine (spec telegram-bot "Per-Owner State Machine"): the three
+ * dialog states (`awaiting_category`, `awaiting_registration`,
+ * `awaiting_amount_confirmation`) are removed. A persisted payload in any of
+ * the removed states (e.g. from a rollback) fails v2 enum membership and
+ * recovers to `idle` through the generic corrupt-payload discipline.
+ */
+export const BOT_STATES = [
+  "idle",
+  "awaiting_setup",
+  "awaiting_capture",
+  "awaiting_preview",
+  "awaiting_category_name",
+  "awaiting_movement_selection",
+  "awaiting_category_selection",
+  "awaiting_delete_confirmation",
+  // savings-config: the three savings sub-menu/dialog states (design D11).
+  "awaiting_savings_rule",
+  "awaiting_savings_percent",
+  "awaiting_savings_delete",
+  // shared-expense-split (D1): the COMPARTIDO [Otro] percent input.
+  "awaiting_shared_percent",
+] as const;
 
 export type BotStateName = (typeof BOT_STATES)[number];
 
+/**
+ * Persisted-record state type: the DB column may still hold one of the
+ * removed dialog states until a v2 recovery pass normalizes it to `idle`
+ * (design "normalizeState" / corrupt-payload discipline). The `BOT_STATES`
+ * enum above remains the authoritative v2 contract — the widened read type
+ * only models what the store can physically contain during rollback.
+ */
+export type PersistedBotStateName =
+  | BotStateName
+  | "awaiting_category"
+  | "awaiting_registration"
+  | "awaiting_amount_confirmation";
+
 export type BotStateRecord = {
   ownerId: string;
-  state: BotStateName;
+  state: PersistedBotStateName;
   pendingMovementId: string | null;
   pendingNote: string | null;
 };

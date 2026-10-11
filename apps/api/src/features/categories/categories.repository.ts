@@ -1,12 +1,16 @@
 import type { PrismaClient } from "@prisma/client";
 import type { KeywordRule } from "./matcher";
-import type { CategoryEntity, CategoryWithKeywords } from "./categories.types";
+import { normalizeForMatch } from "./matcher";
+import type { CategoryEntity, CategoryType, CategoryWithKeywords } from "./categories.types";
 
 export interface CategoryRepository {
-  create(ownerId: string, name: string): Promise<CategoryEntity>;
+  create(ownerId: string, name: string, type?: CategoryType): Promise<CategoryEntity>;
   listByOwner(ownerId: string): Promise<CategoryWithKeywords[]>;
   rename(ownerId: string, fromName: string, toName: string): Promise<CategoryEntity | null>;
+  delete(ownerId: string, name: string): Promise<CategoryEntity | null>;
   ensureOtro(ownerId: string): Promise<CategoryEntity>;
+  /** Upserts the SAVINGS-typed "ahorro" category (D9). */
+  ensureAhorro(ownerId: string): Promise<CategoryEntity>;
   associateKeyword(ownerId: string, categoryId: string, keyword: string): Promise<void>;
   listKeywordRules(ownerId: string): Promise<KeywordRule[]>;
 }
@@ -14,8 +18,8 @@ export interface CategoryRepository {
 export class PrismaCategoryRepository implements CategoryRepository {
   constructor(private readonly prisma: PrismaClient) {}
 
-  async create(ownerId: string, name: string): Promise<CategoryEntity> {
-    return this.prisma.category.create({ data: { ownerId, name } });
+  async create(ownerId: string, name: string, type: CategoryType = "MIXED"): Promise<CategoryEntity> {
+    return this.prisma.category.create({ data: { ownerId, name, type } });
   }
 
   async listByOwner(ownerId: string): Promise<CategoryWithKeywords[]> {
@@ -28,6 +32,7 @@ export class PrismaCategoryRepository implements CategoryRepository {
       id: row.id,
       ownerId: row.ownerId,
       name: row.name,
+      type: row.type,
       createdAt: row.createdAt,
       keywords: row.keywords.map((keyword) => keyword.keyword),
     }));
@@ -53,11 +58,33 @@ export class PrismaCategoryRepository implements CategoryRepository {
     });
   }
 
+  async delete(ownerId: string, name: string): Promise<CategoryEntity | null> {
+    return this.prisma.$transaction(async (tx) => {
+      const rows = await tx.category.findMany({ where: { ownerId } });
+      const target = rows.find((row) => normalizeForMatch(row.name) === normalizeForMatch(name));
+      if (target === undefined) {
+        return null;
+      }
+      // The CategoryKeyword FK cascades: deleting the category removes its
+      // keyword rules. Movements keep the plain-string name (no FK).
+      await tx.category.delete({ where: { id: target.id } });
+      return { id: target.id, ownerId, name: target.name, type: target.type, createdAt: target.createdAt };
+    });
+  }
+
   async ensureOtro(ownerId: string): Promise<CategoryEntity> {
     return this.prisma.category.upsert({
       where: { ownerId_name: { ownerId, name: "otro" } },
       update: {},
-      create: { ownerId, name: "otro" },
+      create: { ownerId, name: "otro", type: "MIXED" },
+    });
+  }
+
+  async ensureAhorro(ownerId: string): Promise<CategoryEntity> {
+    return this.prisma.category.upsert({
+      where: { ownerId_name: { ownerId, name: "ahorro" } },
+      update: {},
+      create: { ownerId, name: "ahorro", type: "SAVINGS" },
     });
   }
 

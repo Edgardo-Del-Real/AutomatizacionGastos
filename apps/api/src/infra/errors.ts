@@ -19,9 +19,36 @@ export class ValidationFailedError extends AppError {
   }
 }
 
+/**
+ * 422 discriminator for SAVINGS-category guard violations (D9): assigning
+ * "ahorro" to EXPENSE/INCOME movements, or deleting/renaming the SAVINGS
+ * category. Kept as a subclass so executors can route the exact machine code
+ * while the generic error handler still treats it as a validation failure.
+ */
+export class SavingsForbiddenError extends ValidationFailedError {
+  constructor(message: string) {
+    super(message);
+  }
+}
+
 export class NotFoundError extends AppError {
   readonly code = "NotFound";
   readonly statusCode = 404;
+
+  constructor(message: string) {
+    super(message);
+  }
+}
+
+/**
+ * 409 discriminator for the mark-paid transition (D5): the movement exists for
+ * the owner but is not a PENDING EXPENSE (already PAID, non-EXPENSE, or a
+ * concurrent transition won the race). The generic error handler routes it as
+ * a plain 409.
+ */
+export class ConflictError extends AppError {
+  readonly code = "Conflict";
+  readonly statusCode = 409;
 
   constructor(message: string) {
     super(message);

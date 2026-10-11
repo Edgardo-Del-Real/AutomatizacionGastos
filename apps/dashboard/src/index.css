@@ -1,33 +1,55 @@
 @import "tailwindcss";
+@import "@fontsource-variable/inter";
+@import "@fontsource-variable/jetbrains-mono";
 
 @theme {
   --font-sans:
-    ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue",
-    Arial, "Noto Sans", sans-serif;
+    "Inter Variable", ui-sans-serif, system-ui, -apple-system, "Segoe UI",
+    Roboto, "Helvetica Neue", Arial, "Noto Sans", sans-serif;
   --font-mono:
-    ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono",
-    monospace;
+    "JetBrains Mono Variable", ui-monospace, SFMono-Regular, Menlo, Consolas,
+    "Liberation Mono", monospace;
 
-  --color-canvas: #f6f7f9;
+  --color-canvas: #f7f7f2;
   --color-surface: #ffffff;
-  --color-border: #e5e7eb;
-  --color-ink: #111827;
-  --color-ink-soft: #4b5563;
-  --color-ink-faint: #9ca3af;
-  --color-accent: #0d9488;
-  --color-accent-strong: #0f766e;
-  --color-accent-soft: #ccfbf1;
-  --color-danger: #b91c1c;
+  --color-surface-raised: #f0f1ea;
+  --color-border: #e1e4da;
+  --color-border-strong: #c7cec2;
+  --color-ink: #1f2a24;
+  --color-ink-soft: #68736b;
+  --color-ink-faint: #89948c;
+  --color-accent: #2f6b57;
+  --color-accent-strong: #245442;
+  --color-accent-soft: rgba(47, 107, 87, 0.12);
+  --color-on-accent: #ffffff;
+  --color-danger: #b94a48;
+  --color-income: #2f8f68;
+  --color-income-soft: rgba(47, 143, 104, 0.12);
+  --color-expense: #c96b52;
+  --color-expense-soft: rgba(201, 107, 82, 0.12);
 
   --radius-card: 0.75rem;
+  --radius-control: 0.5rem;
 
   --shadow-card:
-    0 1px 2px rgb(17 24 39 / 0.04), 0 6px 20px rgb(17 24 39 / 0.05);
+    0 1px 2px rgb(31 42 36 / 0.04), 0 8px 24px rgb(31 42 36 / 0.06);
+  --shadow-float: 0 12px 32px rgb(31 42 36 / 0.12);
 }
 
 @layer base {
+  html {
+    color-scheme: light;
+  }
+
   body {
     background-color: var(--color-canvas);
+    background-image: radial-gradient(
+      1200px 600px at 70% -10%,
+      rgba(47, 107, 87, 0.08),
+      transparent 60%
+    );
+    background-attachment: fixed;
+    background-repeat: no-repeat;
     color: var(--color-ink);
   }
 }

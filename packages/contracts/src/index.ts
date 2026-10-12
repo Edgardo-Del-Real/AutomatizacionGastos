@@ -49,6 +49,10 @@ export const movementStatusSchema = z.enum(["PAID", "PENDING"]);
 
 export type MovementStatus = z.infer<typeof movementStatusSchema>;
 
+export const movementSavingsOriginSchema = z.enum(["AUTO_SPLIT", "MANUAL"]);
+
+export type MovementSavingsOrigin = z.infer<typeof movementSavingsOriginSchema>;
+
 export const movementVisibilitySchema = z.enum(["INDIVIDUAL", "SHARED"]);
 
 export type MovementVisibility = z.infer<typeof movementVisibilitySchema>;
@@ -70,6 +74,10 @@ export const movementSchema = expenseSchema.extend({
   // present on a split SHARED row; legacy rows keep parsing without it and a
   // NULL sharedTotal behaves exactly as before.
   sharedTotal: z.number().nullable().optional(),
+  // manual-savings (D1): savingsOrigin is carried when present on a SAVINGS
+  // row; legacy rows keep parsing without it and a NULL origin behaves exactly
+  // as before. Present values are restricted to the MovementSavingsOrigin enum.
+  savingsOrigin: movementSavingsOriginSchema.nullable().optional(),
 });
 
 export type Movement = z.infer<typeof movementSchema>;
@@ -109,12 +117,22 @@ export const createMovementSchema = createExpenseSchema
   .extend({
     type: movementTypeSchema.optional(),
     status: movementStatusSchema.optional(),
+    savingsOrigin: movementSavingsOriginSchema.optional(),
   })
   // Planned-expense guard: PENDING is meaningful only for EXPENSE (absent type
   // counts as EXPENSE, matching the persisted default); INCOME/SAVINGS are always PAID.
   .refine(
     (data) => data.status !== "PENDING" || (data.type ?? "EXPENSE") === "EXPENSE",
     { message: "PENDING status is only valid for EXPENSE movements", path: ["status"] },
+  )
+  // manual-savings (D8): savingsOrigin present ⇒ type SAVINGS ∧ value MANUAL.
+  // AUTO_SPLIT rows are internal-only (createIncomeWithSavings); a server-side
+  // SAVINGS create never sends the origin (the server stamps MANUAL or rejects).
+  .refine(
+    (data) =>
+      data.savingsOrigin === undefined ||
+      (data.type === "SAVINGS" && data.savingsOrigin === "MANUAL"),
+    { message: "savingsOrigin is only valid as MANUAL on SAVINGS movements", path: ["savingsOrigin"] },
   );
 
 export type CreateMovementInput = z.infer<typeof createMovementSchema>;

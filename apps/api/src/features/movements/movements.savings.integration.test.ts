@@ -6,6 +6,7 @@ import { buildApp } from "../../app";
 import { loadDotEnvFromDisk } from "../../config/load-env";
 import { PrismaCategoryRepository } from "../categories/categories.repository";
 import { CategoryService } from "../categories/categories.service";
+import { PrismaExpenseRepository } from "../expenses/expenses.repository";
 import { PrismaMovementRepository } from "./movements.repository";
 import { MovementService } from "./movements.service";
 import type { ViewerScope } from "./movements.types";
@@ -234,5 +235,30 @@ describe("movements savings exclusion (D1–D3)", () => {
     });
     const body = response.json() as { kpis: { savings: number } };
     expect(body.kpis.savings).toBe(0);
+  });
+
+  // manual-savings (D1, required scenario "Auto-split stamps AUTO_SPLIT"):
+  // createIncomeWithSavings is the ONLY producer of AUTO_SPLIT rows — the
+  // SAVINGS row it creates must carry the origin while the net INCOME row
+  // stays origin-less (NULL), so legacy behavior is untouched.
+  it("createIncomeWithSavings stamps AUTO_SPLIT on its SAVINGS row and leaves the INCOME row origin-less", async () => {
+    const expenseRepository = new PrismaExpenseRepository(prisma);
+    await expenseRepository.createIncomeWithSavings({
+      ownerId: OWNER,
+      gross: 1000,
+      percent: 10,
+      note: "sueldo",
+      occurredAt: new Date(currentBaDayNoonIso()),
+      netCategory: "work",
+      savingsCategory: "ahorro",
+      visibility: "INDIVIDUAL",
+    });
+
+    const rows = await prisma.expense.findMany({ where: { ownerId: OWNER } });
+    expect(rows).toHaveLength(2);
+    const savingsRow = rows.find((row) => row.type === "SAVINGS");
+    const incomeRow = rows.find((row) => row.type === "INCOME");
+    expect(savingsRow?.savingsOrigin).toBe("AUTO_SPLIT");
+    expect(incomeRow?.savingsOrigin).toBeNull();
   });
 });

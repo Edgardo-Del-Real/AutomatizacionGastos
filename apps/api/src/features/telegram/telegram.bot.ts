@@ -41,6 +41,9 @@ export const BOT_COMMANDS = [
   // savings-config (design D10): the parser normalizes `_` → space, so the
   // descriptions teach the full syntax the owner types.
   { command: "registrar_ahorro", description: "Registrá una regla: registrar ahorro: <palabra> al <X>%" },
+  // manual-savings (D9): registered alongside the rule commands — the slash
+  // form normalizes to "registrar ahorro manual: <monto> [nota]".
+  { command: "registrar_ahorro_manual", description: "Registrá un ahorro manual: registrar ahorro manual: <monto> [nota]" },
   { command: "listar_ahorros", description: "Listá tus reglas de ahorro" },
   { command: "borrar_ahorro", description: "Borrá una regla: borrar ahorro: <palabra>" },
 ] as const;

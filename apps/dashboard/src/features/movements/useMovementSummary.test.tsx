@@ -17,6 +17,7 @@ const summary: MovementSummary = {
     expenses: 1500,
     balance: 1500,
     savings: 0,
+    manualSavings: 0,
     avgPerMonth: 1500,
     avgPerMovement: 500,
     maxAmount: 1000,

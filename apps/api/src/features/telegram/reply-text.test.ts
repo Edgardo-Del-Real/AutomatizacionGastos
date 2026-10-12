@@ -65,6 +65,9 @@ import {
   savingsRuleDeletePickReply,
   savingsRuleGoneReply,
   savingsRuleInvalidReply,
+  manualSavingsInvalidReply,
+  manualSavingsPromptReply,
+  manualSavingsSavedReply,
   savingsRuleMissingReply,
   savingsRulePromptReply,
   savingsRulesListReply,
@@ -319,6 +322,27 @@ describe("savings admin and manual-choice reply templates (savings-config)", () 
   });
 });
 
+describe("manual savings reply templates (manual-savings)", () => {
+  it("prompts for the amount and the optional note", () => {
+    const text = manualSavingsPromptReply();
+
+    expect(text).toContain("monto");
+    expect(text).toContain("nota");
+    expect(text).toContain("500");
+  });
+
+  it("confirms the registered amount formatted in ARS, with the note when present", () => {
+    expect(manualSavingsSavedReply(500, "fondo vacaciones")).toBe("✅ Ahorro guardado: $\u00A0500,00 (fondo vacaciones).");
+    expect(manualSavingsSavedReply(1500, null)).toBe("✅ Ahorro guardado: $\u00A01.500,00.");
+  });
+
+  it("states that nothing was stored on an invalid amount", () => {
+    const text = manualSavingsInvalidReply();
+
+    expect(text).toContain("No guardé nada");
+  });
+});
+
 describe("shared-expense-split replies (Phase 4, task 4.3)", () => {
   it("prompts for the shared percent after [Otro] in the COMPARTIDO confirmation", () => {
     const text = sharedPercentPromptReply();
@@ -532,6 +556,14 @@ describe("main menu and help templates", () => {
     expect(text).toContain("💰 Ahorro");
     expect(text).toContain("listar ahorros");
     expect(text).toContain("borrar ahorro:");
+  });
+
+  it("mentions the manual savings command and the command list (bot-main-menu Static Help)", () => {
+    const text = ayudaReply();
+
+    expect(text).toContain("registrar ahorro manual:");
+    expect(text).toContain("Ahorro manual");
+    expect(text).toContain("registrar_ahorro_manual");
   });
 
   it("greets warmly and expense-scoped, pointing to the menu", () => {

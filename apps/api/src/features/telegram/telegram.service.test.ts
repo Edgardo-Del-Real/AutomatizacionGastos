@@ -34,6 +34,9 @@ import {
   greetingReply,
   markPaidAlreadyReply,
   markPaidReply,
+  manualSavingsInvalidReply,
+  manualSavingsPromptReply,
+  manualSavingsSavedReply,
   menuReply,
   movementCorrectionDoneReply,
   movementMissingReply,
@@ -129,6 +132,7 @@ type Harness = {
   mockListRules: ReturnType<typeof vi.fn>;
   mockDeleteRule: ReturnType<typeof vi.fn>;
   mockCreateIncomeWithSavings: ReturnType<typeof vi.fn>;
+  mockCreateManualSavings: ReturnType<typeof vi.fn>;
   mockCreateSharedSplit: ReturnType<typeof vi.fn>;
   mockSetState: ReturnType<typeof vi.fn>;
   mockBrainInterpret: ReturnType<typeof vi.fn>;
@@ -181,6 +185,17 @@ function makeHarness(options?: { noBrain?: boolean }): Harness {
       savings: { id: "sav-1", ownerId, amount: 150, currency: "ARS", category: "ahorro", note: null, occurredAt: new Date(), createdAt: new Date(), type: "SAVINGS" },
     })),
     createSharedExpenseSplit: vi.fn(async () => ({ sender: 1000, partner: 1000 })),
+    createManualSavings: vi.fn(async () => ({
+      id: "sav-manual-1",
+      ownerId,
+      amount: 100,
+      currency: "ARS",
+      category: "ahorro",
+      note: null,
+      occurredAt: new Date(),
+      createdAt: new Date(),
+      type: "SAVINGS",
+    })),
   } as unknown as ExpenseService;
   const movementService = {
     updateMovement: vi.fn(async (ownerIdArg: string, id: string, patch: unknown) => ({
@@ -304,6 +319,7 @@ function makeHarness(options?: { noBrain?: boolean }): Harness {
     mockListRules: vi.mocked(savingsService.listRules),
     mockDeleteRule: vi.mocked(savingsService.deleteRule),
     mockCreateIncomeWithSavings: vi.mocked(expenseService.createIncomeWithSavings),
+    mockCreateManualSavings: vi.mocked(expenseService.createManualSavings),
     mockCreateSharedSplit: vi.mocked(expenseService.createSharedExpenseSplit),
     mockSetState: vi.mocked(botStateRepository.set),
     mockBrainInterpret: vi.mocked(brain?.interpret ?? vi.fn()),
@@ -459,7 +475,7 @@ describe("payload schemas (v2)", () => {
     }
   });
 
-  it("declares the eight v2 bot states and drops the removed dialog states", () => {
+  it("declares the v2 bot states including the savings dialogs and drops the removed dialog states (3.9)", () => {
     for (const state of [
       "idle",
       "awaiting_setup",
@@ -469,6 +485,11 @@ describe("payload schemas (v2)", () => {
       "awaiting_movement_selection",
       "awaiting_category_selection",
       "awaiting_delete_confirmation",
+      "awaiting_savings_rule",
+      "awaiting_savings_percent",
+      "awaiting_savings_delete",
+      "awaiting_manual_savings",
+      "awaiting_shared_percent",
     ]) {
       expect(BOT_STATES).toContain(state);
     }
@@ -605,6 +626,7 @@ describe("TelegramService menu taps (v2 capture type memory)", () => {
   it("sends the static help for m:help with the 💰 Ahorro sub-menu button", async () => {
     await h.service.handleCallback(callbackUpdate({ data: "m:help" }), h.reply);
     expect(h.replies.at(-1)).toBe(ayudaReply());
+    expect(h.replies.at(-1)).toContain("Ahorro manual");
     const kb = h.keyboards.at(-1) as InlineKeyboard;
     const ahorroButton = kb.flat().find((button) => button.text === "💰 Ahorro");
     expect(ahorroButton?.callback_data).toBe("sa:menu");
@@ -1413,7 +1435,7 @@ describe("TelegramService savings admin sub-menu (sa:*) and delete gate (svdel:*
     seedHarnessCategories(h, ["Cafe"]);
   });
 
-  it("sa:menu supersedes any pending flow and opens the three-action sub-menu", async () => {
+  it("sa:menu supersedes any pending flow and opens the four-action sub-menu incl. sa:manual", async () => {
     await h.service.handleCallback(callbackUpdate({ data: "m:inc" }), h.reply);
 
     await h.service.handleCallback(callbackUpdate({ data: "sa:menu" }), h.reply);
@@ -1422,7 +1444,16 @@ describe("TelegramService savings admin sub-menu (sa:*) and delete gate (svdel:*
     expect(state?.state).toBe("idle");
     expect(h.replies.at(-1)).toBe(savingsAdminReply());
     const kb = h.keyboards.at(-1) as InlineKeyboard;
-    expect(kb.map((row) => row[0]?.callback_data)).toEqual(["sa:new", "sa:list", "sa:del"]);
+    expect(kb.map((row) => row[0]?.callback_data)).toEqual(["sa:new", "sa:list", "sa:del", "sa:manual"]);
+    expect(kb[3]?.[0]?.text).toBe("➕ Ahorro manual");
+  });
+
+  it("sa:manual enters awaiting_manual_savings with the amount + optional note prompt", async () => {
+    await h.service.handleCallback(callbackUpdate({ data: "sa:manual" }), h.reply);
+
+    const state = await h.botStateRepository.get(ownerId);
+    expect(state?.state).toBe("awaiting_manual_savings");
+    expect(h.replies.at(-1)).toBe(manualSavingsPromptReply());
   });
 
   it("sa:new enters awaiting_savings_rule with the syntax prompt", async () => {
@@ -1610,6 +1641,96 @@ describe("TelegramService savings admin sub-menu (sa:*) and delete gate (svdel:*
 
     expect(h.mockDeleteRule).toHaveBeenCalledWith(ownerId, "entrenuts");
     expect(h.replies.at(-1)).toBe(savingsRuleDeletedReply("entrenuts"));
+  });
+
+  it("sa:manual: a valid capture registers via createManualSavings, confirms and returns to the menu", async () => {
+    await h.service.handleCallback(callbackUpdate({ data: "sa:manual" }), h.reply);
+
+    await h.service.handleUpdate(textUpdate({ text: "500 fondo vacaciones", messageId: 2 }), h.reply);
+
+    expect(h.mockCreateManualSavings).toHaveBeenCalledWith({
+      ownerId,
+      amount: 500,
+      note: "fondo vacaciones",
+      occurredAt: expect.any(Date),
+    });
+    expect(h.mockEnsureAhorro).not.toHaveBeenCalled();
+    const state = await h.botStateRepository.get(ownerId);
+    expect(state?.state).toBe("idle");
+    expect(h.replies.at(-2)).toBe(manualSavingsSavedReply(500, "fondo vacaciones"));
+    expect(h.replies.at(-1)).toBe(menuReply());
+  });
+
+  it("sa:manual: an unparseable capture re-prompts, keeps the state and stores nothing", async () => {
+    await h.service.handleCallback(callbackUpdate({ data: "sa:manual" }), h.reply);
+
+    await h.service.handleUpdate(textUpdate({ text: "abc", messageId: 2 }), h.reply);
+
+    expect(h.mockCreateManualSavings).not.toHaveBeenCalled();
+    const state = await h.botStateRepository.get(ownerId);
+    expect(state?.state).toBe("awaiting_manual_savings");
+    expect(h.replies.at(-1)).toBe(manualSavingsPromptReply());
+  });
+
+  it("sa:manual: a zero amount re-prompts and keeps the state (D10 — captureParse accepts 0)", async () => {
+    await h.service.handleCallback(callbackUpdate({ data: "sa:manual" }), h.reply);
+
+    await h.service.handleUpdate(textUpdate({ text: "0", messageId: 2 }), h.reply);
+
+    expect(h.mockCreateManualSavings).not.toHaveBeenCalled();
+    const state = await h.botStateRepository.get(ownerId);
+    expect(state?.state).toBe("awaiting_manual_savings");
+    expect(h.replies.at(-1)).toBe(manualSavingsPromptReply());
+  });
+
+  it("the idle text command registers the manual savings, confirms and returns to the menu", async () => {
+    await h.service.handleUpdate(textUpdate({ text: "registrar ahorro manual: 700 reserva", messageId: 1 }), h.reply);
+
+    expect(h.mockCreateManualSavings).toHaveBeenCalledWith({
+      ownerId,
+      amount: 700,
+      note: "reserva",
+      occurredAt: expect.any(Date),
+    });
+    expect(h.replies.at(-2)).toBe(manualSavingsSavedReply(700, "reserva"));
+    expect(h.replies.at(-1)).toBe(menuReply());
+  });
+
+  it("an invalid manual-savings command replies the validation error and stores nothing (no menu from idle)", async () => {
+    await h.service.handleUpdate(textUpdate({ text: "registrar ahorro manual: abc", messageId: 1 }), h.reply);
+
+    expect(h.mockCreateManualSavings).not.toHaveBeenCalled();
+    expect(h.replies.at(-1)).toBe(manualSavingsInvalidReply());
+    expect(h.replies.at(-1)).not.toBe(menuReply());
+  });
+
+  it("a manual-savings command during awaiting_manual_savings supersedes the state, registers and appends the menu", async () => {
+    await h.service.handleCallback(callbackUpdate({ data: "sa:manual" }), h.reply);
+
+    await h.service.handleUpdate(textUpdate({ text: "registrar ahorro manual: 500", messageId: 2 }), h.reply);
+
+    expect(h.mockCreateManualSavings).toHaveBeenCalledWith({
+      ownerId,
+      amount: 500,
+      note: null,
+      occurredAt: expect.any(Date),
+    });
+    const state = await h.botStateRepository.get(ownerId);
+    expect(state?.state).toBe("idle");
+    expect(h.replies.at(-2)).toBe(manualSavingsSavedReply(500, null));
+    expect(h.replies.at(-1)).toBe(menuReply());
+  });
+
+  it("an invalid manual-savings command during awaiting_manual_savings closes the state, replies invalid and appends the menu", async () => {
+    await h.service.handleCallback(callbackUpdate({ data: "sa:manual" }), h.reply);
+
+    await h.service.handleUpdate(textUpdate({ text: "registrar ahorro manual: abc", messageId: 2 }), h.reply);
+
+    expect(h.mockCreateManualSavings).not.toHaveBeenCalled();
+    const state = await h.botStateRepository.get(ownerId);
+    expect(state?.state).toBe("idle");
+    expect(h.replies.at(-2)).toBe(manualSavingsInvalidReply());
+    expect(h.replies.at(-1)).toBe(menuReply());
   });
 });
 

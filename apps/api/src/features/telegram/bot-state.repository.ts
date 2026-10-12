@@ -20,6 +20,9 @@ export const BOT_STATES = [
   "awaiting_savings_rule",
   "awaiting_savings_percent",
   "awaiting_savings_delete",
+  // manual-savings (D9): the sa:manual capture dialog (normalizeState keeps
+  // rollback leftovers honest).
+  "awaiting_manual_savings",
   // shared-expense-split (D1): the COMPARTIDO [Otro] percent input.
   "awaiting_shared_percent",
 ] as const;

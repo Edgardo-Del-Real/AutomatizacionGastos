@@ -53,6 +53,9 @@ import {
   markPaidAlreadyReply,
   markPaidAskReply,
   markPaidReply,
+  manualSavingsInvalidReply,
+  manualSavingsPromptReply,
+  manualSavingsSavedReply,
   menuReply,
   movementCorrectionDoneReply,
   movementMissingReply,
@@ -142,6 +145,9 @@ const AWAITING_DELETE_CONFIRMATION = "awaiting_delete_confirmation";
 const AWAITING_SAVINGS_RULE = "awaiting_savings_rule";
 const AWAITING_SAVINGS_PERCENT = "awaiting_savings_percent";
 const AWAITING_SAVINGS_DELETE = "awaiting_savings_delete";
+// manual-savings (D9/D10): the sa:manual capture dialog. The BOT_STATES enum
+// carries it so rollback payloads recover through normalizeState.
+const AWAITING_MANUAL_SAVINGS = "awaiting_manual_savings";
 // shared-expense-split (D1): the COMPARTIDO [Otro] percent input — a distinct
 // state from awaiting_savings_percent on purpose (different domain: 1..99
 // percent-or-amount vs 0..100 percent-only).
@@ -239,6 +245,15 @@ export type SharedPercentPayload = z.infer<typeof sharedPercentPayloadSchema>;
 export const savingsRulePayloadSchema = z.object({});
 
 export type SavingsRulePayload = z.infer<typeof savingsRulePayloadSchema>;
+
+/**
+ * Stored payload of `awaiting_manual_savings` (design D9): the capture needs
+ * no stored facts — the state itself is the contract, mirroring the
+ * savings-rule payload. Lives in `pendingNote` so it survives restarts.
+ */
+export const manualSavingsPayloadSchema = z.object({});
+
+export type ManualSavingsPayload = z.infer<typeof manualSavingsPayloadSchema>;
 
 /**
  * Stored payload of `awaiting_savings_delete` (design D3): the resolved rule
@@ -431,6 +446,9 @@ export class TelegramService {
         // deleted, then the text idle-routes (dc precedent).
         await this.deps.botStateRepository.set({ ownerId, state: IDLE, pendingMovementId: null, pendingNote: null });
         await this.routeIdleMessage(body, ownerId, reply);
+        return;
+      case AWAITING_MANUAL_SAVINGS:
+        await this.handleAwaitingManualSavings(body, ownerId, reply);
         return;
       case AWAITING_MOVEMENT_SELECTION:
         // A non-command text during a pick abandons it: nothing changes, the
@@ -1091,9 +1109,23 @@ export class TelegramService {
             [{ text: "➕ Crear regla", callback_data: buildCallbackData(["sa", "new"]) }],
             [{ text: "📋 Listar reglas", callback_data: buildCallbackData(["sa", "list"]) }],
             [{ text: "🗑 Borrar regla", callback_data: buildCallbackData(["sa", "del"]) }],
+            // manual-savings (D9): the FOURTH action starts the manual-savings
+            // capture (payload "sa:manual" is 9 bytes ≤ 64; the keyboard stays
+            // within the 8-row limit). The main menu keeps its eight buttons.
+            [{ text: "➕ Ahorro manual", callback_data: buildCallbackData(["sa", "manual"]) }],
           ],
           undefined,
         );
+        return;
+      }
+      case "manual": {
+        await this.deps.botStateRepository.set({
+          ownerId,
+          state: AWAITING_MANUAL_SAVINGS,
+          pendingMovementId: null,
+          pendingNote: JSON.stringify({} satisfies ManualSavingsPayload),
+        });
+        await this.safeReply(reply, manualSavingsPromptReply());
         return;
       }
       case "new": {
@@ -1473,6 +1505,75 @@ export class TelegramService {
     } catch {
       return null;
     }
+  }
+
+  /**
+   * `awaiting_manual_savings` (design Path 1, D10): the next text is the
+   * manual-savings capture. A valid amount (> 0) registers via
+   * `createManualSavings` (D7 — `ensureAhorro` is the service's job, the bot
+   * never pre-calls it), confirms and returns to the menu. An unparseable
+   * reply or a ≤ 0 amount re-prompts and KEEPS the state — captureParse
+   * accepts "0" (parseNumberToken matches `^\d+$` → 0), so the non-positive
+   * guard must be explicit (D10). Commands never reach this handler: they are
+   * intercepted globally and supersede the state through `handleCommand`.
+   */
+  private async handleAwaitingManualSavings(body: string, ownerId: string, reply?: ReplyPort): Promise<void> {
+    const state = await this.deps.botStateRepository.get(ownerId);
+    const payload = this.decodeManualSavingsPayload(state?.pendingNote ?? null);
+
+    // Corrupt capture payload: recover to idle, nothing registers.
+    if (state?.state !== AWAITING_MANUAL_SAVINGS || payload === null) {
+      await this.deps.botStateRepository.set({ ownerId, state: IDLE, pendingMovementId: null, pendingNote: null });
+      await this.safeReply(reply, questionDroppedReply());
+      return;
+    }
+
+    const parsed = captureParse(body);
+    if (parsed === null || parsed.amount <= 0) {
+      await this.safeReply(reply, manualSavingsPromptReply());
+      return;
+    }
+
+    // The state is the consumption record: close it BEFORE creating (the saved
+    // row + menu complete the flow; a retried message cannot double-register).
+    await this.deps.botStateRepository.set({ ownerId, state: IDLE, pendingMovementId: null, pendingNote: null });
+    await this.registerManualSavings(parsed.amount, parsed.note, ownerId, reply);
+  }
+
+  /** Decodes a persisted `awaiting_manual_savings` payload; corrupt JSON yields null. */
+  private decodeManualSavingsPayload(pendingNote: string | null): ManualSavingsPayload | null {
+    if (pendingNote === null) {
+      return null;
+    }
+    try {
+      const parsed = manualSavingsPayloadSchema.safeParse(JSON.parse(pendingNote));
+      return parsed.success ? parsed.data : null;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * manual-savings (D7): registers the savings via ExpenseService and confirms
+   * with an es-AR reply + the main menu (mirror of `registerIncomeSplit`, minus
+   * the pre-`ensureAhorro` — the service owns that invariant). The caller has
+   * already validated the amount (text command or captureParse).
+   */
+  private async registerManualSavings(
+    amount: number,
+    note: string | null,
+    ownerId: string,
+    reply?: ReplyPort,
+  ): Promise<boolean> {
+    await this.deps.expenseService.createManualSavings({
+      ownerId,
+      amount,
+      note,
+      occurredAt: new Date(),
+    });
+    await this.safeReply(reply, manualSavingsSavedReply(amount, note));
+    await this.sendMenu(reply);
+    return true;
   }
 
   /**
@@ -2607,18 +2708,41 @@ export class TelegramService {
         }
         return;
       }
+
+      case "manual-savings": {
+        // Design Path 2 — a manual-savings command supersedes any open savings
+        // input state (incl. awaiting_manual_savings), then registers. The
+        // saved reply + menu come from registerManualSavings unconditionally,
+        // also from idle (a completed action returns to the main menu).
+        await this.closeSavingsInputState(ownerId);
+        await this.registerManualSavings(command.amount, command.note, ownerId, reply);
+        return;
+      }
+
+      case "manual-savings-invalid": {
+        const wasAwaitingSavingsInput = await this.closeSavingsInputState(ownerId);
+        await this.safeReply(reply, manualSavingsInvalidReply());
+        if (wasAwaitingSavingsInput) {
+          await this.sendMenu(reply);
+        }
+        return;
+      }
     }
   }
 
   /**
    * D2 — closes an open savings input state (`awaiting_savings_rule` /
-   * `awaiting_savings_percent`) to idle so a globally-intercepted savings
-   * command supersedes the pending input. Returns whether a state was closed
-   * (the caller appends the menu in that case).
+   * `awaiting_savings_percent` / `awaiting_manual_savings`) to idle so a
+   * globally-intercepted savings command supersedes the pending input. Returns
+   * whether a state was closed (the caller appends the menu in that case).
    */
   private async closeSavingsInputState(ownerId: string): Promise<boolean> {
     const state = await this.deps.botStateRepository.get(ownerId);
-    if (state?.state === AWAITING_SAVINGS_RULE || state?.state === AWAITING_SAVINGS_PERCENT) {
+    if (
+      state?.state === AWAITING_SAVINGS_RULE ||
+      state?.state === AWAITING_SAVINGS_PERCENT ||
+      state?.state === AWAITING_MANUAL_SAVINGS
+    ) {
       await this.deps.botStateRepository.set({ ownerId, state: IDLE, pendingMovementId: null, pendingNote: null });
       return true;
     }

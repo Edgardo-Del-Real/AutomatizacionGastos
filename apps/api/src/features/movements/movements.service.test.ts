@@ -172,6 +172,7 @@ describe("MovementService.getSummary", () => {
       summaryCategories: vi.fn(async () => []),
       topByType: vi.fn(async () => []),
       summarySavings: vi.fn(async () => 0),
+      summaryManualSavings: vi.fn(async () => 0),
       summaryPlanned: vi.fn(async () => ({ month: "2099-01", total: 0 })),
     } as unknown as MovementRepository;
     const service = new MovementService(repository, {} as CategoryService);
@@ -183,6 +184,7 @@ describe("MovementService.getSummary", () => {
       summaryCategories: vi.mocked(repository.summaryCategories),
       topByType: vi.mocked(repository.topByType),
       summarySavings: vi.mocked(repository.summarySavings),
+      summaryManualSavings: vi.mocked(repository.summaryManualSavings),
       summaryPlanned: vi.mocked(repository.summaryPlanned),
     };
   }
@@ -215,6 +217,52 @@ describe("MovementService.getSummary", () => {
     expect(summaryCategories).toHaveBeenCalledWith(ritaScope, { from: undefined, to: undefined });
     expect(topByType).toHaveBeenCalledWith(ritaScope, "EXPENSE", 5, { from: undefined, to: undefined });
     expect(topByType).toHaveBeenCalledWith(ritaScope, "INCOME", 5, { from: undefined, to: undefined });
+  });
+
+  // manual-savings (D2/D3): the deduction feed is period-scoped — it is called
+  // with the REQUESTED period (unlike kpis.savings, which stays pinned to the
+  // current Buenos Aires month) and its total feeds balance. The requested
+  // period is a fixed PAST month so it can never collide with the current BA
+  // month the summarySavings feed is pinned to.
+  it("calls summaryManualSavings with the REQUESTED period and deducts it from the balance (900 − 300 − 50 = 550)", async () => {
+    const { service, summaryKpis, summarySavings, summaryManualSavings } = makeSummaryHarness();
+    summaryKpis.mockResolvedValue({
+      income: 900,
+      expenses: 300,
+      count: 3,
+      maxAmount: 900,
+      monthsWithData: 1,
+    });
+    summaryManualSavings.mockResolvedValue(50);
+
+    const summary = await service.getSummary(ritaScope, "2026-07-01", "2026-07-31");
+
+    expect(summaryManualSavings).toHaveBeenCalledWith(ritaScope, { from: "2026-07-01", to: "2026-07-31" });
+    // kpis.savings stays pinned to the current BA month — never the requested period.
+    const thisMonthPeriod = summarySavings.mock.calls[0]?.[1] as { from: string; to: string };
+    expect(thisMonthPeriod.from).toMatch(/^\d{4}-\d{2}-01$/);
+    expect(thisMonthPeriod).not.toEqual({ from: "2026-07-01", to: "2026-07-31" });
+    expect(summary.kpis.income).toBe(900);
+    expect(summary.kpis.expenses).toBe(300);
+    expect(summary.kpis.manualSavings).toBe(50);
+    expect(summary.kpis.savings).toBe(0);
+    expect(summary.kpis.balance).toBe(550);
+  });
+
+  it("exposes kpis.manualSavings as 0 when no MANUAL savings exist", async () => {
+    const { service, summaryKpis } = makeSummaryHarness();
+    summaryKpis.mockResolvedValue({
+      income: 900,
+      expenses: 300,
+      count: 3,
+      maxAmount: 900,
+      monthsWithData: 1,
+    });
+
+    const summary = await service.getSummary(ritaScope);
+
+    expect(summary.kpis.manualSavings).toBe(0);
+    expect(summary.kpis.balance).toBe(600);
   });
 
   it("exposes countThisMonth from a current-month summaryKpis call alongside the all-time kpis", async () => {

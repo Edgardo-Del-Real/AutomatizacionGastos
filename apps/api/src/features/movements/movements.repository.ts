@@ -1,6 +1,12 @@
 import { Prisma } from "@prisma/client";
 import type { PrismaClient } from "@prisma/client";
-import type { Movement, MovementStatus, MovementType, MovementVisibility } from "@rita/contracts";
+import type {
+  Movement,
+  MovementSavingsOrigin,
+  MovementStatus,
+  MovementType,
+  MovementVisibility,
+} from "@rita/contracts";
 import type {
   CategoryBucket,
   DayBucket,
@@ -29,6 +35,8 @@ type MovementRow = {
   status: MovementStatus;
   /** shared-expense-split: the split gross (null on every legacy row). */
   sharedTotal: Prisma.Decimal | null;
+  /** manual-savings: the origin discriminator (null on every legacy row). */
+  savingsOrigin: MovementSavingsOrigin | null;
 };
 
 type DecimalLike = Prisma.Decimal | string | number | null | undefined;
@@ -56,6 +64,9 @@ function mapMovementRow(row: MovementRow): Movement {
     status: row.status,
     // shared-expense-split: null stays null (legacy rows expose no annotation).
     sharedTotal: row.sharedTotal === null ? null : toNumber(row.sharedTotal),
+    // manual-savings: null stays null (legacy rows expose no annotation); the
+    // wire contract's savingsOrigin accepts the null shape.
+    savingsOrigin: row.savingsOrigin,
   };
 }
 
@@ -108,6 +119,13 @@ export interface MovementRepository {
   topByType(scope: ViewerScope, type: MovementType, limit: number, period: SummaryPeriod): Promise<Movement[]>;
   /** D3: current-calendar-month SAVINGS sum (ARS, viewer-scoped). */
   summarySavings(scope: ViewerScope, period: SummaryPeriod): Promise<number>;
+  /**
+   * manual-savings (D2/D3): REQUESTED-period MANUAL SAVINGS sum (ARS,
+   * viewer-scoped). Mirror of summarySavings + the origin filter; deducts
+   * nothing by itself — the service composes `balance = income − expenses −
+   * manualSavings`. NULL/AUTO_SPLIT rows are inert here.
+   */
+  summaryManualSavings(scope: ViewerScope, period: SummaryPeriod): Promise<number>;
   /**
    * D4: the owner's PENDING EXPENSE total whose derived month (occurredAt + 1
    * month, Buenos Aires) equals `month`. Ignores any from/to filters by design.
@@ -178,7 +196,7 @@ export class PrismaMovementRepository implements MovementRepository {
     }
     const where = Prisma.join(conditions, " AND ");
     const rows = await this.prisma.$queryRaw<MovementRow[]>`
-      SELECT "id", "ownerId", "ownerId" AS "registrantId", "amount", "currency", "category", "note", "occurredAt", "createdAt", "type", "visibility", "status", "sharedTotal"
+      SELECT "id", "ownerId", "ownerId" AS "registrantId", "amount", "currency", "category", "note", "occurredAt", "createdAt", "type", "visibility", "status", "sharedTotal", "savingsOrigin"
       FROM "Expense"
       WHERE ${where}
       ORDER BY "occurredAt" DESC
@@ -339,7 +357,7 @@ export class PrismaMovementRepository implements MovementRepository {
     ];
     const where = Prisma.join(conditions, " AND ");
     const rows = await this.prisma.$queryRaw<MovementRow[]>`
-      SELECT "id", "ownerId", "ownerId" AS "registrantId", "amount", "currency", "category", "note", "occurredAt", "createdAt", "type", "visibility", "status", "sharedTotal"
+      SELECT "id", "ownerId", "ownerId" AS "registrantId", "amount", "currency", "category", "note", "occurredAt", "createdAt", "type", "visibility", "status", "sharedTotal", "savingsOrigin"
       FROM "Expense"
       WHERE ${where}
       ORDER BY "amount" DESC
@@ -362,6 +380,30 @@ export class PrismaMovementRepository implements MovementRepository {
       WHERE ${where}
     `;
     return toNumber(rows[0]?.savings);
+  }
+
+  /**
+   * manual-savings (D2/D3): EXACT shape of summarySavings + one predicate —
+   * only `savingsOrigin = 'MANUAL'` rows count; NULL (legacy) and AUTO_SPLIT
+   * rows are inert. The service feeds it the REQUESTED period while
+   * summarySavings stays pinned to the current BA month (the D3 comments at
+   * both call sites keep the two scopes apart).
+   */
+  async summaryManualSavings(scope: ViewerScope, period: SummaryPeriod): Promise<number> {
+    const conditions: Prisma.Sql[] = [
+      this.viewerPredicate(scope),
+      Prisma.sql`"currency" = 'ARS'`,
+      Prisma.sql`"type" = 'SAVINGS'::"MovementType"`,
+      Prisma.sql`"savingsOrigin" = 'MANUAL'::"MovementSavingsOrigin"`,
+      ...periodConditions(period),
+    ];
+    const where = Prisma.join(conditions, " AND ");
+    const rows = await this.prisma.$queryRaw<{ manualSavings: DecimalLike }[]>`
+      SELECT COALESCE(SUM("amount"), 0) AS "manualSavings"
+      FROM "Expense"
+      WHERE ${where}
+    `;
+    return toNumber(rows[0]?.manualSavings);
   }
 
   /**

@@ -53,7 +53,18 @@ describe("PATCH /movements/:id savings-category guard (D9)", () => {
     });
   }
 
-  async function seedMovement(type: "EXPENSE" | "INCOME" | "SAVINGS"): Promise<string> {
+  async function seedCategory(name: string, type: "NORMAL" | "SAVINGS"): Promise<void> {
+    await prisma.category.upsert({
+      where: { ownerId_name: { ownerId: "owner-1", name } },
+      update: {},
+      create: { ownerId: "owner-1", name, type },
+    });
+  }
+
+  async function seedMovement(
+    type: "EXPENSE" | "INCOME" | "SAVINGS",
+    savingsOrigin?: "AUTO_SPLIT" | "MANUAL",
+  ): Promise<string> {
     const row = await prisma.expense.create({
       data: {
         ownerId: "owner-1",
@@ -63,6 +74,7 @@ describe("PATCH /movements/:id savings-category guard (D9)", () => {
         note: "mov",
         occurredAt: new Date("2026-09-15T12:00:00.000Z"),
         type,
+        savingsOrigin,
       },
     });
     return row.id;
@@ -123,5 +135,112 @@ describe("PATCH /movements/:id savings-category guard (D9)", () => {
     });
 
     expect(response.statusCode).toBe(422);
+  });
+
+  // manual-savings PATCH pin: a MANUAL row is pinned to the ahorro category —
+  // drifting it to another category OR clearing it with null is rejected (422),
+  // the row stays untouched, while amount/note edits keep working and
+  // AUTO_SPLIT/NULL-origin rows keep their existing category freedom.
+  it("rejects drifting the category of a MANUAL savings movement with 422 and leaves it unchanged", async () => {
+    await seedAhorro();
+    await seedCategory("bolsillo", "NORMAL");
+    const id = await seedMovement("SAVINGS", "MANUAL");
+
+    const response = await app.inject({
+      method: "PATCH",
+      url: `/movements/${id}`,
+      headers: { "x-owner-id": "owner-1" },
+      payload: { category: "bolsillo" },
+    });
+
+    expect(response.statusCode).toBe(422);
+    expect(response.json().code).toBe("ValidationFailed");
+    const row = await prisma.expense.findUnique({ where: { id } });
+    expect(row?.category).toBe("ahorro");
+  });
+
+  it("rejects clearing the category of a MANUAL savings movement with 422", async () => {
+    await seedAhorro();
+    const id = await seedMovement("SAVINGS", "MANUAL");
+
+    const response = await app.inject({
+      method: "PATCH",
+      url: `/movements/${id}`,
+      headers: { "x-owner-id": "owner-1" },
+      payload: { category: null },
+    });
+
+    expect(response.statusCode).toBe(422);
+    const row = await prisma.expense.findUnique({ where: { id } });
+    expect(row?.category).toBe("ahorro");
+  });
+
+  it("still allows editing the amount of a MANUAL savings movement and the balance recomputes", async () => {
+    await seedAhorro();
+    await prisma.expense.create({
+      data: {
+        ownerId: "owner-1",
+        amount: 900,
+        currency: "ARS",
+        category: "work",
+        note: "sueldo",
+        occurredAt: new Date("2026-09-15T12:00:00.000Z"),
+        type: "INCOME",
+      },
+    });
+    const id = await seedMovement("SAVINGS", "MANUAL");
+
+    const response = await app.inject({
+      method: "PATCH",
+      url: `/movements/${id}`,
+      headers: { "x-owner-id": "owner-1" },
+      payload: { amount: 80 },
+    });
+
+    expect(response.statusCode).toBe(200);
+    const row = await prisma.expense.findUnique({ where: { id } });
+    expect(row?.amount.toNumber()).toBe(80);
+
+    const summary = await app.inject({
+      method: "GET",
+      url: `/movements/summary?ownerId=owner-1&from=2026-09-01&to=2026-09-30`,
+    });
+    const body = summary.json() as { kpis: { income: number; expenses: number; balance: number; manualSavings: number } };
+    expect(body.kpis.manualSavings).toBe(80);
+    expect(body.kpis.balance).toBe(820);
+  });
+
+  it("keeps category freedom on AUTO_SPLIT savings movements", async () => {
+    await seedAhorro();
+    await seedCategory("bolsillo", "NORMAL");
+    const id = await seedMovement("SAVINGS", "AUTO_SPLIT");
+
+    const response = await app.inject({
+      method: "PATCH",
+      url: `/movements/${id}`,
+      headers: { "x-owner-id": "owner-1" },
+      payload: { category: "bolsillo" },
+    });
+
+    expect(response.statusCode).toBe(200);
+    const row = await prisma.expense.findUnique({ where: { id } });
+    expect(row?.category).toBe("bolsillo");
+  });
+
+  it("keeps category freedom on legacy NULL-origin savings movements", async () => {
+    await seedAhorro();
+    await seedCategory("bolsillo", "NORMAL");
+    const id = await seedMovement("SAVINGS");
+
+    const response = await app.inject({
+      method: "PATCH",
+      url: `/movements/${id}`,
+      headers: { "x-owner-id": "owner-1" },
+      payload: { category: "bolsillo" },
+    });
+
+    expect(response.statusCode).toBe(200);
+    const row = await prisma.expense.findUnique({ where: { id } });
+    expect(row?.category).toBe("bolsillo");
   });
 });

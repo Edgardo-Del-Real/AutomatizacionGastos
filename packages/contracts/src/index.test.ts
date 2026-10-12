@@ -6,6 +6,7 @@ import {
   householdMembersSchema,
   listMovementsSchema,
   movementFiltersSchema,
+  movementSavingsOriginSchema,
   movementSchema,
   movementStatusSchema,
   movementSummarySchema,
@@ -56,6 +57,18 @@ describe("movementVisibilitySchema", () => {
 
   it("rejects an unknown visibility value", () => {
     const result = movementVisibilitySchema.safeParse("foo");
+    expect(result.success).toBe(false);
+  });
+});
+
+describe("movementSavingsOriginSchema", () => {
+  it("accepts AUTO_SPLIT and MANUAL", () => {
+    expect(movementSavingsOriginSchema.parse("AUTO_SPLIT")).toBe("AUTO_SPLIT");
+    expect(movementSavingsOriginSchema.parse("MANUAL")).toBe("MANUAL");
+  });
+
+  it("rejects an unknown origin value", () => {
+    const result = movementSavingsOriginSchema.safeParse("LEGACY");
     expect(result.success).toBe(false);
   });
 });
@@ -151,6 +164,42 @@ describe("movementSchema", () => {
 
   it("rejects a sharedTotal out of the money shape", () => {
     const result = movementSchema.safeParse({ ...movementPayload, sharedTotal: "2000" });
+    expect(result.success).toBe(false);
+  });
+
+  // manual-savings (D1/D8): additive optional-nullable savingsOrigin on the
+  // movement read shape. AUTO_SPLIT rows carry it; legacy rows validate
+  // without it and a NULL origin behaves exactly as before.
+  it("carries savingsOrigin on an AUTO_SPLIT SAVINGS row", () => {
+    const parsed = movementSchema.parse({
+      ...movementPayload,
+      type: "SAVINGS",
+      savingsOrigin: "AUTO_SPLIT",
+    });
+    expect(parsed.savingsOrigin).toBe("AUTO_SPLIT");
+  });
+
+  it("carries a MANUAL savingsOrigin", () => {
+    const parsed = movementSchema.parse({
+      ...movementPayload,
+      type: "SAVINGS",
+      savingsOrigin: "MANUAL",
+    });
+    expect(parsed.savingsOrigin).toBe("MANUAL");
+  });
+
+  it("carries a null savingsOrigin", () => {
+    const parsed = movementSchema.parse({ ...movementPayload, savingsOrigin: null });
+    expect(parsed.savingsOrigin).toBeNull();
+  });
+
+  it("parses a legacy row without savingsOrigin (absent stays absent)", () => {
+    const parsed = movementSchema.parse(movementPayload);
+    expect(parsed.savingsOrigin).toBeUndefined();
+  });
+
+  it("rejects an out-of-enum savingsOrigin", () => {
+    const result = movementSchema.safeParse({ ...movementPayload, savingsOrigin: "LEGACY" });
     expect(result.success).toBe(false);
   });
 });
@@ -455,6 +504,64 @@ describe("createMovementSchema", () => {
       occurredAt: "2026-08-01T12:00:00.000Z",
       type: "EXPENSE",
       status: "PARTIAL",
+    });
+    expect(result.success).toBe(false);
+  });
+
+  // manual-savings (D8): savingsOrigin present ⇒ type SAVINGS ∧ value MANUAL.
+  // AUTO_SPLIT rows are internal-only (createIncomeWithSavings); the API server
+  // stamps MANUAL on SAVINGS creates, so absent-or-MANUAL on SAVINGS passes.
+  it("accepts a SAVINGS create without savingsOrigin (server stamps MANUAL)", () => {
+    const result = createMovementSchema.safeParse({
+      amount: 1000,
+      occurredAt: "2026-08-01T12:00:00.000Z",
+      type: "SAVINGS",
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it("accepts a SAVINGS create with savingsOrigin MANUAL", () => {
+    const parsed = createMovementSchema.parse({
+      amount: 1000,
+      occurredAt: "2026-08-01T12:00:00.000Z",
+      type: "SAVINGS",
+      savingsOrigin: "MANUAL",
+    });
+    expect(parsed.savingsOrigin).toBe("MANUAL");
+  });
+
+  it("rejects a SAVINGS create with savingsOrigin AUTO_SPLIT (internal-only)", () => {
+    const result = createMovementSchema.safeParse({
+      amount: 1000,
+      occurredAt: "2026-08-01T12:00:00.000Z",
+      type: "SAVINGS",
+      savingsOrigin: "AUTO_SPLIT",
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects savingsOrigin MANUAL on a non-SAVINGS create", () => {
+    const expense = createMovementSchema.safeParse({
+      amount: 1000,
+      occurredAt: "2026-08-01T12:00:00.000Z",
+      type: "EXPENSE",
+      savingsOrigin: "MANUAL",
+    });
+    expect(expense.success).toBe(false);
+    const income = createMovementSchema.safeParse({
+      amount: 1000,
+      occurredAt: "2026-08-01T12:00:00.000Z",
+      type: "INCOME",
+      savingsOrigin: "MANUAL",
+    });
+    expect(income.success).toBe(false);
+  });
+
+  it("rejects savingsOrigin on a create without an explicit type (defaults EXPENSE)", () => {
+    const result = createMovementSchema.safeParse({
+      amount: 1000,
+      occurredAt: "2026-08-01T12:00:00.000Z",
+      savingsOrigin: "MANUAL",
     });
     expect(result.success).toBe(false);
   });

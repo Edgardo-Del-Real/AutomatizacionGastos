@@ -176,6 +176,11 @@ export const movementSummarySchema = z.object({
     expenses: z.number(),
     balance: z.number(),
     savings: z.number(),
+    // manual-savings (D4): REQUIRED — the summary endpoint ships the
+    // summaryManualSavings producer in the same work unit as this contract, so
+    // consumers can validate `balance = income − expenses − manualSavings`
+    // at runtime without an optional-absence fallback.
+    manualSavings: z.number(),
     avgPerMonth: z.number(),
     avgPerMovement: z.number(),
     maxAmount: z.number(),

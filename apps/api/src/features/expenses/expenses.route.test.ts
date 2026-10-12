@@ -79,6 +79,36 @@ describe("expenses route", () => {
     expect(response.json().code).toBe("ValidationFailed");
   });
 
+  it("creates a SAVINGS movement defaulting the category to ahorro", async () => {
+    const response = await app.inject({
+      method: "POST",
+      url: "/expenses",
+      headers: { "x-owner-id": "owner-1" },
+      payload: { type: "SAVINGS", amount: 50, note: "fondo", occurredAt: "2026-08-01T12:00:00.000Z" },
+    });
+
+    expect(response.statusCode).toBe(201);
+    const body = response.json();
+    expect(body.category).toBe("ahorro");
+
+    const movements = await app.inject({ method: "GET", url: "/movements?ownerId=owner-1" });
+    const list = movements.json() as { type: string; savingsOrigin: string | null }[];
+    const savings = list.find((movement) => movement.type === "SAVINGS");
+    expect(savings?.savingsOrigin).toBe("MANUAL");
+  });
+
+  it("rejects a SAVINGS movement with a non-ahorro category with 422", async () => {
+    const response = await app.inject({
+      method: "POST",
+      url: "/expenses",
+      headers: { "x-owner-id": "owner-1" },
+      payload: { type: "SAVINGS", amount: 50, category: "bolsillo", occurredAt: "2026-08-01T12:00:00.000Z" },
+    });
+
+    expect(response.statusCode).toBe(422);
+    expect(response.json().code).toBe("ValidationFailed");
+  });
+
   it("rejects a request without an owner id with 422", async () => {
     const response = await app.inject({
       method: "POST",

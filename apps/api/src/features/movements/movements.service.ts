@@ -25,18 +25,34 @@ export class MovementService {
    * `type`/`occurredAt` are excluded by the shared contract. The movement's own
    * type feeds the guard (D9): the SAVINGS category is rejected on EXPENSE and
    * INCOME movements.
+   *
+   * manual-savings PATCH pin (D1/D9): a MANUAL-savings row is pinned to the
+   * "ahorro" category — drifting it to another category OR clearing it with
+   * null is rejected (422). AUTO_SPLIT and legacy NULL-origin rows keep the
+   * existing category freedom (only MANUAL rows are deducted, so only they
+   * pin). `type` stays immutable via the shared contract, so a row can never
+   * be unpinned by reclassifying it.
    */
   async updateMovement(ownerId: string, id: string, patch: unknown): Promise<Movement> {
     const parsed = updateMovementSchema.safeParse(patch);
     if (!parsed.success) {
       throw new ValidationFailedError("Invalid movement patch", parsed.error.issues);
     }
-    if (parsed.data.category !== undefined && parsed.data.category !== null) {
+    if (parsed.data.category !== undefined) {
       const movement = await this.repository.findById(id, ownerId);
       if (movement === null) {
         throw new NotFoundError(`Movement ${id} not found`);
       }
-      await this.categoryService.assertOwnerCategory(ownerId, parsed.data.category, movement.type);
+      if (
+        movement.type === "SAVINGS" &&
+        movement.savingsOrigin === "MANUAL" &&
+        parsed.data.category !== "ahorro"
+      ) {
+        throw new ValidationFailedError("Manual savings are pinned to the ahorro category");
+      }
+      if (parsed.data.category !== null) {
+        await this.categoryService.assertOwnerCategory(ownerId, parsed.data.category, movement.type);
+      }
     }
     const updated = await this.repository.updateById(id, ownerId, parsed.data);
     if (updated === null) {
@@ -73,13 +89,17 @@ export class MovementService {
   async getSummary(scope: ViewerScope, from?: string, to?: string): Promise<MovementSummary> {
     const period: SummaryPeriod = { from, to };
     const thisMonthPeriod = currentMonthPeriod();
-    const [kpis, thisMonthKpis, savings, months, daily, categories, topExpenses, topIncome, planned] =
+    const [kpis, thisMonthKpis, savings, manualSavings, months, daily, categories, topExpenses, topIncome, planned] =
       await Promise.all([
         this.repository.summaryKpis(scope, period),
         this.repository.summaryKpis(scope, thisMonthPeriod),
         // D3: kpis.savings is the current-calendar-month SAVINGS sum (the
         // period-scoped KPIs exclude SAVINGS entirely).
         this.repository.summarySavings(scope, thisMonthPeriod),
+        // D3: kpis.manualSavings is the REQUESTED-period MANUAL SAVINGS sum
+        // (period-scoped, origin-filtered) — the two savings feeds must never
+        // be conflated; balance is the composition below, not either sum.
+        this.repository.summaryManualSavings(scope, period),
         this.repository.summaryMonths(scope),
         this.repository.summaryDaily(scope),
         this.repository.summaryCategories(scope, period),
@@ -91,7 +111,10 @@ export class MovementService {
         this.repository.summaryPlanned(scope, nextBaMonth()),
       ]);
 
-    const balance = kpis.income - kpis.expenses;
+    // manual-savings (D2): kpis excludes SAVINGS entirely, so manual savings
+    // never appear in income/expenses; they deduct from the balance on top of
+    // the non-savings income and expenses.
+    const balance = kpis.income - kpis.expenses - manualSavings;
     const avgPerMonth = kpis.count === 0 ? 0 : balance / kpis.monthsWithData;
     const avgPerMovement = kpis.count === 0 ? 0 : (kpis.income + kpis.expenses) / kpis.count;
 
@@ -125,6 +148,7 @@ export class MovementService {
         expenses: kpis.expenses,
         balance,
         savings,
+        manualSavings,
         avgPerMonth,
         avgPerMovement,
         maxAmount: kpis.maxAmount,

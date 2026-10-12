@@ -313,9 +313,12 @@ const summaryPayload = {
   kpis: {
     income: 50000,
     expenses: 12500,
-    balance: 37500,
+    balance: 35500,
     savings: 10000,
-    avgPerMonth: 37500,
+    // manual-savings (D4): the REQUESTED-period MANUAL savings sum. Required —
+    // the API summary always emits its producer, so the dashboard can rely on it.
+    manualSavings: 2000,
+    avgPerMonth: 35500,
     avgPerMovement: 25000,
     maxAmount: 50000,
     count: 2,
@@ -344,8 +347,9 @@ const summaryPayload = {
 describe("movementSummarySchema", () => {
   it("parses a full summary payload", () => {
     const parsed = movementSummarySchema.parse(summaryPayload);
-    expect(parsed.kpis.balance).toBe(37500);
+    expect(parsed.kpis.balance).toBe(35500);
     expect(parsed.kpis.savings).toBe(10000);
+    expect(parsed.kpis.manualSavings).toBe(2000);
     expect(parsed.kpis.count).toBe(2);
     expect(parsed.kpis.countThisMonth).toBe(1);
     expect(parsed.mom.months[0]?.balance).toBe(-5000);
@@ -372,6 +376,16 @@ describe("movementSummarySchema", () => {
     const withoutSavings: Record<string, unknown> = JSON.parse(JSON.stringify(summaryPayload));
     delete (withoutSavings.kpis as Record<string, unknown>).savings;
     const result = movementSummarySchema.safeParse(withoutSavings);
+    expect(result.success).toBe(false);
+  });
+
+  // manual-savings (D4): kpis.manualSavings is REQUIRED — the summary endpoint
+  // ships it in the same work unit as this contract, so the dashboard can
+  // validate the deduction invariant at runtime.
+  it("rejects a summary missing the kpis manualSavings figure", () => {
+    const withoutManualSavings: Record<string, unknown> = JSON.parse(JSON.stringify(summaryPayload));
+    delete (withoutManualSavings.kpis as Record<string, unknown>).manualSavings;
+    const result = movementSummarySchema.safeParse(withoutManualSavings);
     expect(result.success).toBe(false);
   });
 

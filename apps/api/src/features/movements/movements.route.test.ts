@@ -288,6 +288,7 @@ describe("movements route", () => {
         expenses: 0,
         balance: 0,
         savings: 0,
+        manualSavings: 0,
         avgPerMonth: 0,
         avgPerMovement: 0,
         maxAmount: 0,

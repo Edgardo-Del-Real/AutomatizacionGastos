@@ -30,10 +30,12 @@ export type AppOptions = {
 export function buildApp(options: AppOptions = {}): FastifyInstance {
   const prisma = options.prisma ?? prismaClient;
   const expenseRepository = new PrismaExpenseRepository(prisma);
-  const expenseService = new ExpenseService(expenseRepository);
   const movementRepository = new PrismaMovementRepository(prisma);
   const categoryRepository = new PrismaCategoryRepository(prisma);
   const categoryService = new CategoryService(categoryRepository);
+  // manual-savings (D6): ExpenseService takes CategoryService as a required
+  // 2nd constructor param — the category wiring must sit above it.
+  const expenseService = new ExpenseService(expenseRepository, categoryService);
   const savingsRepository = new PrismaSavingsRuleRepository(prisma);
   const savingsService = new SavingsRuleService(savingsRepository);
   const movementService = new MovementService(movementRepository, categoryService);

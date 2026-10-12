@@ -66,6 +66,7 @@ type SeedMovement = {
   note?: string | null;
   occurredAt?: string;
   type: "EXPENSE" | "INCOME" | "SAVINGS";
+  savingsOrigin?: "AUTO_SPLIT" | "MANUAL";
 };
 
 const OWNER = "owner-1";
@@ -113,6 +114,7 @@ describe("movements savings exclusion (D1–D3)", () => {
         note: movement.note ?? null,
         occurredAt: new Date(movement.occurredAt ?? currentBaDayNoonIso()),
         type: movement.type,
+        savingsOrigin: movement.savingsOrigin,
       },
     });
   }
@@ -260,5 +262,118 @@ describe("movements savings exclusion (D1–D3)", () => {
     const incomeRow = rows.find((row) => row.type === "INCOME");
     expect(savingsRow?.savingsOrigin).toBe("AUTO_SPLIT");
     expect(incomeRow?.savingsOrigin).toBeNull();
+  });
+
+  // manual-savings (D2/D3): a MANUAL SAVINGS row deducts from the balance and
+  // is exposed as kpis.manualSavings — the REQUESTED-period sum, separate from
+  // the current-month kpis.savings.
+  it("deducts MANUAL savings from the balance and exposes kpis.manualSavings", async () => {
+    await seed({ ownerId: OWNER, amount: 900, type: "INCOME", note: "sueldo", category: "work" });
+    await seed({
+      ownerId: OWNER,
+      amount: 50,
+      type: "SAVINGS",
+      note: "fondo",
+      category: "ahorro",
+      savingsOrigin: "MANUAL",
+    });
+    await seed({ ownerId: OWNER, amount: 300, type: "EXPENSE", note: "mercado", category: "food" });
+
+    const summary = await service.getSummary(scope);
+
+    expect(summary.kpis.income).toBe(900);
+    expect(summary.kpis.expenses).toBe(300);
+    expect(summary.kpis.manualSavings).toBe(50);
+    expect(summary.kpis.savings).toBe(50);
+    expect(summary.kpis.balance).toBe(550);
+  });
+
+  it("splits AUTO_SPLIT and MANUAL savings between kpis.savings and kpis.manualSavings in a mixed month", async () => {
+    await seed({ ownerId: OWNER, amount: 900, type: "INCOME", note: "sueldo", category: "work" });
+    await seed({
+      ownerId: OWNER,
+      amount: 100,
+      type: "SAVINGS",
+      note: "auto",
+      category: "ahorro",
+      savingsOrigin: "AUTO_SPLIT",
+    });
+    await seed({
+      ownerId: OWNER,
+      amount: 50,
+      type: "SAVINGS",
+      note: "manual",
+      category: "ahorro",
+      savingsOrigin: "MANUAL",
+    });
+    await seed({ ownerId: OWNER, amount: 300, type: "EXPENSE", note: "mercado", category: "food" });
+
+    const summary = await service.getSummary(scope);
+
+    expect(summary.kpis.savings).toBe(150);
+    expect(summary.kpis.manualSavings).toBe(50);
+    expect(summary.kpis.balance).toBe(550);
+  });
+
+  it("deducts MANUAL savings within the requested period only (prior-month rows excluded)", async () => {
+    await seed({ ownerId: OWNER, amount: 900, type: "INCOME", note: "sueldo", category: "work" });
+    await seed({
+      ownerId: OWNER,
+      amount: 50,
+      type: "SAVINGS",
+      note: "fondo",
+      category: "ahorro",
+      savingsOrigin: "MANUAL",
+    });
+    await seed({
+      ownerId: OWNER,
+      amount: 30,
+      type: "SAVINGS",
+      note: "prior fondo",
+      category: "ahorro",
+      savingsOrigin: "MANUAL",
+      occurredAt: `${priorBaMonthKey()}-15T12:00:00.000Z`,
+    });
+    await seed({ ownerId: OWNER, amount: 300, type: "EXPENSE", note: "mercado", category: "food" });
+
+    const currentKey = currentBaMonthKey();
+    const period = { from: `${currentKey}-01`, to: `${currentKey}-31` };
+    const summary = await service.getSummary(scope, period.from, period.to);
+
+    expect(summary.kpis.manualSavings).toBe(50);
+    expect(summary.kpis.balance).toBe(550);
+  });
+
+  it("keeps legacy NULL-origin SAVINGS rows outside kpis.manualSavings (history identical)", async () => {
+    await seedExclusionFixture();
+
+    const summary = await service.getSummary(scope);
+
+    expect(summary.kpis.manualSavings).toBe(0);
+    expect(summary.kpis.balance).toBe(600);
+    expect(summary.kpis.savings).toBe(100);
+  });
+
+  it("returns the money to the balance when a MANUAL savings movement is deleted", async () => {
+    await seed({ ownerId: OWNER, amount: 900, type: "INCOME", note: "sueldo", category: "work" });
+    await seed({ ownerId: OWNER, amount: 300, type: "EXPENSE", note: "mercado", category: "food" });
+    await seed({
+      ownerId: OWNER,
+      amount: 50,
+      type: "SAVINGS",
+      note: "fondo",
+      category: "ahorro",
+      savingsOrigin: "MANUAL",
+    });
+    const rows = await prisma.expense.findMany({
+      where: { ownerId: OWNER, type: "SAVINGS" },
+    });
+    expect(rows).toHaveLength(1);
+    await service.deleteMovement(OWNER, rows[0]!.id);
+
+    const summary = await service.getSummary(scope);
+
+    expect(summary.kpis.manualSavings).toBe(0);
+    expect(summary.kpis.balance).toBe(600);
   });
 });

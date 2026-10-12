@@ -425,7 +425,7 @@ describe("createTelegramBot callback wiring (D4)", () => {
 });
 
 describe("startTelegramBot (D12)", () => {
-  it("registers exactly the seven owner-visible commands, never the text CRUD commands", async () => {
+  it("registers exactly the eight owner-visible commands, never the text CRUD commands", async () => {
     const recorded: RecordedApiCall[] = [];
     const service = {
       handleUpdate: async () => undefined,
@@ -445,6 +445,7 @@ describe("startTelegramBot (D12)", () => {
       "listar_categorias",
       "configurar_categorias",
       "registrar_ahorro",
+      "registrar_ahorro_manual",
       "listar_ahorros",
       "borrar_ahorro",
     ]);

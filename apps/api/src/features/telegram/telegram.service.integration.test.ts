@@ -14,7 +14,7 @@ import { PrismaSavingsRuleRepository } from "../savings/savings.repository";
 import { SavingsRuleService } from "../savings/savings.service";
 import type { BotBrain, ConversationEnvelope } from "./bot-brain";
 import { HouseholdService } from "../household/household.service";
-import { captureShapedRedirectReply, categoryCrudRedirectReply, menuReply, previstoPrefixRedirectReply, questionDroppedReply } from "./reply-text";
+import { captureShapedRedirectReply, categoryCrudRedirectReply, manualSavingsInvalidReply, manualSavingsPromptReply, manualSavingsSavedReply, menuReply, previstoPrefixRedirectReply, questionDroppedReply, savingsAdminReply } from "./reply-text";
 import { capturePayloadSchema, previewPayloadSchema, TelegramService } from "./telegram.service";
 import type { InlineKeyboard } from "./telegram.parser";
 
@@ -634,5 +634,77 @@ describe("TelegramService (integration v2)", () => {
 
     expect(replies.at(-2)).toContain("2.500");
     expect(replies.at(-1)).toBe(menuReply());
+  });
+
+  describe("manual savings e2e (PR3)", () => {
+    // Built per-test (the outer beforeAll assigns `prisma` after this describe registers).
+    const summaryMovementService = () => new MovementService(new PrismaMovementRepository(prisma), categoryService);
+
+    it("sa:menu renders four actions; sa:manual persists MANUAL·ahorro·INDIVIDUAL and the balance deducts", async () => {
+      await seedCategories(["Cafe"]);
+      // Real income + expense first (capture chain), so the balance math shows.
+      const incPreview = await openPreview("INGRESO", "900 sueldo", 1);
+      await service.handleCallback(callbackUpdate(`cat:${await categoryIdFor("Cafe")}`), async () => undefined);
+      await service.handleCallback(callbackUpdate(`pv:save:${incPreview.saveToken}`), async () => undefined);
+      const expPreview = await openPreview("REAL", "300 cafe", 2);
+      await service.handleCallback(callbackUpdate(`cat:${await categoryIdFor("Cafe")}`), async () => undefined);
+      await service.handleCallback(callbackUpdate(`pv:save:${expPreview.saveToken}`), async () => undefined);
+
+      const { replies, reply, keyboards } = replyCollector();
+      await service.handleCallback(callbackUpdate("sa:menu"), reply);
+      expect(replies.at(-1)).toBe(savingsAdminReply());
+      const subMenuKb = keyboards.at(-1) as InlineKeyboard;
+      expect(subMenuKb.map((row) => row[0]?.callback_data)).toEqual(["sa:new", "sa:list", "sa:del", "sa:manual"]);
+      expect(subMenuKb[3]?.[0]?.text).toBe("➕ Ahorro manual");
+
+      await service.handleCallback(callbackUpdate("sa:manual"), reply);
+      expect(replies.at(-1)).toBe(manualSavingsPromptReply());
+      const stateBefore = await prisma.botState.findUnique({ where: { ownerId } });
+      expect(stateBefore?.state).toBe("awaiting_manual_savings");
+
+      await service.handleUpdate(textUpdate({ messageId: 3, text: "500 fondo vacaciones" }), reply);
+
+      const rows = await prisma.expense.findMany({ where: { ownerId } });
+      const savings = rows.find((row) => row.type === "SAVINGS");
+      expect(savings?.savingsOrigin).toBe("MANUAL");
+      expect(savings?.category).toBe("ahorro");
+      expect(savings?.status).toBe("PAID");
+      expect(savings?.visibility).toBe("INDIVIDUAL");
+      expect(savings?.currency).toBe("ARS");
+      expect(Number(savings?.amount)).toBe(500);
+      expect(savings?.note).toBe("fondo vacaciones");
+      expect(replies.at(-2)).toBe(manualSavingsSavedReply(500, "fondo vacaciones"));
+      expect(replies.at(-1)).toBe(menuReply());
+      const stateAfter = await prisma.botState.findUnique({ where: { ownerId } });
+      expect(stateAfter?.state).toBe("idle");
+
+      const summary = await summaryMovementService().getSummary({ viewerId: ownerId, partnerId: null, visibility: "mine" });
+      expect(summary.kpis.income).toBe(900);
+      expect(summary.kpis.expenses).toBe(300);
+      expect(summary.kpis.manualSavings).toBe(500);
+      expect(summary.kpis.balance).toBe(100);
+    });
+
+    it("the text command registers from idle; an invalid command stores nothing", async () => {
+      await seedCategories(["Cafe"]);
+      const { replies, reply } = replyCollector();
+
+      await service.handleUpdate(textUpdate({ messageId: 1, text: "registrar ahorro manual: 700 reserva" }), reply);
+
+      const rows = await prisma.expense.findMany({ where: { ownerId } });
+      expect(rows).toHaveLength(1);
+      expect(rows[0]?.type).toBe("SAVINGS");
+      expect(rows[0]?.savingsOrigin).toBe("MANUAL");
+      expect(rows[0]?.category).toBe("ahorro");
+      expect(rows[0]?.visibility).toBe("INDIVIDUAL");
+      expect(replies.at(-2)).toBe(manualSavingsSavedReply(700, "reserva"));
+      expect(replies.at(-1)).toBe(menuReply());
+
+      await service.handleUpdate(textUpdate({ messageId: 2, text: "registrar ahorro manual: abc" }), reply);
+
+      expect(await prisma.expense.count()).toBe(1);
+      expect(replies.at(-1)).toBe(manualSavingsInvalidReply());
+      expect(replies.at(-1)).not.toBe(menuReply());
+    });
   });
 });

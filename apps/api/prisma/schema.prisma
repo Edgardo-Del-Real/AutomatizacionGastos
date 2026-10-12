@@ -23,6 +23,11 @@ enum MovementStatus {
   PAID
 }
 
+enum MovementSavingsOrigin {
+  AUTO_SPLIT
+  MANUAL
+}
+
 enum CategoryType {
   NORMAL
   MIXED
@@ -46,6 +51,9 @@ model Expense {
   // shared-expense-split: full gross the sender split from; set only on a
   // shared-split row, null (inert) for every legacy movement.
   sharedTotal Decimal?          @db.Decimal(12, 2)
+  // manual-savings: origin of a SAVINGS row; null (inert) on every legacy row
+  // and on the net INCOME of a split — only MANUAL rows are ever deducted.
+  savingsOrigin MovementSavingsOrigin?
 
   @@index([ownerId, occurredAt])
   @@index([ownerId])

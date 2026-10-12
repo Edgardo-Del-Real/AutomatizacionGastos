@@ -33,6 +33,21 @@ function savingsMigrationSql(): string {
   throw new Error("Savings-rule migration not found");
 }
 
+/**
+ * Finds the hand-written manual-savings-origin migration SQL (D1) by its stable
+ * suffix (manual-savings change, slice 1).
+ */
+function manualSavingsOriginMigrationSql(): string {
+  const migrationsDir = join(__dirname, "..", "..", "..", "prisma", "migrations");
+  const directory = readdirSync(migrationsDir, { withFileTypes: true }).find(
+    (entry) => entry.isDirectory() && entry.name.endsWith("_manual_savings_origin"),
+  );
+  if (directory !== undefined) {
+    return readFileSync(join(migrationsDir, directory.name, "migration.sql"), "utf8");
+  }
+  throw new Error("Manual-savings-origin migration not found");
+}
+
 describe("savings-rule migration (D11)", () => {
   const testDatabaseUrl = resolveTestDatabaseUrl();
   let prisma: PrismaClient;
@@ -158,6 +173,82 @@ describe("savings-rule migration (D11)", () => {
       });
       const row = await prisma.expense.findFirst({ where: { ownerId: "owner-1" } });
       expect(row?.type).toBe("EXPENSE");
+    });
+  });
+});
+
+describe("manual-savings-origin migration (D1)", () => {
+  const testDatabaseUrl = resolveTestDatabaseUrl();
+  let prisma: PrismaClient;
+
+  beforeAll(async () => {
+    execSync("npx --no-install prisma migrate deploy", {
+      env: { ...process.env, DATABASE_URL: testDatabaseUrl },
+      stdio: "pipe",
+    });
+    prisma = new PrismaClient({ datasourceUrl: testDatabaseUrl });
+  });
+
+  afterAll(async () => {
+    await prisma.$disconnect();
+  });
+
+  beforeEach(async () => {
+    await prisma.$executeRawUnsafe(`DELETE FROM "SavingsRule"`);
+    await prisma.$executeRawUnsafe(`DELETE FROM "CategoryKeyword"`);
+    await prisma.$executeRawUnsafe(`DELETE FROM "Category"`);
+    await prisma.$executeRawUnsafe(`DELETE FROM "Expense"`);
+  });
+
+  describe("static pins", () => {
+    it("creates the MovementSavingsOrigin enum with AUTO_SPLIT and MANUAL", () => {
+      const sql = manualSavingsOriginMigrationSql();
+      expect(sql).toContain(`CREATE TYPE "MovementSavingsOrigin"`);
+      expect(sql).toContain(`'AUTO_SPLIT'`);
+      expect(sql).toContain(`'MANUAL'`);
+    });
+
+    it("adds a nullable savingsOrigin column to Expense", () => {
+      const sql = manualSavingsOriginMigrationSql();
+      expect(sql).toContain(`ALTER TABLE "Expense" ADD COLUMN "savingsOrigin" "MovementSavingsOrigin" NULL`);
+    });
+
+    it("never backfills existing rows (no UPDATE/DELETE on Expense)", () => {
+      const sql = manualSavingsOriginMigrationSql();
+      expect(sql.toLowerCase()).not.toContain(`update "expense"`);
+      expect(sql.toLowerCase()).not.toContain(`delete from "expense"`);
+    });
+  });
+
+  describe("database pins", () => {
+    it("exposes AUTO_SPLIT and MANUAL in the MovementSavingsOrigin enum", async () => {
+      const rows = await prisma.$queryRaw<{ value: string }[]>`
+        SELECT unnest(enum_range(NULL::"MovementSavingsOrigin")) AS "value"
+      `;
+      const values = rows.map((row) => row.value).sort();
+      expect(values).toEqual(["AUTO_SPLIT", "MANUAL"]);
+    });
+
+    it("persists NULL savingsOrigin for a raw insert without the origin", async () => {
+      await prisma.$executeRawUnsafe(
+        `INSERT INTO "Expense" ("id", "ownerId", "amount", "currency", "category", "note", "occurredAt", "type")
+         VALUES ('${randomUUID()}', 'owner-1', 100, 'ARS', 'ahorro', 'legacy split', '2026-09-15T12:00:00.000Z', 'SAVINGS'::"MovementType")`,
+      );
+      const rows = await prisma.$queryRaw<{ savingsOrigin: string | null }[]>`
+        SELECT "savingsOrigin" FROM "Expense" WHERE "ownerId" = 'owner-1'
+      `;
+      expect(rows[0]?.savingsOrigin).toBeNull();
+    });
+
+    it("stores AUTO_SPLIT on a row inserted with the origin", async () => {
+      await prisma.$executeRawUnsafe(
+        `INSERT INTO "Expense" ("id", "ownerId", "amount", "currency", "category", "note", "occurredAt", "type", "savingsOrigin")
+         VALUES ('${randomUUID()}', 'owner-1', 100, 'ARS', 'ahorro', 'auto split', '2026-09-15T12:00:00.000Z', 'SAVINGS'::"MovementType", 'AUTO_SPLIT'::"MovementSavingsOrigin")`,
+      );
+      const rows = await prisma.$queryRaw<{ savingsOrigin: string | null }[]>`
+        SELECT "savingsOrigin" FROM "Expense" WHERE "ownerId" = 'owner-1'
+      `;
+      expect(rows[0]?.savingsOrigin).toBe("AUTO_SPLIT");
     });
   });
 });

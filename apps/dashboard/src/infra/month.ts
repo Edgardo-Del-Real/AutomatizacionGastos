@@ -35,3 +35,15 @@ export function monthLabel(month: string): string {
     new Date(year, monthIndex, 1),
   );
 }
+
+/** Moves a month key by whole months: ("2026-01", -1) → "2025-12". */
+export function shiftMonth(month: string, delta: number): string {
+  const [yearPart, monthPart] = month.split("-");
+  const year = Number(yearPart);
+  const monthIndex = Number(monthPart) - 1;
+  if (!Number.isInteger(year) || !Number.isInteger(monthIndex)) {
+    return month;
+  }
+  const shifted = new Date(Date.UTC(year, monthIndex + delta, 1));
+  return `${shifted.getUTCFullYear()}-${String(shifted.getUTCMonth() + 1).padStart(2, "0")}`;
+}

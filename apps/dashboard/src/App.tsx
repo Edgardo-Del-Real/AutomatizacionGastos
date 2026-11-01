@@ -8,11 +8,12 @@ import { BalanceTrendChart } from "./features/movements/BalanceTrendChart";
 import { CategoryCards } from "./features/movements/CategoryCards";
 import { CategoryPieChart } from "./features/movements/CategoryPieChart";
 import { KpiCards } from "./features/movements/KpiCards";
+import { MonthSelector } from "./features/movements/MonthSelector";
 import { MovementList } from "./features/movements/MovementList";
 import { PlannedSection } from "./features/movements/PlannedSection";
 import { SummarySection } from "./features/movements/SummarySection";
 import { useMovementSummary } from "./features/movements/useMovementSummary";
-import { currentBaMonth } from "./infra/month";
+import { useSelectedMonth } from "./features/movements/useSelectedMonth";
 
 type DashboardSection = "kpis" | "charts" | "movements";
 
@@ -40,9 +41,9 @@ function Dashboard() {
 
   const [activeSection, setActiveSection] =
     useState<DashboardSection>("kpis");
-  // monthly-dashboard PR1: the whole dashboard asks for the current Buenos Aires
-  // month. PR2 turns this constant into the URL-backed selector.
-  const month = currentBaMonth();
+  // monthly-dashboard: ONE month for the whole dashboard, backed by the URL so
+  // it survives a reload and a shared link. Every section reads it from here.
+  const { month, setMonth } = useSelectedMonth();
   const summaryState = useMovementSummary(viewerId, month, visibility, refreshKey);
 
   const changeSection = useCallback((next: DashboardSection) => {
@@ -84,6 +85,7 @@ function Dashboard() {
               </div>
             </div>
             <ViewerSelector />
+            <MonthSelector month={month} onChange={setMonth} />
             <nav
               aria-label="Secciones del dashboard"
               className="flex flex-wrap items-center gap-1.5"
@@ -123,7 +125,7 @@ function Dashboard() {
                 Una vista simple de lo que entra, lo que sale y lo que estás construyendo.
               </p>
             </div>
-            <SummarySection state={summaryState}>
+            <SummarySection state={summaryState} month={month}>
               {(data) => (
                 <>
                   <KpiCards kpis={data.kpis} />
@@ -148,7 +150,7 @@ function Dashboard() {
           </div>
         )}
         {activeSection === "charts" && (
-          <SummarySection state={summaryState}>
+          <SummarySection state={summaryState} month={month}>
             {(data) => (
               <div className="space-y-6">
                 <CategoryPieChart kpis={data.kpis} categories={data.categories} />

@@ -11,7 +11,6 @@ import type {
   CategoryBucket,
   DayBucket,
   KpiTotals,
-  MonthBucket,
   MovementListFilters,
   SummaryPeriod,
   ViewerScope,
@@ -104,20 +103,19 @@ const SAVINGS_EXCLUDED = Prisma.sql`"type" <> 'SAVINGS'::"MovementType"`;
 /**
  * D2 — the ONE PENDING-exclusion surface: every KPI aggregate that must never
  * count planned expenses (summaryKpis, summaryDaily, summaryCategories,
- * topByType, summaryMonths) composes this fragment. It is NEVER applied to
- * listByOwner (the movement list keeps PENDING rows) or summarySavings
- * (SAVINGS rows are always PAID by the create refine).
+ * topByType) composes this fragment. It is NEVER applied to listByOwner (the
+ * mark-paid candidates read PENDING rows through it) or summarySavings (SAVINGS
+ * rows are always PAID by the create refine).
  */
 const PENDING_EXCLUDED = Prisma.sql`"status" <> 'PENDING'::"MovementStatus"`;
 
 export interface MovementRepository {
   listByOwner(scope: ViewerScope, filters: MovementListFilters): Promise<Movement[]>;
   summaryKpis(scope: ViewerScope, period: SummaryPeriod): Promise<KpiTotals>;
-  summaryMonths(scope: ViewerScope): Promise<MonthBucket[]>;
-  summaryDaily(scope: ViewerScope): Promise<DayBucket[]>;
+  summaryDaily(scope: ViewerScope, period: SummaryPeriod): Promise<DayBucket[]>;
   summaryCategories(scope: ViewerScope, period: SummaryPeriod): Promise<CategoryBucket[]>;
   topByType(scope: ViewerScope, type: MovementType, limit: number, period: SummaryPeriod): Promise<Movement[]>;
-  /** D3: current-calendar-month SAVINGS sum (ARS, viewer-scoped). */
+  /** monthly-dashboard: SAVINGS sum (ARS) over the REQUESTED period. */
   summarySavings(scope: ViewerScope, period: SummaryPeriod): Promise<number>;
   /**
    * manual-savings (D2/D3): REQUESTED-period MANUAL SAVINGS sum (ARS,
@@ -126,11 +124,6 @@ export interface MovementRepository {
    * manualSavings`. NULL/AUTO_SPLIT rows are inert here.
    */
   summaryManualSavings(scope: ViewerScope, period: SummaryPeriod): Promise<number>;
-  /**
-   * D4: the owner's PENDING EXPENSE total whose derived month (occurredAt + 1
-   * month, Buenos Aires) equals `month`. Ignores any from/to filters by design.
-   */
-  summaryPlanned(scope: ViewerScope, month: string): Promise<{ month: string; total: number }>;
   /** D5: guarded single-write mark-paid transition (EXPENSE ∧ PENDING). */
   markPaidById(id: string, ownerId: string): Promise<Movement | null>;
   findById(id: string, ownerId: string): Promise<Movement | null>;
@@ -241,51 +234,13 @@ export class PrismaMovementRepository implements MovementRepository {
     };
   }
 
-  async summaryMonths(scope: ViewerScope): Promise<MonthBucket[]> {
-    const conditions: Prisma.Sql[] = [
-      this.viewerPredicate(scope),
-      Prisma.sql`"currency" = 'ARS'`,
-      // D3 — the trap: PENDING is excluded from the income/expense sums, but the
-      // SAVINGS CASE column stays untouched (PENDING rows are always
-      // EXPENSE-typed, so the savings column never intersects PENDING).
-      PENDING_EXCLUDED,
-      Prisma.sql`"occurredAt" >= (date_trunc('month', now() AT TIME ZONE ${BA_TIMEZONE}) - interval '5 months')`,
-    ];
-    const where = Prisma.join(conditions, " AND ");
-    type MonthRow = {
-      month: string;
-      income: DecimalLike;
-      expenses: DecimalLike;
-      savings: DecimalLike;
-    };
-    const rows = await this.prisma.$queryRaw<MonthRow[]>`
-      SELECT
-        to_char(date_trunc('month',
-          "occurredAt" AT TIME ZONE 'UTC' AT TIME ZONE ${BA_TIMEZONE}), 'YYYY-MM') AS "month",
-        COALESCE(SUM(CASE WHEN "type" = 'INCOME'::"MovementType" THEN "amount" ELSE 0 END), 0) AS "income",
-        COALESCE(SUM(CASE WHEN "type" = 'EXPENSE'::"MovementType" THEN "amount" ELSE 0 END), 0) AS "expenses",
-        COALESCE(SUM(CASE WHEN "type" = 'SAVINGS'::"MovementType" THEN "amount" ELSE 0 END), 0) AS "savings"
-      FROM "Expense"
-      WHERE ${where}
-      GROUP BY 1
-      ORDER BY 1 ASC
-    `;
-    return rows.map((row) => ({
-      month: row.month,
-      income: toNumber(row.income),
-      expenses: toNumber(row.expenses),
-      savings: toNumber(row.savings),
-    }));
-  }
-
-  async summaryDaily(scope: ViewerScope): Promise<DayBucket[]> {
+  async summaryDaily(scope: ViewerScope, period: SummaryPeriod): Promise<DayBucket[]> {
     const conditions: Prisma.Sql[] = [
       this.viewerPredicate(scope),
       Prisma.sql`"currency" = 'ARS'`,
       SAVINGS_EXCLUDED,
       PENDING_EXCLUDED,
-      Prisma.sql`("occurredAt" AT TIME ZONE 'UTC' AT TIME ZONE ${BA_TIMEZONE})
-        >= date_trunc('day', now() AT TIME ZONE ${BA_TIMEZONE}) - interval '29 days'`,
+      ...periodConditions(period),
     ];
     const where = Prisma.join(conditions, " AND ");
     type DayRow = {
@@ -404,34 +359,6 @@ export class PrismaMovementRepository implements MovementRepository {
       WHERE ${where}
     `;
     return toNumber(rows[0]?.manualSavings);
-  }
-
-  /**
-   * D4 — the planned block: sum of the owner's OUTSTANDING PENDING EXPENSE
-   * movements. Previstos carry no planned date: any PENDING EXPENSE counts
-   * regardless of its occurredAt (the load date), and the movement gains its
-   * real payment date when marked paid (markPaidById), entering the KPI of the
-   * month it was actually paid. `month` is the informational target key the
-   * caller derives; no period conditions are composed here — planned ignores
-   * from/to by design.
-   */
-  async summaryPlanned(
-    scope: ViewerScope,
-    month: string,
-  ): Promise<{ month: string; total: number }> {
-    const conditions: Prisma.Sql[] = [
-      this.viewerPredicate(scope),
-      Prisma.sql`"currency" = 'ARS'`,
-      Prisma.sql`"type" = 'EXPENSE'::"MovementType"`,
-      Prisma.sql`"status" = 'PENDING'::"MovementStatus"`,
-    ];
-    const where = Prisma.join(conditions, " AND ");
-    const rows = await this.prisma.$queryRaw<{ total: DecimalLike }[]>`
-      SELECT COALESCE(SUM("amount"), 0) AS "total"
-      FROM "Expense"
-      WHERE ${where}
-    `;
-    return { month, total: toNumber(rows[0]?.total) };
   }
 
   /**

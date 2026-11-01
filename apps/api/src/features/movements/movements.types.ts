@@ -16,9 +16,17 @@ export type ViewerScope = {
 
 export type MovementListFilters = {
   type?: MovementType;
-  status?: MovementStatus;
+  /**
+   * monthly-dashboard: the ONE period concept on the wire. The service resolves
+   * it to `from`/`to` before the repository sees it, so calendar math never
+   * leaks into routes or clients.
+   */
+  month?: string;
+  /** Resolved day range (derived from `month` by the service). */
   from?: string;
   to?: string;
+  /** Status narrowing; the HTTP monthly list always asks for PAID. */
+  status?: MovementStatus;
   category?: string;
   q?: string;
 };
@@ -34,13 +42,6 @@ export type KpiTotals = {
   count: number;
   maxAmount: number;
   monthsWithData: number;
-};
-
-export type MonthBucket = {
-  month: string;
-  income: number;
-  expenses: number;
-  savings: number;
 };
 
 export type DayBucket = {

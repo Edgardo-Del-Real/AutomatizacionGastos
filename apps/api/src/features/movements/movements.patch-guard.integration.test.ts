@@ -203,7 +203,7 @@ describe("PATCH /movements/:id savings-category guard (D9)", () => {
 
     const summary = await app.inject({
       method: "GET",
-      url: `/movements/summary?ownerId=owner-1&from=2026-09-01&to=2026-09-30`,
+      url: `/movements/summary?ownerId=owner-1&month=2026-09`,
     });
     const body = summary.json() as { kpis: { income: number; expenses: number; balance: number; manualSavings: number } };
     expect(body.kpis.manualSavings).toBe(80);

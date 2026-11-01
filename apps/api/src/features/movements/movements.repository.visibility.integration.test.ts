@@ -287,14 +287,13 @@ describe("movement visibility model", () => {
       expect(own?.registrantId).toBe("rita");
     });
 
-    it("scopes every summary feed (kpis/months/daily/categories/top) by the viewer predicate", async () => {
+    it("scopes every summary feed (kpis/daily/categories/top) by the viewer predicate", async () => {
       await seedHousehold();
 
-      const [kpisMine, kpisAll, monthsAll, dailyAll, categoriesAll, topAll] = await Promise.all([
+      const [kpisMine, kpisAll, dailyAll, categoriesAll, topAll] = await Promise.all([
         repository.summaryKpis(rita, { from: undefined, to: undefined }),
         repository.summaryKpis(ritaAll, { from: undefined, to: undefined }),
-        repository.summaryMonths(ritaAll),
-        repository.summaryDaily(ritaAll),
+        repository.summaryDaily(ritaAll, { from: undefined, to: undefined }),
         repository.summaryCategories(ritaAll, { from: undefined, to: undefined }),
         repository.topByType(ritaAll, "EXPENSE", 10, { from: undefined, to: undefined }),
       ]);
@@ -307,9 +306,7 @@ describe("movement visibility model", () => {
       expect(kpisAll.count).toBe(3);
       expect(kpisAll.expenses).not.toBe(RITA_MINE + RITA_SHARED + EDGARDO_MINE + EDGARDO_SHARED);
 
-      // months and daily buckets: same scoped totals
-      const monthBucket = monthsAll.find((bucket) => bucket.expenses > 0);
-      expect(monthBucket?.expenses).toBe(RITA_MINE + RITA_SHARED + EDGARDO_SHARED);
+      // daily buckets: same scoped totals
       const dayBucket = dailyAll.find((bucket) => bucket.expenses > 0);
       expect(dayBucket?.expenses).toBe(RITA_MINE + RITA_SHARED + EDGARDO_SHARED);
 

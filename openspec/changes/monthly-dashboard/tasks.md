@@ -63,10 +63,10 @@ Required to keep the tree compiling and green after the contract cut; the month 
 
 ## Phase 9 — Month UX (PR2)
 
-- [ ] 9.1 RED: `MonthSelector` tests — default month, previous/next, direct input, URL sync, malformed fallback, accessible label.
-- [ ] 9.2 GREEN: `MonthSelector` + `useSelectedMonth` (URL `?mes=`, `pushState`, `popstate`).
-- [ ] 9.3 App wiring: one selected month for `Resumen`, `Análisis`, `Movimientos`; the list stops owning its own period.
-- [ ] 9.4 `PlannedSection` renders `planned.movements` with the "Marcar pagado" action (the row action left the monthly table), keeping the existing `refreshToken` wiring.
-- [ ] 9.5 Empty states name the selected month (`No hay movimientos en octubre`).
-- [ ] 9.6 RED/GREEN: `App.test.tsx` — switching month re-queries KPIs and list together; reload keeps the month.
-- [ ] 9.7 Verify (API + dashboard + typecheck + lint) and commit.
+- [x] 9.1 RED: `MonthSelector` tests — default month, previous/next, direct input, URL sync, malformed fallback, accessible label.
+- [x] 9.2 GREEN: `MonthSelector` + `useSelectedMonth` (URL `?mes=`, `pushState`, `popstate`).
+- [x] 9.3 App wiring: one selected month for `Resumen`, `Análisis`, `Movimientos`; the list stops owning its own period.
+- [x] 9.4 `PlannedSection` renders `planned.movements` with the "Marcar pagado" action (the row action left the monthly table), keeping the existing `refreshToken` wiring.
+- [x] 9.5 Empty states name the selected month (`No hay movimientos en octubre`).
+- [x] 9.6 RED/GREEN: `App.test.tsx` — switching month re-queries KPIs and list together; reload keeps the month.
+- [x] 9.7 Verify (API + dashboard + typecheck + lint) and commit.

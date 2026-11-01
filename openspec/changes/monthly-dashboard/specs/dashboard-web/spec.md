@@ -4,18 +4,18 @@
 
 ### Requirement: Month Selector
 
-The dashboard MUST expose a single month selector in the header that drives ALL data-bearing sections (`Resumen`, `Análisis`, `Movimientos`). The selection MUST live in the URL as `?mes=YYYY-MM` so it survives a reload, browser back/forward, and a shared link; an absent or malformed value MUST fall back to the current Buenos Aires month. The default on first load MUST be the current Buenos Aires month, even when that month has no movements. Changing the month MUST re-query every affected section without a full page reload. The selector MUST provide previous-month and next-month actions plus a direct month input, MUST label the active selection in Spanish (`octubre 2026`), and MUST be keyboard operable with an accessible name.
+The dashboard MUST expose a single month selector in the header that drives ALL data-bearing sections (`Resumen`, `Análisis`, `Movimientos`). The selection MUST live in the URL as `?mes=YYYY-MM` so it survives a reload, browser back/forward, and a shared link; an absent or malformed value MUST fall back to the current Buenos Aires month. The default on first load MUST be the current Buenos Aires month, even when that month has no movements. Changing the month MUST re-query every affected section without a full page reload. The selector MUST provide previous-month and next-month actions plus a direct month input, MUST label the active selection in Spanish (`octubre de 2026`), and MUST be keyboard operable with an accessible name.
 
 #### Scenario: Default to the current month
 
 - GIVEN the owner opens the dashboard on 2026-11-01 with no `mes` in the URL
 - WHEN the page loads
 - THEN every section requests `month=2026-11`
-- AND the selector shows "noviembre 2026"
+- AND the selector shows "noviembre de 2026"
 
 #### Scenario: Navigate to the previous month
 
-- GIVEN the selector shows "noviembre 2026"
+- GIVEN the selector shows "noviembre de 2026"
 - WHEN the owner presses previous
 - THEN the URL becomes `?mes=2026-10`
 - AND every section re-queries `month=2026-10`
@@ -49,7 +49,7 @@ The dashboard MUST fetch `GET /movements/summary` for the configured owner scope
 #### Scenario: Cards belong to the selected month
 
 - GIVEN October with INCOME 900 and November with INCOME 400
-- WHEN the owner selects "octubre 2026"
+- WHEN the owner selects "octubre de 2026"
 - THEN the `Ingresos` card shows $900 in es-AR currency
 
 #### Scenario: Available is the month net
@@ -84,7 +84,7 @@ The dashboard MUST fetch `GET /movements` for the selected viewer scoped to the 
 #### Scenario: Render the selected month
 
 - GIVEN movements in October and November
-- WHEN the owner selects "octubre 2026"
+- WHEN the owner selects "octubre de 2026"
 - THEN only October movements render, newest first
 
 #### Scenario: Empty or unknown owner

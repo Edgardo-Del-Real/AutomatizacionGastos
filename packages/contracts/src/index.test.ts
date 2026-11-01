@@ -264,13 +264,42 @@ describe("movementFiltersSchema", () => {
     const parsed = movementFiltersSchema.parse({
       ownerId: "owner-1",
       type: "INCOME",
-      from: "2026-08-01",
-      to: "2026-08-31",
+      month: "2026-08",
       category: "work",
       q: "sueldo",
     });
     expect(parsed.type).toBe("INCOME");
+    expect(parsed.month).toBe("2026-08");
     expect(parsed.q).toBe("sueldo");
+  });
+
+  // monthly-dashboard: the period is a month key, never a free date pair, so a
+  // stale client that still sends from/to fails loudly instead of silently
+  // reading an unscoped list.
+  it("rejects a free from/to date range", () => {
+    const result = movementFiltersSchema.safeParse({
+      ownerId: "owner-1",
+      from: "2026-08-01",
+      to: "2026-08-31",
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects a status filter", () => {
+    const result = movementFiltersSchema.safeParse({ ownerId: "owner-1", status: "PENDING" });
+    expect(result.success).toBe(false);
+  });
+
+  it("accepts a month key", () => {
+    const parsed = movementFiltersSchema.parse({ ownerId: "owner-1", month: "2026-02" });
+    expect(parsed.month).toBe("2026-02");
+  });
+
+  it("rejects a malformed month key", () => {
+    for (const month of ["2026-13", "2026-1", "2026-00", "26-01", ""]) {
+      const result = movementFiltersSchema.safeParse({ ownerId: "owner-1", month });
+      expect(result.success).toBe(false);
+    }
   });
 
   it("requires ownerId", () => {
@@ -285,16 +314,6 @@ describe("movementFiltersSchema", () => {
 
   it("rejects an invalid type value", () => {
     const result = movementFiltersSchema.safeParse({ ownerId: "owner-1", type: "REFUND" });
-    expect(result.success).toBe(false);
-  });
-
-  it("accepts PENDING in the status filter", () => {
-    const parsed = movementFiltersSchema.parse({ ownerId: "owner-1", status: "PENDING" });
-    expect(parsed.status).toBe("PENDING");
-  });
-
-  it("rejects an invalid status value", () => {
-    const result = movementFiltersSchema.safeParse({ ownerId: "owner-1", status: "LATE" });
     expect(result.success).toBe(false);
   });
 
@@ -322,10 +341,6 @@ const summaryPayload = {
     avgPerMovement: 25000,
     maxAmount: 50000,
     count: 2,
-    countThisMonth: 1,
-  },
-  mom: {
-    months: [{ month: "2026-07", income: 0, expenses: 5000, balance: -5000, savings: 500 }],
   },
   daily: [{ day: "2026-08-01", income: 50000, expenses: 12500, balance: 37500 }],
   categories: [
@@ -341,7 +356,7 @@ const summaryPayload = {
     expenses: [{ ...movementPayload, type: "EXPENSE" }],
     income: [movementPayload],
   },
-  planned: { month: "2026-09", total: 2500 },
+  planned: { total: 2500, movements: [] },
 };
 
 describe("movementSummarySchema", () => {
@@ -351,19 +366,30 @@ describe("movementSummarySchema", () => {
     expect(parsed.kpis.savings).toBe(10000);
     expect(parsed.kpis.manualSavings).toBe(2000);
     expect(parsed.kpis.count).toBe(2);
-    expect(parsed.kpis.countThisMonth).toBe(1);
-    expect(parsed.mom.months[0]?.balance).toBe(-5000);
-    expect(parsed.mom.months[0]?.savings).toBe(500);
     expect(parsed.daily[0]?.day).toBe("2026-08-01");
     expect(parsed.categories[0]?.incomePercent).toBe(100);
     expect(parsed.top.income[0]?.type).toBe("INCOME");
     expect(parsed.top.expenses[0]?.type).toBe("EXPENSE");
   });
 
-  it("parses the planned block with month and total", () => {
+  it("parses the planned block with the outstanding total and its rows", () => {
     const parsed = movementSummarySchema.parse(summaryPayload);
-    expect(parsed.planned.month).toBe("2026-09");
     expect(parsed.planned.total).toBe(2500);
+    expect(parsed.planned.movements).toEqual([]);
+  });
+
+  // monthly-dashboard: previstos carry no date, so a producer that still
+  // derives a month key must fail loudly instead of shipping dead payload.
+  it("rejects a planned block that still carries a month key", () => {
+    const withMonth = JSON.parse(JSON.stringify(summaryPayload)) as Record<string, unknown>;
+    withMonth.planned = { month: "2026-09", total: 2500, movements: [] };
+    expect(() => movementSummarySchema.parse(withMonth)).toThrow();
+  });
+
+  it("rejects a summary that still ships the mom series", () => {
+    const withMom = JSON.parse(JSON.stringify(summaryPayload)) as Record<string, unknown>;
+    withMom.mom = { months: [] };
+    expect(() => movementSummarySchema.parse(withMom)).toThrow();
   });
 
   it("rejects a summary without the planned block (required since the producer landed)", () => {
@@ -386,14 +412,6 @@ describe("movementSummarySchema", () => {
     const withoutManualSavings: Record<string, unknown> = JSON.parse(JSON.stringify(summaryPayload));
     delete (withoutManualSavings.kpis as Record<string, unknown>).manualSavings;
     const result = movementSummarySchema.safeParse(withoutManualSavings);
-    expect(result.success).toBe(false);
-  });
-
-  it("rejects a summary missing the per-month savings figure", () => {
-    const withoutMonthSavings: Record<string, unknown> = JSON.parse(JSON.stringify(summaryPayload));
-    const months = withoutMonthSavings.mom as { months: Record<string, unknown>[] };
-    delete months.months[0]?.savings;
-    const result = movementSummarySchema.safeParse(withoutMonthSavings);
     expect(result.success).toBe(false);
   });
 

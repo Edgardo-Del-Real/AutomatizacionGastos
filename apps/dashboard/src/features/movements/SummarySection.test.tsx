@@ -94,7 +94,7 @@ const plannedOnlySummary: MovementSummary = {
 
 function renderSection(state: AsyncState<MovementSummary>) {
   return render(
-    <SummarySection state={{ ...state, retry: vi.fn() }}>
+    <SummarySection state={{ ...state, retry: vi.fn() }} month="2026-07">
       {(data) => <KpiCards kpis={data.kpis} />}
     </SummarySection>,
   );
@@ -137,6 +137,7 @@ describe("SummarySection", () => {
     render(
       <SummarySection
         state={{ status: "error", error: new ApiError("network"), retry }}
+        month="2026-07"
       >
         {(data) => <KpiCards kpis={data.kpis} />}
       </SummarySection>,

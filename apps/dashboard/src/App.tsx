@@ -12,6 +12,7 @@ import { MovementList } from "./features/movements/MovementList";
 import { PlannedSection } from "./features/movements/PlannedSection";
 import { SummarySection } from "./features/movements/SummarySection";
 import { useMovementSummary } from "./features/movements/useMovementSummary";
+import { currentBaMonth } from "./infra/month";
 
 type DashboardSection = "kpis" | "charts" | "movements";
 
@@ -39,7 +40,10 @@ function Dashboard() {
 
   const [activeSection, setActiveSection] =
     useState<DashboardSection>("kpis");
-  const summaryState = useMovementSummary(viewerId, visibility, refreshKey);
+  // monthly-dashboard PR1: the whole dashboard asks for the current Buenos Aires
+  // month. PR2 turns this constant into the URL-backed selector.
+  const month = currentBaMonth();
+  const summaryState = useMovementSummary(viewerId, month, visibility, refreshKey);
 
   const changeSection = useCallback((next: DashboardSection) => {
     setActiveSection(next);
@@ -155,6 +159,7 @@ function Dashboard() {
         )}
         {activeSection === "movements" && (
           <MovementList
+            month={month}
             refreshToken={refreshKey}
             onMutated={bumpRefresh}
             visibility={visibility}

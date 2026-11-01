@@ -36,13 +36,6 @@ const summary: MovementSummary = {
     avgPerMovement: 500,
     maxAmount: 1200,
     count: 6,
-    countThisMonth: 2,
-  },
-  mom: {
-    months: [
-      { month: "2026-06", income: 2000, expenses: 1000, balance: 1000, savings: 0 },
-      { month: "2026-07", income: 1000, expenses: 500, balance: 1500, savings: 0 },
-    ],
   },
   daily: [
     { day: "2026-07-01", income: 100, expenses: 50, balance: 50 },
@@ -73,7 +66,7 @@ const summary: MovementSummary = {
     ],
     income: [],
   },
-  planned: { month: "2026-08", total: 0 },
+  planned: { total: 0, movements: [] },
 };
 
 const emptySummary: MovementSummary = {
@@ -87,13 +80,11 @@ const emptySummary: MovementSummary = {
     avgPerMovement: 0,
     maxAmount: 0,
     count: 0,
-    countThisMonth: 0,
   },
-  mom: { months: [] },
   daily: [],
   categories: [],
   top: { expenses: [], income: [] },
-  planned: { month: "2026-08", total: 0 },
+  planned: { total: 0, movements: [] },
 };
 
 const movements: Movement[] = [
@@ -364,6 +355,7 @@ describe("App", () => {
     await waitFor(() =>
       expect(fetchMovementSummaryMock).toHaveBeenLastCalledWith(
         "default",
+        expect.any(String),
         "mine",
       ),
     );
@@ -385,12 +377,12 @@ describe("App", () => {
     // No persisted viewer and VITE_OWNER_ID ("default") is not a member, so the
     // viewer falls back to the first member.
     await waitFor(() =>
-      expect(fetchMovementSummaryMock).toHaveBeenLastCalledWith("rita", "mine"),
+      expect(fetchMovementSummaryMock).toHaveBeenLastCalledWith("rita", expect.any(String), "mine"),
     );
 
     await user.click(screen.getByRole("button", { name: "Movimientos" }));
     await waitFor(() =>
-      expect(fetchMovementsMock).toHaveBeenLastCalledWith("rita", {}, "mine"),
+      expect(fetchMovementsMock).toHaveBeenLastCalledWith("rita", { month: expect.any(String) }, "mine"),
     );
 
     await user.selectOptions(screen.getByLabelText("Ver como"), "edgardo");
@@ -398,13 +390,15 @@ describe("App", () => {
     await waitFor(() =>
       expect(fetchMovementSummaryMock).toHaveBeenLastCalledWith(
         "edgardo",
+        expect.any(String),
         "mine",
       ),
     );
     await waitFor(() =>
       expect(fetchMovementsMock).toHaveBeenLastCalledWith(
         "edgardo",
-        {},
+        { month: expect.any(String) },
+
         "mine",
       ),
     );
@@ -421,6 +415,7 @@ describe("App", () => {
     await waitFor(() =>
       expect(fetchMovementSummaryMock).toHaveBeenLastCalledWith(
         "default",
+        expect.any(String),
         "mine",
       ),
     );
@@ -433,13 +428,15 @@ describe("App", () => {
     await waitFor(() =>
       expect(fetchMovementSummaryMock).toHaveBeenLastCalledWith(
         "default",
+        expect.any(String),
         "shared",
       ),
     );
     await waitFor(() =>
       expect(fetchMovementsMock).toHaveBeenLastCalledWith(
         "default",
-        {},
+        { month: expect.any(String) },
+
         "shared",
       ),
     );
@@ -449,18 +446,19 @@ describe("App", () => {
     await waitFor(() =>
       expect(fetchMovementSummaryMock).toHaveBeenLastCalledWith(
         "default",
+        expect.any(String),
         "mine",
       ),
     );
     await waitFor(() =>
-      expect(fetchMovementsMock).toHaveBeenLastCalledWith("default", {}, "mine"),
+      expect(fetchMovementsMock).toHaveBeenLastCalledWith("default", { month: expect.any(String) }, "mine"),
     );
   });
 
   it("renders the planned section after the KPI cards in the kpis tab", async () => {
     fetchMovementSummaryMock.mockResolvedValue({
       ...summary,
-      planned: { month: "2026-09", total: 4000 },
+      planned: { total: 4000, movements: [] },
     });
     fetchCategoriesMock.mockResolvedValue([]);
 
@@ -491,7 +489,7 @@ describe("App", () => {
     // section is present below it.
     fetchMovementSummaryMock.mockResolvedValue({
       ...emptySummary,
-      planned: { month: "2026-09", total: 4000 },
+      planned: { total: 4000, movements: [] },
     });
     fetchMovementsMock.mockResolvedValue(movements);
     fetchCategoriesMock.mockResolvedValue([]);

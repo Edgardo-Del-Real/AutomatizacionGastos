@@ -30,7 +30,7 @@ afterEach(() => {
 
 describe("PlannedSection", () => {
   it("renders the outstanding pending total without a planned date", () => {
-    render(<PlannedSection planned={{ month: "2026-09", total: 4000 }} />);
+    render(<PlannedSection planned={{ total: 4000, movements: [] }} />);
 
     expect(
       screen.getByRole("heading", { name: "Gastos fijos previstos" }),
@@ -43,7 +43,7 @@ describe("PlannedSection", () => {
   });
 
   it("renders a $0 total when there are no planned expenses", () => {
-    render(<PlannedSection planned={{ month: "2026-09", total: 0 }} />);
+    render(<PlannedSection planned={{ total: 0, movements: [] }} />);
 
     expect(screen.getByText("$ 0,00")).toBeInTheDocument();
   });
@@ -68,7 +68,7 @@ describe("PlannedSection", () => {
 
     render(
       <PlannedSection
-        planned={{ month: "2026-09", total: 0 }}
+        planned={{ total: 0, movements: [] }}
         onMutated={onMutated}
       />,
     );
@@ -102,7 +102,7 @@ describe("PlannedSection", () => {
 
     render(
       <PlannedSection
-        planned={{ month: "2026-09", total: 0 }}
+        planned={{ total: 0, movements: [] }}
         onMutated={onMutated}
       />,
     );
@@ -124,7 +124,7 @@ describe("PlannedSection", () => {
     const user = userEvent.setup();
     fetchCategoriesMock.mockResolvedValue([]);
 
-    render(<PlannedSection planned={{ month: "2026-09", total: 0 }} />);
+    render(<PlannedSection planned={{ total: 0, movements: [] }} />);
 
     const form = screen.getByRole("form", { name: "Agregar previsto" });
     await user.type(within(form).getByLabelText("Monto"), "-5");
@@ -145,7 +145,7 @@ describe("PlannedSection", () => {
       new ApiError("http", { status: 422 }),
     );
 
-    render(<PlannedSection planned={{ month: "2026-09", total: 0 }} />);
+    render(<PlannedSection planned={{ total: 0, movements: [] }} />);
 
     const form = screen.getByRole("form", { name: "Agregar previsto" });
     await user.type(within(form).getByLabelText("Monto"), "2500");
@@ -163,7 +163,7 @@ describe("PlannedSection", () => {
     const user = userEvent.setup();
     fetchCategoriesMock.mockResolvedValue([]);
 
-    render(<PlannedSection planned={{ month: "2026-09", total: 0 }} />);
+    render(<PlannedSection planned={{ total: 0, movements: [] }} />);
 
     const form = screen.getByRole("form", { name: "Agregar previsto" });
     await user.type(within(form).getByLabelText("Monto"), "2500");

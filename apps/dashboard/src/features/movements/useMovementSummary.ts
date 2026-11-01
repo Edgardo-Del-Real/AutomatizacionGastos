@@ -11,6 +11,7 @@ export type MovementSummaryState = AsyncState<MovementSummary> & {
 
 export function useMovementSummary(
   ownerId: string,
+  month: string,
   visibility: VisibilityFilter = "mine",
   refreshToken?: number,
 ): MovementSummaryState {
@@ -22,7 +23,7 @@ export function useMovementSummary(
   useEffect(() => {
     let cancelled = false;
     setState({ status: "loading" });
-    fetchMovementSummary(ownerId, visibility)
+    fetchMovementSummary(ownerId, month, visibility)
       .then((data) => {
         if (!cancelled) setState({ status: "success", data });
       })
@@ -37,7 +38,7 @@ export function useMovementSummary(
     return () => {
       cancelled = true;
     };
-  }, [ownerId, visibility, attempt, refreshToken]);
+  }, [ownerId, month, visibility, attempt, refreshToken]);
 
   const retry = useCallback(() => setAttempt((n) => n + 1), []);
 

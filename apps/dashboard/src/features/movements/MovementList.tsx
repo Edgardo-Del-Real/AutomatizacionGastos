@@ -85,6 +85,8 @@ export function MovementAmount({
 }
 
 type MovementListProps = {
+  /** Selected month (`YYYY-MM`); the list is always month-scoped. */
+  month: string;
   refreshToken?: number;
   onMutated?: () => void;
   /** Hoisted visibility filter (drives list AND summary); default mine. */
@@ -94,6 +96,7 @@ type MovementListProps = {
 };
 
 export function MovementList({
+  month,
   refreshToken,
   onMutated,
   visibility,
@@ -108,7 +111,9 @@ export function MovementList({
   const effectiveVisibility = visibility ?? internalVisibility;
   const state = useMovements(
     viewerId,
-    filters,
+    // monthly-dashboard: the selected month is not a user filter — it always
+    // wins over the local filter state.
+    { ...filters, month },
     effectiveVisibility,
     refreshToken,
   );

@@ -39,13 +39,10 @@ export function SummarySection({ state, children }: SummarySectionProps) {
   }
 
   if (state.status === "success") {
-    // PENDING is excluded from the mom/daily aggregates by design, so an owner
-    // whose ONLY movements are planned expenses has empty mom/daily but a
-    // non-zero planned total. The empty state must not hide that data.
-    const isEmpty =
-      state.data.mom.months.length === 0 &&
-      state.data.daily.length === 0 &&
-      state.data.planned.total === 0;
+    // PENDING is excluded from every aggregate by design, so an owner whose
+    // ONLY movements are planned expenses has zero kpis but a non-zero planned
+    // total. The empty state must not hide that data.
+    const isEmpty = state.data.kpis.count === 0 && state.data.planned.total === 0;
 
     if (isEmpty) {
       return (

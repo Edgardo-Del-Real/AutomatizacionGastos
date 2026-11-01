@@ -199,7 +199,7 @@ describe("MovementList", () => {
       () => new Promise<Movement[]>(() => {}),
     );
 
-    render(<MovementList />);
+    render(<MovementList month="2026-09" />);
 
     expect(screen.getByRole("status")).toHaveTextContent(/cargando/i);
   });
@@ -207,7 +207,7 @@ describe("MovementList", () => {
   it("renders the table with Spanish headers, type column, and es-AR amounts", async () => {
     fetchMovementsMock.mockResolvedValue(movements);
 
-    render(<MovementList />);
+    render(<MovementList month="2026-09" />);
 
     await waitFor(() => expect(screen.getByRole("table")).toBeInTheDocument());
 
@@ -242,7 +242,7 @@ describe("MovementList", () => {
       },
     ]);
 
-    render(<MovementList />);
+    render(<MovementList month="2026-09" />);
 
     await waitFor(() => expect(screen.getByRole("table")).toBeInTheDocument());
     const table = within(screen.getByRole("table"));
@@ -255,7 +255,7 @@ describe("MovementList", () => {
   it("shows a Spanish empty state when there are no movements", async () => {
     fetchMovementsMock.mockResolvedValue([]);
 
-    render(<MovementList />);
+    render(<MovementList month="2026-09" />);
 
     await waitFor(() =>
       expect(screen.getByText(/no hay movimientos/i)).toBeInTheDocument(),
@@ -269,7 +269,7 @@ describe("MovementList", () => {
       .mockRejectedValueOnce(new ApiError("network"))
       .mockResolvedValueOnce(movements);
 
-    render(<MovementList />);
+    render(<MovementList month="2026-09" />);
 
     const alert = await screen.findByRole("alert");
     expect(alert).toHaveTextContent(/no se pudieron cargar/i);
@@ -284,7 +284,7 @@ describe("MovementList", () => {
     const user = userEvent.setup();
     fetchMovementsMock.mockResolvedValue(movements);
 
-    render(<MovementList />);
+    render(<MovementList month="2026-09" />);
     await waitFor(() => expect(screen.getByRole("table")).toBeInTheDocument());
 
     await user.selectOptions(screen.getByLabelText("Tipo"), "EXPENSE");
@@ -293,7 +293,7 @@ describe("MovementList", () => {
     await waitFor(() =>
       expect(fetchMovementsMock).toHaveBeenLastCalledWith(
         "default",
-        { type: "EXPENSE" },
+        { type: "EXPENSE", month: "2026-09" },
         "shared",
       ),
     );
@@ -301,7 +301,7 @@ describe("MovementList", () => {
     await user.click(screen.getByRole("button", { name: /limpiar/i }));
 
     await waitFor(() =>
-      expect(fetchMovementsMock).toHaveBeenLastCalledWith("default", {}, "mine"),
+      expect(fetchMovementsMock).toHaveBeenLastCalledWith("default", { month: "2026-09" }, "mine"),
     );
   });
 
@@ -310,7 +310,7 @@ describe("MovementList", () => {
     fetchMovementsMock.mockResolvedValue(movements);
     fetchCategoriesMock.mockResolvedValue([]);
 
-    render(<MovementList />);
+    render(<MovementList month="2026-09" />);
     await waitFor(() => expect(screen.getByRole("table")).toBeInTheDocument());
 
     const rows = screen.getAllByRole("row");
@@ -335,7 +335,7 @@ describe("MovementList", () => {
     const user = userEvent.setup();
     fetchMovementsMock.mockResolvedValue(movements);
 
-    render(<MovementList />);
+    render(<MovementList month="2026-09" />);
     await waitFor(() => expect(screen.getByRole("table")).toBeInTheDocument());
 
     const firstRow = within(screen.getAllByRole("row")[1]!);
@@ -361,7 +361,7 @@ describe("MovementList", () => {
     patchMovementMock.mockResolvedValue(movements[0]!);
     const onMutated = vi.fn();
 
-    render(<MovementList onMutated={onMutated} refreshToken={0} />);
+    render(<MovementList month="2026-09" onMutated={onMutated} refreshToken={0} />);
     await waitFor(() => expect(screen.getByRole("table")).toBeInTheDocument());
 
     const firstRow = within(screen.getAllByRole("row")[1]!);
@@ -388,7 +388,7 @@ describe("MovementList", () => {
     deleteMovementMock.mockResolvedValue(undefined);
     const onMutated = vi.fn();
 
-    render(<MovementList onMutated={onMutated} refreshToken={0} />);
+    render(<MovementList month="2026-09" onMutated={onMutated} refreshToken={0} />);
     await waitFor(() => expect(screen.getByRole("table")).toBeInTheDocument());
 
     const firstRow = within(screen.getAllByRole("row")[1]!);
@@ -413,7 +413,7 @@ describe("MovementList", () => {
     fetchMovementsMock.mockResolvedValue(movements);
     const onMutated = vi.fn();
 
-    render(<MovementList onMutated={onMutated} />);
+    render(<MovementList month="2026-09" onMutated={onMutated} />);
     await waitFor(() => expect(screen.getByRole("table")).toBeInTheDocument());
 
     const firstRow = within(screen.getAllByRole("row")[1]!);
@@ -437,7 +437,7 @@ describe("MovementList", () => {
     deleteMovementMock.mockRejectedValue(new ApiError("http", { status: 500 }));
     const onMutated = vi.fn();
 
-    render(<MovementList onMutated={onMutated} />);
+    render(<MovementList month="2026-09" onMutated={onMutated} />);
     await waitFor(() => expect(screen.getByRole("table")).toBeInTheDocument());
 
     const firstRow = within(screen.getAllByRole("row")[1]!);
@@ -460,7 +460,7 @@ describe("MovementList", () => {
   it("shows a SHARED badge with the registrant's name only on shared rows", async () => {
     fetchMovementsMock.mockResolvedValue(sharedMovements);
 
-    renderWithViewer(<MovementList />, duo);
+    renderWithViewer(<MovementList month="2026-09" />, duo);
     await waitFor(() => expect(screen.getByRole("table")).toBeInTheDocument());
 
     expect(screen.getAllByLabelText(/Movimiento compartido/)).toHaveLength(2);
@@ -474,7 +474,7 @@ describe("MovementList", () => {
     const user = userEvent.setup();
     fetchMovementsMock.mockResolvedValue(sharedMovements);
 
-    renderWithViewer(<MovementList />, duo);
+    renderWithViewer(<MovementList month="2026-09" />, duo);
     await waitFor(() => expect(screen.getByRole("table")).toBeInTheDocument());
 
     const rows = screen.getAllByRole("row");
@@ -505,7 +505,7 @@ describe("MovementList", () => {
     const user = userEvent.setup();
     fetchMovementsMock.mockResolvedValue(pendingMovements);
 
-    render(<MovementList />);
+    render(<MovementList month="2026-09" />);
     await waitFor(() => expect(screen.getByRole("table")).toBeInTheDocument());
 
     const rows = screen.getAllByRole("row");
@@ -557,7 +557,7 @@ describe("MovementList", () => {
     ];
     fetchMovementsMock.mockResolvedValue(partnerPending);
 
-    renderWithViewer(<MovementList />, duo);
+    renderWithViewer(<MovementList month="2026-09" />, duo);
     await waitFor(() => expect(screen.getByRole("table")).toBeInTheDocument());
 
     const rows = screen.getAllByRole("row");
@@ -581,7 +581,7 @@ describe("MovementList", () => {
     });
     const onMutated = vi.fn();
 
-    render(<MovementList onMutated={onMutated} refreshToken={0} />);
+    render(<MovementList month="2026-09" onMutated={onMutated} refreshToken={0} />);
     await waitFor(() => expect(screen.getByRole("table")).toBeInTheDocument());
 
     const pendingRow = within(screen.getAllByRole("row")[1]!);
@@ -604,7 +604,7 @@ describe("MovementList", () => {
     );
     const onMutated = vi.fn();
 
-    render(<MovementList onMutated={onMutated} />);
+    render(<MovementList month="2026-09" onMutated={onMutated} />);
     await waitFor(() => expect(screen.getByRole("table")).toBeInTheDocument());
 
     const pendingRow = within(screen.getAllByRole("row")[1]!);
@@ -644,7 +644,7 @@ describe("MovementAmount (shared-expense-split Phase 6, task 6.1)", () => {
   it("annotates the list 'Monto' cell of a split row and leaves legacy rows unannotated", async () => {
     fetchMovementsMock.mockResolvedValue(splitMovements);
 
-    renderWithViewer(<MovementList />, duo);
+    renderWithViewer(<MovementList month="2026-09" />, duo);
     await waitFor(() => expect(screen.getByRole("table")).toBeInTheDocument());
 
     // Newest first: legacy-shared (08-12) → partner split (08-11) → own split (08-10).

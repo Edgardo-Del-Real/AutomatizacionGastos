@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, within } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useState } from "react";
 import { describe, expect, it, vi } from "vitest";
@@ -12,12 +12,10 @@ function FiltersHarness() {
 }
 
 describe("MovementFilters", () => {
-  it("renders the type, date range, category, note, visibility, and reset controls in Spanish", () => {
+  it("renders the type, category, note, visibility, and reset controls in Spanish", () => {
     render(<MovementFilters value={{}} onChange={() => {}} />);
 
     expect(screen.getByLabelText("Tipo")).toBeInTheDocument();
-    expect(screen.getByLabelText("Desde")).toBeInTheDocument();
-    expect(screen.getByLabelText("Hasta")).toBeInTheDocument();
     expect(screen.getByLabelText("Categoría")).toBeInTheDocument();
     expect(screen.getByLabelText("Texto")).toBeInTheDocument();
     expect(screen.getByLabelText("Visibilidad")).toBeInTheDocument();
@@ -43,38 +41,21 @@ describe("MovementFilters", () => {
     const options = within(select)
       .getAllByRole("option")
       .map((option) => option.textContent);
-    expect(options).toEqual(["Todos", "Ingreso", "Gasto", "Previstos", "Ahorro"]);
+    expect(options).toEqual(["Todos", "Ingreso", "Gasto", "Ahorro"]);
 
     await user.selectOptions(select, "SAVINGS");
     expect((select as HTMLSelectElement).value).toBe("SAVINGS");
   });
 
-  it("maps Previstos to EXPENSE + PENDING and clears status when switching back to Gasto", async () => {
-    const user = userEvent.setup();
-    const onChange = vi.fn();
-    const { rerender } = render(
-      <MovementFilters value={{}} onChange={onChange} />,
-    );
+  it("offers no Previstos option and no free date range (the month owns the period)", () => {
+    render(<MovementFilters value={{}} onChange={vi.fn()} />);
 
-    await user.selectOptions(screen.getByLabelText("Tipo"), "PREVISTO");
-    expect(onChange).toHaveBeenCalledWith({ type: "EXPENSE", status: "PENDING" });
-
-    // The synthetic option is reflected back from the two underlying fields.
-    rerender(
-      <MovementFilters
-        value={{ type: "EXPENSE", status: "PENDING" }}
-        onChange={onChange}
-      />,
-    );
-    expect((screen.getByLabelText("Tipo") as HTMLSelectElement).value).toBe(
-      "PREVISTO",
-    );
-
-    await user.selectOptions(screen.getByLabelText("Tipo"), "EXPENSE");
-    expect(onChange).toHaveBeenCalledWith({
-      type: "EXPENSE",
-      status: undefined,
-    });
+    const options = screen
+      .getAllByRole("option")
+      .map((option) => option.textContent);
+    expect(options).not.toContain("Previstos");
+    expect(screen.queryByLabelText("Desde")).toBeNull();
+    expect(screen.queryByLabelText("Hasta")).toBeNull();
   });
 
   it("combines the visibility filter with the other filters", async () => {
@@ -92,30 +73,17 @@ describe("MovementFilters", () => {
     );
   });
 
-  it("combines type, date range, category, and note text into one filter state", async () => {
+  it("combines type, category, and note text into one filter state", async () => {
     const user = userEvent.setup();
     render(<FiltersHarness />);
 
     await user.selectOptions(screen.getByLabelText("Tipo"), "INCOME");
-    // jsdom cannot type into date inputs, so set their value via change events.
-    fireEvent.change(screen.getByLabelText("Desde"), {
-      target: { value: "2026-08-01" },
-    });
-    fireEvent.change(screen.getByLabelText("Hasta"), {
-      target: { value: "2026-08-31" },
-    });
     await user.type(screen.getByLabelText("Categoría"), "sueldo");
     await user.type(screen.getByLabelText("Texto"), "venta");
 
     // All filters are held together in the controlled state, reflected by inputs.
     expect((screen.getByLabelText("Tipo") as HTMLSelectElement).value).toBe(
       "INCOME",
-    );
-    expect((screen.getByLabelText("Desde") as HTMLInputElement).value).toBe(
-      "2026-08-01",
-    );
-    expect((screen.getByLabelText("Hasta") as HTMLInputElement).value).toBe(
-      "2026-08-31",
     );
     expect((screen.getByLabelText("Categoría") as HTMLInputElement).value).toBe(
       "sueldo",

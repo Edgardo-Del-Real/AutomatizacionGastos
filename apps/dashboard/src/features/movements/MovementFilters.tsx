@@ -16,12 +16,9 @@ export function MovementFilters({ value, onChange }: MovementFiltersProps) {
   const update = (patch: Partial<MovementListFilters>) =>
     onChange({ ...value, ...patch });
 
-  // "Previstos" is the synthetic option: EXPENSE + PENDING. It has no wire value
-  // of its own, so it is recognized from the two underlying filter fields.
-  const typeFilterValue =
-    value.type === "EXPENSE" && value.status === "PENDING"
-      ? "PREVISTO"
-      : (value.type ?? "");
+  // monthly-dashboard: there is no status filter anymore — previstos carry no
+  // date and are surfaced only by the planned section.
+  const typeFilterValue = value.type ?? "";
 
   return (
     <div className="flex flex-wrap items-end gap-x-6 gap-y-4 px-4 py-4 sm:px-6">
@@ -34,16 +31,10 @@ export function MovementFilters({ value, onChange }: MovementFiltersProps) {
           aria-label="Tipo"
           value={typeFilterValue}
           onChange={(event) => {
-            const next = event.target.value;
-            if (next === "PREVISTO") {
-              update({ type: "EXPENSE", status: "PENDING" });
-              return;
-            }
-            // Any explicit type resets status so switching back to Gasto (or
-            // any other option) clears the planned sub-filter.
+            // monthly-dashboard: no synthetic "Previstos" option — the previous
+            // status-derived branch is gone with the status filter.
             update({
-              type: (next || undefined) as MovementType | undefined,
-              status: undefined,
+              type: (event.target.value || undefined) as MovementType | undefined,
             });
           }}
           className={CONTROL_CLASS}
@@ -51,39 +42,8 @@ export function MovementFilters({ value, onChange }: MovementFiltersProps) {
           <option value="">Todos</option>
           <option value="INCOME">Ingreso</option>
           <option value="EXPENSE">Gasto</option>
-          <option value="PREVISTO">Previstos</option>
           <option value="SAVINGS">Ahorro</option>
         </select>
-      </div>
-
-      <div className="flex flex-col gap-1.5">
-        <label htmlFor="movement-from-filter" className={LABEL_CLASS}>
-          Desde
-        </label>
-        <input
-          id="movement-from-filter"
-          aria-label="Desde"
-          type="date"
-          value={value.from ?? ""}
-          onChange={(event) =>
-            update({ from: event.target.value || undefined })
-          }
-          className={CONTROL_CLASS}
-        />
-      </div>
-
-      <div className="flex flex-col gap-1.5">
-        <label htmlFor="movement-to-filter" className={LABEL_CLASS}>
-          Hasta
-        </label>
-        <input
-          id="movement-to-filter"
-          aria-label="Hasta"
-          type="date"
-          value={value.to ?? ""}
-          onChange={(event) => update({ to: event.target.value || undefined })}
-          className={CONTROL_CLASS}
-        />
       </div>
 
       <div className="flex flex-col gap-1.5">

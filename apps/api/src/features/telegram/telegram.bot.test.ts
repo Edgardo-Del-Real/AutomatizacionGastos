@@ -121,7 +121,7 @@ function makeBotHarness(): BotHarness {
       byCategory: [],
       mom: { months: [] },
       daily: [],
-      planned: { month: "2026-10", total: 0 },
+      planned: { total: 0 },
       categories: [],
     })),
     markMovementPaid: vi.fn(async () => ({})),

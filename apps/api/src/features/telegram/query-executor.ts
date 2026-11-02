@@ -1,4 +1,5 @@
 import type { CategoryService } from "../categories/categories.service";
+import { currentBaMonth } from "../movements/ba-month";
 import type { MovementService } from "../movements/movements.service";
 import type { ViewerScope } from "../movements/movements.types";
 import type { QueryExecutionResult, QueryType } from "./query.types";
@@ -70,6 +71,8 @@ export class QueryExecutor {
   }
 
   private async balance(scope: ViewerScope): Promise<QueryExecutionResult> {
+    // Lifetime scope on purpose: "cuánto tengo" asks about the accumulated
+    // balance, not about this month's net.
     const summary = await this.movementService.getSummary(scope);
     return {
       query_type: "balance",
@@ -80,34 +83,35 @@ export class QueryExecutor {
   }
 
   private async month(scope: ViewerScope): Promise<QueryExecutionResult> {
-    const summary = await this.movementService.getSummary(scope);
-    // The mom series always ends with the current Buenos Aires month bucket.
-    const current = summary.mom.months.at(-1);
+    // monthly-dashboard: the bot asks for the CURRENT Buenos Aires month
+    // explicitly instead of inferring it from the last trend bucket.
+    const month = currentBaMonth();
+    const summary = await this.movementService.getSummary(scope, month);
     return {
       query_type: "month",
-      month: current?.month ?? "",
-      monthIncome: current?.income ?? 0,
-      monthExpenses: current?.expenses ?? 0,
-      monthCount: summary.kpis.countThisMonth,
+      month,
+      monthIncome: summary.kpis.income,
+      monthExpenses: summary.kpis.expenses,
+      monthCount: summary.kpis.count,
     };
   }
 
-  /** D12: "cuánto ahorré este mes" — kpis.savings + the last mom month key. */
+  /** D12: "cuánto ahorré este mes" — kpis.savings scoped to the current month. */
   private async savings(scope: ViewerScope): Promise<QueryExecutionResult> {
-    const summary = await this.movementService.getSummary(scope);
+    const month = currentBaMonth();
+    const summary = await this.movementService.getSummary(scope, month);
     return {
       query_type: "savings",
-      month: summary.mom.months.at(-1)?.month ?? "",
+      month,
       savings: summary.kpis.savings,
     };
   }
 
-  /** D6/D7: "cuánto tengo previsto" — the next-month PENDING EXPENSE total. */
+  /** D6/D7: "cuánto tengo previsto" — the outstanding PENDING EXPENSE total. */
   private async planned(scope: ViewerScope): Promise<QueryExecutionResult> {
     const summary = await this.movementService.getSummary(scope);
     return {
       query_type: "planned",
-      month: summary.planned.month,
       total: summary.planned.total,
     };
   }

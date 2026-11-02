@@ -2,6 +2,7 @@ import type { ReactNode } from "react";
 
 import type { MovementSummary } from "@rita/contracts";
 
+import { monthLabel } from "../../infra/month";
 import type { MovementSummaryState } from "./useMovementSummary";
 
 const STATE_CARD_CLASS =
@@ -9,6 +10,8 @@ const STATE_CARD_CLASS =
 
 type SummarySectionProps = {
   state: MovementSummaryState;
+  /** Selected month key; the empty state names it instead of a generic "aún". */
+  month: string;
   children: (data: MovementSummary) => ReactNode;
 };
 
@@ -17,7 +20,7 @@ type SummarySectionProps = {
  * It owns the loading / error+retry / empty states once, so each section
  * only describes what to render with a successful summary.
  */
-export function SummarySection({ state, children }: SummarySectionProps) {
+export function SummarySection({ state, month, children }: SummarySectionProps) {
   if (state.status === "error") {
     return (
       <section
@@ -39,20 +42,17 @@ export function SummarySection({ state, children }: SummarySectionProps) {
   }
 
   if (state.status === "success") {
-    // PENDING is excluded from the mom/daily aggregates by design, so an owner
-    // whose ONLY movements are planned expenses has empty mom/daily but a
-    // non-zero planned total. The empty state must not hide that data.
-    const isEmpty =
-      state.data.mom.months.length === 0 &&
-      state.data.daily.length === 0 &&
-      state.data.planned.total === 0;
+    // PENDING is excluded from every aggregate by design, so an owner whose
+    // ONLY movements are planned expenses has zero kpis but a non-zero planned
+    // total. The empty state must not hide that data.
+    const isEmpty = state.data.kpis.count === 0 && state.data.planned.total === 0;
 
     if (isEmpty) {
       return (
         <p
           className="rounded-card border border-dashed border-border bg-surface p-10 text-center text-sm text-ink-soft shadow-card"
         >
-          No hay movimientos aún.
+          {`No hay movimientos en ${monthLabel(month)}.`}
         </p>
       );
     }

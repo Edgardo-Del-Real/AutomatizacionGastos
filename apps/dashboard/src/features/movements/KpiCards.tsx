@@ -72,8 +72,8 @@ export function KpiCards({ kpis }: { kpis: Kpis }) {
     { label: "Disponible", value: kpis.balance, format: formatARS, tone: "balance" },
     { label: "Ahorro", value: kpis.savings, format: formatARS, tone: "default" },
     {
-      label: "Movimientos del mes",
-      value: kpis.countThisMonth,
+      label: "Movimientos",
+      value: kpis.count,
       format: (value) => String(Math.round(value)),
       tone: "default",
     },

@@ -30,13 +30,6 @@ const validSummary: MovementSummary = {
     avgPerMovement: 500,
     maxAmount: 1000,
     count: 3,
-    countThisMonth: 1,
-  },
-  mom: {
-    months: [
-      { month: "2026-06", income: 2000, expenses: 1000, balance: 1000, savings: 0 },
-      { month: "2026-07", income: 1000, expenses: 500, balance: 500, savings: 150 },
-    ],
   },
   daily: [
     { day: "2026-07-01", income: 100, expenses: 50, balance: 50 },
@@ -55,7 +48,7 @@ const validSummary: MovementSummary = {
     expenses: [],
     income: [],
   },
-  planned: { month: "2026-08", total: 0 },
+  planned: { total: 0, movements: [] },
 };
 
 const validMovements: Movement[] = [
@@ -138,33 +131,33 @@ describe("fetchMovementSummary", () => {
   it("resolves validated summary data for the owner with default visibility mine", async () => {
     fetchMock.mockResolvedValue(jsonResponse(validSummary));
 
-    const summary = await fetchMovementSummary("default");
+    const summary = await fetchMovementSummary("default", "2026-07");
 
     expect(fetchMock).toHaveBeenCalledWith(
-      "/api/movements/summary?ownerId=default&visibility=mine",
+      "/api/movements/summary?ownerId=default&visibility=mine&month=2026-07",
     );
     expect(summary.kpis.balance).toBe(1500);
-    expect(summary.mom.months).toHaveLength(2);
+    expect(summary.planned).toEqual({ total: 0, movements: [] });
     expect(summary.daily[0]).toMatchObject({ day: "2026-07-01", balance: 50 });
   });
 
   it("sends the requested visibility filter on the summary request", async () => {
     fetchMock.mockResolvedValue(jsonResponse(validSummary));
 
-    await fetchMovementSummary("default", "shared");
+    await fetchMovementSummary("default", "2026-07", "shared");
 
     expect(fetchMock).toHaveBeenCalledWith(
-      "/api/movements/summary?ownerId=default&visibility=shared",
+      "/api/movements/summary?ownerId=default&visibility=shared&month=2026-07",
     );
   });
 
   it("throws ApiError validation when kpis is missing", async () => {
     fetchMock.mockResolvedValue(jsonResponse({}));
 
-    await expect(fetchMovementSummary("default")).rejects.toBeInstanceOf(
+    await expect(fetchMovementSummary("default", "2026-07")).rejects.toBeInstanceOf(
       ApiError,
     );
-    await expect(fetchMovementSummary("default")).rejects.toMatchObject({
+    await expect(fetchMovementSummary("default", "2026-07")).rejects.toMatchObject({
       kind: "validation",
       issues: expect.any(Array),
     });
@@ -173,7 +166,7 @@ describe("fetchMovementSummary", () => {
   it("throws ApiError http with status when the response is not ok", async () => {
     fetchMock.mockResolvedValue(jsonResponse({ error: "boom" }, 500));
 
-    await expect(fetchMovementSummary("default")).rejects.toMatchObject({
+    await expect(fetchMovementSummary("default", "2026-07")).rejects.toMatchObject({
       kind: "http",
       status: 500,
     });
@@ -182,7 +175,7 @@ describe("fetchMovementSummary", () => {
   it("throws ApiError network when fetch rejects", async () => {
     fetchMock.mockRejectedValue(new TypeError("Network request failed"));
 
-    await expect(fetchMovementSummary("default")).rejects.toMatchObject({
+    await expect(fetchMovementSummary("default", "2026-07")).rejects.toMatchObject({
       kind: "network",
     });
   });
@@ -227,13 +220,13 @@ describe("fetchMovements", () => {
     );
   });
 
-  it("sends the PENDING status filter on the list request", async () => {
+  it("sends the selected month on the list request", async () => {
     fetchMock.mockResolvedValue(jsonResponse(validMovements));
 
-    await fetchMovements("default", { type: "EXPENSE", status: "PENDING" });
+    await fetchMovements("default", { type: "EXPENSE", month: "2026-08" });
 
     expect(fetchMock).toHaveBeenCalledWith(
-      "/api/movements?ownerId=default&type=EXPENSE&status=PENDING&visibility=mine",
+      "/api/movements?ownerId=default&type=EXPENSE&month=2026-08&visibility=mine",
     );
   });
 
@@ -242,17 +235,15 @@ describe("fetchMovements", () => {
 
     await fetchMovements("default", {
       type: "EXPENSE",
-      from: "2026-08-01",
-      to: "2026-08-31",
+      month: "2026-08",
       category: "sueldo",
       q: "julio",
-      status: "PENDING",
     });
 
     // URLSearchParams preserves insertion order: ownerId first, then filters,
     // then the visibility filter.
     expect(fetchMock).toHaveBeenCalledWith(
-      "/api/movements?ownerId=default&type=EXPENSE&from=2026-08-01&to=2026-08-31&category=sueldo&q=julio&status=PENDING&visibility=mine",
+      "/api/movements?ownerId=default&type=EXPENSE&month=2026-08&category=sueldo&q=julio&visibility=mine",
     );
   });
 

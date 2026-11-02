@@ -164,68 +164,92 @@ describe("MovementService.listMovements", () => {
 });
 
 describe("MovementService.getSummary", () => {
+  function pendingExpense(overrides: { amount: number; currency?: string }) {
+    return {
+      id: `pending-${overrides.amount}`,
+      ownerId: "rita",
+      amount: overrides.amount,
+      currency: overrides.currency ?? "ARS",
+      category: "casa",
+      note: null,
+      occurredAt: new Date("2026-10-15T12:00:00.000Z"),
+      createdAt: new Date("2026-10-15T12:00:00.000Z"),
+      type: "EXPENSE" as const,
+      status: "PENDING" as const,
+      visibility: "INDIVIDUAL" as const,
+      sharedTotal: null,
+      registrantId: "rita",
+    };
+  }
+
   function makeSummaryHarness() {
     const repository = {
       summaryKpis: vi.fn(),
-      summaryMonths: vi.fn(async () => []),
       summaryDaily: vi.fn(async () => []),
       summaryCategories: vi.fn(async () => []),
       topByType: vi.fn(async () => []),
       summarySavings: vi.fn(async () => 0),
       summaryManualSavings: vi.fn(async () => 0),
-      summaryPlanned: vi.fn(async () => ({ month: "2099-01", total: 0 })),
+      listByOwner: vi.fn(async () => []),
     } as unknown as MovementRepository;
     const service = new MovementService(repository, {} as CategoryService);
     return {
       service,
       summaryKpis: vi.mocked(repository.summaryKpis),
-      summaryMonths: vi.mocked(repository.summaryMonths),
       summaryDaily: vi.mocked(repository.summaryDaily),
       summaryCategories: vi.mocked(repository.summaryCategories),
       topByType: vi.mocked(repository.topByType),
       summarySavings: vi.mocked(repository.summarySavings),
       summaryManualSavings: vi.mocked(repository.summaryManualSavings),
-      summaryPlanned: vi.mocked(repository.summaryPlanned),
+      listByOwner: vi.mocked(repository.listByOwner),
     };
   }
 
-  it("threads the viewer scope into every repository feed", async () => {
-    const { service, summaryKpis, summaryMonths, summaryDaily, summaryCategories, topByType, summarySavings } =
+  it("scopes every repository feed to the requested month", async () => {
+    const { service, summaryKpis, summaryDaily, summaryCategories, topByType, summarySavings } =
       makeSummaryHarness();
     summaryKpis.mockResolvedValue({
       income: 3000,
       expenses: 1000,
       count: 3,
       maxAmount: 1200,
-      monthsWithData: 2,
-    });
-    summaryKpis.mockResolvedValueOnce({
-      income: 1000,
-      expenses: 400,
-      count: 2,
-      maxAmount: 500,
       monthsWithData: 1,
     });
 
-    await service.getSummary(ritaScope);
+    await service.getSummary(ritaScope, "2026-07");
 
-    expect(summaryKpis).toHaveBeenNthCalledWith(1, ritaScope, { from: undefined, to: undefined });
-    expect(summaryKpis).toHaveBeenNthCalledWith(2, ritaScope, expect.any(Object));
-    expect(summarySavings).toHaveBeenCalledWith(ritaScope, expect.any(Object));
-    expect(summaryMonths).toHaveBeenCalledWith(ritaScope);
-    expect(summaryDaily).toHaveBeenCalledWith(ritaScope);
-    expect(summaryCategories).toHaveBeenCalledWith(ritaScope, { from: undefined, to: undefined });
-    expect(topByType).toHaveBeenCalledWith(ritaScope, "EXPENSE", 5, { from: undefined, to: undefined });
-    expect(topByType).toHaveBeenCalledWith(ritaScope, "INCOME", 5, { from: undefined, to: undefined });
+    const july = { from: "2026-07-01", to: "2026-07-31" };
+    // ONE kpis call: the month IS the period, so the old second
+    // current-month aggregate (countThisMonth) no longer exists.
+    expect(summaryKpis).toHaveBeenCalledTimes(1);
+    expect(summaryKpis).toHaveBeenCalledWith(ritaScope, july);
+    expect(summarySavings).toHaveBeenCalledWith(ritaScope, july);
+    expect(summaryDaily).toHaveBeenCalledWith(ritaScope, july);
+    expect(summaryCategories).toHaveBeenCalledWith(ritaScope, july);
+    expect(topByType).toHaveBeenCalledWith(ritaScope, "EXPENSE", 5, july);
+    expect(topByType).toHaveBeenCalledWith(ritaScope, "INCOME", 5, july);
   });
 
-  // manual-savings (D2/D3): the deduction feed is period-scoped — it is called
-  // with the REQUESTED period (unlike kpis.savings, which stays pinned to the
-  // current Buenos Aires month) and its total feeds balance. The requested
-  // period is a fixed PAST month so it can never collide with the current BA
-  // month the summarySavings feed is pinned to.
-  it("calls summaryManualSavings with the REQUESTED period and deducts it from the balance (900 − 300 − 50 = 550)", async () => {
-    const { service, summaryKpis, summarySavings, summaryManualSavings } = makeSummaryHarness();
+  it("returns lifetime totals with an empty daily series when no month is requested", async () => {
+    const { service, summaryKpis, summaryDaily } = makeSummaryHarness();
+    summaryKpis.mockResolvedValue({
+      income: 1300,
+      expenses: 0,
+      count: 2,
+      maxAmount: 900,
+      monthsWithData: 2,
+    });
+
+    const summary = await service.getSummary(ritaScope);
+
+    expect(summaryKpis).toHaveBeenCalledWith(ritaScope, { from: undefined, to: undefined });
+    expect(summaryDaily).toHaveBeenCalledWith(ritaScope, { from: undefined, to: undefined });
+    expect(summary.kpis.income).toBe(1300);
+    expect(summary.daily).toEqual([]);
+  });
+
+  it("deducts manual savings from the balance over the requested month (900 - 300 - 50 = 550)", async () => {
+    const { service, summaryKpis, summaryManualSavings } = makeSummaryHarness();
     summaryKpis.mockResolvedValue({
       income: 900,
       expenses: 300,
@@ -235,73 +259,23 @@ describe("MovementService.getSummary", () => {
     });
     summaryManualSavings.mockResolvedValue(50);
 
-    const summary = await service.getSummary(ritaScope, "2026-07-01", "2026-07-31");
+    const summary = await service.getSummary(ritaScope, "2026-07");
 
-    expect(summaryManualSavings).toHaveBeenCalledWith(ritaScope, { from: "2026-07-01", to: "2026-07-31" });
-    // kpis.savings stays pinned to the current BA month — never the requested period.
-    const thisMonthPeriod = summarySavings.mock.calls[0]?.[1] as { from: string; to: string };
-    expect(thisMonthPeriod.from).toMatch(/^\d{4}-\d{2}-01$/);
-    expect(thisMonthPeriod).not.toEqual({ from: "2026-07-01", to: "2026-07-31" });
+    expect(summaryManualSavings).toHaveBeenCalledWith(ritaScope, {
+      from: "2026-07-01",
+      to: "2026-07-31",
+    });
     expect(summary.kpis.income).toBe(900);
     expect(summary.kpis.expenses).toBe(300);
     expect(summary.kpis.manualSavings).toBe(50);
-    expect(summary.kpis.savings).toBe(0);
     expect(summary.kpis.balance).toBe(550);
   });
 
-  it("exposes kpis.manualSavings as 0 when no MANUAL savings exist", async () => {
-    const { service, summaryKpis } = makeSummaryHarness();
-    summaryKpis.mockResolvedValue({
-      income: 900,
-      expenses: 300,
-      count: 3,
-      maxAmount: 900,
-      monthsWithData: 1,
-    });
-
-    const summary = await service.getSummary(ritaScope);
-
-    expect(summary.kpis.manualSavings).toBe(0);
-    expect(summary.kpis.balance).toBe(600);
-  });
-
-  it("exposes countThisMonth from a current-month summaryKpis call alongside the all-time kpis", async () => {
-    const { service, summaryKpis } = makeSummaryHarness();
-    summaryKpis.mockResolvedValueOnce({
-      income: 3000,
-      expenses: 1000,
-      count: 3,
-      maxAmount: 1200,
-      monthsWithData: 2,
-    });
-    summaryKpis.mockResolvedValueOnce({
-      income: 1000,
-      expenses: 400,
-      count: 2,
-      maxAmount: 500,
-      monthsWithData: 1,
-    });
-
-    const summary = await service.getSummary(ritaScope);
-
-    expect(summaryKpis).toHaveBeenCalledTimes(2);
-    expect(summary.kpis.count).toBe(3);
-    expect(summary.kpis.countThisMonth).toBe(2);
-    expect(summary.kpis.savings).toBe(0);
-
-    // The second call is scoped to the current Buenos Aires month: from the 1st
-    // to the last day of that month, derived from the month key in `from`.
-    const thisMonthPeriod = summaryKpis.mock.calls[1]?.[1] as { from: string; to: string };
-    const match = /^(\d{4})-(\d{2})-01$/.exec(thisMonthPeriod.from);
-    expect(match).not.toBeNull();
-    const lastDay = new Date(Date.UTC(Number(match![1]), Number(match![2]), 0)).getUTCDate();
-    expect(thisMonthPeriod.to).toBe(
-      `${thisMonthPeriod.from.slice(0, 7)}-${String(lastDay).padStart(2, "0")}`,
-    );
-  });
-
-  it("threads the planned block from the next Buenos Aires month into the summary", async () => {
-    const { service, summaryKpis, summaryPlanned } = makeSummaryHarness();
+  // monthly-dashboard: kpis.savings used to be pinned to the CURRENT Buenos
+  // Aires month while manualSavings followed the request. Both now follow the
+  // same period, so a past month reports its own savings.
+  it("reports kpis.savings for the requested month, not the current one", async () => {
+    const { service, summaryKpis, summarySavings } = makeSummaryHarness();
     summaryKpis.mockResolvedValue({
       income: 0,
       expenses: 0,
@@ -309,17 +283,65 @@ describe("MovementService.getSummary", () => {
       maxAmount: 0,
       monthsWithData: 0,
     });
-    summaryPlanned.mockResolvedValue({ month: "2099-01", total: 4000 });
+    summarySavings.mockResolvedValue(150);
 
-    const summary = await service.getSummary(ritaScope);
+    const summary = await service.getSummary(ritaScope, "2026-07");
 
-    // The planned target is the month after the current Buenos Aires month,
-    // derived with the same BA wall clock as the service's month keys.
-    const baNow = new Date(Date.now() - 3 * 60 * 60 * 1000);
-    const next = new Date(Date.UTC(baNow.getUTCFullYear(), baNow.getUTCMonth() + 1, 1));
-    const expectedKey = `${next.getUTCFullYear()}-${String(next.getUTCMonth() + 1).padStart(2, "0")}`;
-    expect(summaryPlanned).toHaveBeenCalledWith(ritaScope, expectedKey);
-    expect(summary.planned).toEqual({ month: "2099-01", total: 4000 });
+    expect(summarySavings).toHaveBeenCalledWith(ritaScope, {
+      from: "2026-07-01",
+      to: "2026-07-31",
+    });
+    expect(summary.kpis.savings).toBe(150);
+  });
+
+  it("zero-fills the daily series for every day of the requested month", async () => {
+    const { service, summaryKpis, summaryDaily } = makeSummaryHarness();
+    summaryKpis.mockResolvedValue({
+      income: 0,
+      expenses: 0,
+      count: 0,
+      maxAmount: 0,
+      monthsWithData: 0,
+    });
+    summaryDaily.mockResolvedValue([{ day: "2026-07-15", income: 0, expenses: 1200 }]);
+
+    const summary = await service.getSummary(ritaScope, "2026-07");
+
+    expect(summary.daily).toHaveLength(31);
+    expect(summary.daily[0]?.day).toBe("2026-07-01");
+    expect(summary.daily.at(-1)?.day).toBe("2026-07-31");
+    expect(summary.daily[14]).toEqual({
+      day: "2026-07-15",
+      income: 0,
+      expenses: 1200,
+      balance: -1200,
+    });
+    expect(summary.daily[0]?.expenses).toBe(0);
+  });
+
+  it("exposes the outstanding previstos as rows, with an ARS-only total", async () => {
+    const { service, summaryKpis, listByOwner } = makeSummaryHarness();
+    summaryKpis.mockResolvedValue({
+      income: 0,
+      expenses: 0,
+      count: 0,
+      maxAmount: 0,
+      monthsWithData: 0,
+    });
+    listByOwner.mockResolvedValue([
+      pendingExpense({ amount: 4000 }),
+      pendingExpense({ amount: 500, currency: "USD" }),
+    ]);
+
+    const summary = await service.getSummary(ritaScope, "2026-07");
+
+    // Previstos carry no date: the month never reaches their read.
+    expect(listByOwner).toHaveBeenCalledWith(ritaScope, {
+      type: "EXPENSE",
+      status: "PENDING",
+    });
+    expect(summary.planned.total).toBe(4000);
+    expect(summary.planned.movements).toHaveLength(2);
   });
 });
 

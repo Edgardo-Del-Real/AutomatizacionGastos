@@ -101,7 +101,7 @@ function makeHarness(options?: { partner?: string | null }): Harness {
       byCategory: [],
       mom: { months: [] },
       daily: [],
-      planned: { month: "2026-10", total: 0 },
+      planned: { total: 0 },
       categories: [],
     })),
     updateMovement: vi.fn(async () => ({})),

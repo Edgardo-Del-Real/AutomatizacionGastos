@@ -1,4 +1,4 @@
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -13,6 +13,7 @@ import {
   fetchMovements,
   patchMovement,
 } from "./infra/api";
+import { currentBaMonth, monthLabel } from "./infra/month";
 import App from "./App";
 
 vi.mock("./infra/api", async (importOriginal) => ({
@@ -36,13 +37,6 @@ const summary: MovementSummary = {
     avgPerMovement: 500,
     maxAmount: 1200,
     count: 6,
-    countThisMonth: 2,
-  },
-  mom: {
-    months: [
-      { month: "2026-06", income: 2000, expenses: 1000, balance: 1000, savings: 0 },
-      { month: "2026-07", income: 1000, expenses: 500, balance: 1500, savings: 0 },
-    ],
   },
   daily: [
     { day: "2026-07-01", income: 100, expenses: 50, balance: 50 },
@@ -73,7 +67,7 @@ const summary: MovementSummary = {
     ],
     income: [],
   },
-  planned: { month: "2026-08", total: 0 },
+  planned: { total: 0, movements: [] },
 };
 
 const emptySummary: MovementSummary = {
@@ -87,13 +81,11 @@ const emptySummary: MovementSummary = {
     avgPerMovement: 0,
     maxAmount: 0,
     count: 0,
-    countThisMonth: 0,
   },
-  mom: { months: [] },
   daily: [],
   categories: [],
   top: { expenses: [], income: [] },
-  planned: { month: "2026-08", total: 0 },
+  planned: { total: 0, movements: [] },
 };
 
 const movements: Movement[] = [
@@ -133,6 +125,9 @@ beforeEach(() => {
   fetchHouseholdMembersMock.mockResolvedValue([
     { ownerId: "default", name: "Rita" },
   ]);
+  // monthly-dashboard: the selected month lives in the URL, so every test must
+  // start from a clean one or the previous test's ?mes= would leak.
+  window.history.replaceState({}, "", "/");
 });
 
 afterEach(() => {
@@ -168,6 +163,111 @@ describe("App", () => {
       expect(screen.getByRole("heading", { name: "Ingresos" })).toBeInTheDocument(),
     );
     expect(screen.queryByRole("table")).toBeNull();
+  });
+
+  // monthly-dashboard: one month drives the whole dashboard, and it lives in
+  // the URL so a reload or a shared link keeps the period.
+  it("opens on the current Buenos Aires month when the URL has no mes", async () => {
+    fetchMovementSummaryMock.mockResolvedValue(summary);
+    fetchCategoriesMock.mockResolvedValue([]);
+
+    render(<App />);
+
+    await waitFor(() =>
+      expect(fetchMovementSummaryMock).toHaveBeenLastCalledWith(
+        "default",
+        currentBaMonth(),
+        "mine",
+      ),
+    );
+    expect(
+      (screen.getByLabelText(/Mes seleccionado/) as HTMLInputElement).value,
+    ).toBe(currentBaMonth());
+  });
+
+  it("opens on the month in the URL", async () => {
+    window.history.replaceState({}, "", "/?mes=2026-09");
+    fetchMovementSummaryMock.mockResolvedValue(summary);
+    fetchCategoriesMock.mockResolvedValue([]);
+
+    render(<App />);
+
+    await waitFor(() =>
+      expect(fetchMovementSummaryMock).toHaveBeenLastCalledWith(
+        "default",
+        "2026-09",
+        "mine",
+      ),
+    );
+  });
+
+  it("falls back to the current month when the URL key is malformed", async () => {
+    window.history.replaceState({}, "", "/?mes=2026-13");
+    fetchMovementSummaryMock.mockResolvedValue(summary);
+    fetchCategoriesMock.mockResolvedValue([]);
+
+    render(<App />);
+
+    await waitFor(() =>
+      expect(fetchMovementSummaryMock).toHaveBeenLastCalledWith(
+        "default",
+        currentBaMonth(),
+        "mine",
+      ),
+    );
+  });
+
+  it("moves the KPIs and the list together when the month changes, and stores it in the URL", async () => {
+    const user = userEvent.setup();
+    fetchMovementSummaryMock.mockResolvedValue(summary);
+    fetchMovementsMock.mockResolvedValue(movements);
+    fetchCategoriesMock.mockResolvedValue([]);
+
+    render(<App />);
+    await waitFor(() =>
+      expect(screen.getByRole("heading", { name: "Ingresos" })).toBeInTheDocument(),
+    );
+
+    await user.click(screen.getByRole("button", { name: "Movimientos" }));
+    await waitFor(() => expect(screen.getByRole("table")).toBeInTheDocument());
+
+    fireEvent.change(screen.getByLabelText(/Mes seleccionado/), {
+      target: { value: "2026-10" },
+    });
+
+    await waitFor(() =>
+      expect(fetchMovementSummaryMock).toHaveBeenLastCalledWith(
+        "default",
+        "2026-10",
+        "mine",
+      ),
+    );
+    await waitFor(() =>
+      expect(fetchMovementsMock).toHaveBeenLastCalledWith(
+        "default",
+        { month: "2026-10" },
+        "mine",
+      ),
+    );
+    expect(window.location.search).toBe("?mes=2026-10");
+  });
+
+  it("steps to the previous month with the arrow", async () => {
+    const user = userEvent.setup();
+    fetchMovementSummaryMock.mockResolvedValue(summary);
+    fetchCategoriesMock.mockResolvedValue([]);
+
+    render(<App />);
+    await waitFor(() =>
+      expect(screen.getByRole("heading", { name: "Ingresos" })).toBeInTheDocument(),
+    );
+
+    await user.click(screen.getByRole("button", { name: "Mes anterior" }));
+
+    await waitFor(() =>
+      expect(window.location.search).toMatch(/^\?mes=\d{4}-\d{2}$/),
+    );
+    expect(window.location.search).not.toBe(`?mes=${currentBaMonth()}`);
   });
 
   it("shows only the charts section when Análisis is selected", async () => {
@@ -227,7 +327,9 @@ describe("App", () => {
     render(<App />);
 
     await waitFor(() =>
-      expect(screen.getByText("No hay movimientos aún.")).toBeInTheDocument(),
+      expect(
+        screen.getByText(`No hay movimientos en ${monthLabel(currentBaMonth())}.`),
+      ).toBeInTheDocument(),
     );
     // No partial charts and the list section is not mounted.
     expect(screen.queryByText("¿Dónde está tu dinero?")).toBeNull();
@@ -364,6 +466,7 @@ describe("App", () => {
     await waitFor(() =>
       expect(fetchMovementSummaryMock).toHaveBeenLastCalledWith(
         "default",
+        expect.any(String),
         "mine",
       ),
     );
@@ -385,12 +488,12 @@ describe("App", () => {
     // No persisted viewer and VITE_OWNER_ID ("default") is not a member, so the
     // viewer falls back to the first member.
     await waitFor(() =>
-      expect(fetchMovementSummaryMock).toHaveBeenLastCalledWith("rita", "mine"),
+      expect(fetchMovementSummaryMock).toHaveBeenLastCalledWith("rita", expect.any(String), "mine"),
     );
 
     await user.click(screen.getByRole("button", { name: "Movimientos" }));
     await waitFor(() =>
-      expect(fetchMovementsMock).toHaveBeenLastCalledWith("rita", {}, "mine"),
+      expect(fetchMovementsMock).toHaveBeenLastCalledWith("rita", { month: expect.any(String) }, "mine"),
     );
 
     await user.selectOptions(screen.getByLabelText("Ver como"), "edgardo");
@@ -398,13 +501,15 @@ describe("App", () => {
     await waitFor(() =>
       expect(fetchMovementSummaryMock).toHaveBeenLastCalledWith(
         "edgardo",
+        expect.any(String),
         "mine",
       ),
     );
     await waitFor(() =>
       expect(fetchMovementsMock).toHaveBeenLastCalledWith(
         "edgardo",
-        {},
+        { month: expect.any(String) },
+
         "mine",
       ),
     );
@@ -421,6 +526,7 @@ describe("App", () => {
     await waitFor(() =>
       expect(fetchMovementSummaryMock).toHaveBeenLastCalledWith(
         "default",
+        expect.any(String),
         "mine",
       ),
     );
@@ -433,13 +539,15 @@ describe("App", () => {
     await waitFor(() =>
       expect(fetchMovementSummaryMock).toHaveBeenLastCalledWith(
         "default",
+        expect.any(String),
         "shared",
       ),
     );
     await waitFor(() =>
       expect(fetchMovementsMock).toHaveBeenLastCalledWith(
         "default",
-        {},
+        { month: expect.any(String) },
+
         "shared",
       ),
     );
@@ -449,18 +557,19 @@ describe("App", () => {
     await waitFor(() =>
       expect(fetchMovementSummaryMock).toHaveBeenLastCalledWith(
         "default",
+        expect.any(String),
         "mine",
       ),
     );
     await waitFor(() =>
-      expect(fetchMovementsMock).toHaveBeenLastCalledWith("default", {}, "mine"),
+      expect(fetchMovementsMock).toHaveBeenLastCalledWith("default", { month: expect.any(String) }, "mine"),
     );
   });
 
   it("renders the planned section after the KPI cards in the kpis tab", async () => {
     fetchMovementSummaryMock.mockResolvedValue({
       ...summary,
-      planned: { month: "2026-09", total: 4000 },
+      planned: { total: 4000, movements: [] },
     });
     fetchCategoriesMock.mockResolvedValue([]);
 
@@ -491,7 +600,7 @@ describe("App", () => {
     // section is present below it.
     fetchMovementSummaryMock.mockResolvedValue({
       ...emptySummary,
-      planned: { month: "2026-09", total: 4000 },
+      planned: { total: 4000, movements: [] },
     });
     fetchMovementsMock.mockResolvedValue(movements);
     fetchCategoriesMock.mockResolvedValue([]);

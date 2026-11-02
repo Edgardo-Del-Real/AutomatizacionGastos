@@ -1,6 +1,11 @@
 import type { IncomingHttpHeaders } from "node:http";
 import type { FastifyPluginAsync } from "fastify";
-import { movementFiltersSchema, visibilityFilterSchema, type VisibilityFilter } from "@rita/contracts";
+import {
+  movementFiltersSchema,
+  monthKeySchema,
+  visibilityFilterSchema,
+  type VisibilityFilter,
+} from "@rita/contracts";
 import { z } from "zod";
 import { ValidationFailedError } from "../../infra/errors";
 import type { CategoryService } from "../categories/categories.service";
@@ -8,12 +13,16 @@ import type { HouseholdService } from "../household/household.service";
 import type { MovementService } from "./movements.service";
 import type { ViewerScope } from "./movements.types";
 
-const summaryQuerySchema = z.object({
-  ownerId: z.string().min(1),
-  from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
-  to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
-  visibility: visibilityFilterSchema.optional(),
-});
+// monthly-dashboard: `month` is the ONE period concept. A malformed key is a
+// 422 instead of a silent unscoped read; omitting the key is the explicit
+// lifetime request (the bot's balance query).
+const summaryQuerySchema = z
+  .object({
+    ownerId: z.string().min(1),
+    month: monthKeySchema.optional(),
+    visibility: visibilityFilterSchema.optional(),
+  })
+  .strict();
 
 export type MovementsRouteOptions = {
   movementService: MovementService;
@@ -44,7 +53,13 @@ export const movementsRoute: FastifyPluginAsync<MovementsRouteOptions> = async (
     }
     const { ownerId, visibility, ...filters } = parsed.data;
     const scope = buildViewerScope(householdService, ownerId, visibility);
-    const movements = await movementService.listMovements(scope, filters);
+    // monthly-dashboard: previstos carry no date, so they cannot belong to a
+    // month; the monthly table is PAID-only by construction. The PENDING rows
+    // stay reachable through summary.planned and the mark-paid window.
+    const movements = await movementService.listMovements(scope, {
+      ...filters,
+      status: "PAID",
+    });
     return reply.send(movements);
   });
 
@@ -53,9 +68,9 @@ export const movementsRoute: FastifyPluginAsync<MovementsRouteOptions> = async (
     if (!parsed.success) {
       throw new ValidationFailedError("Invalid summary query", parsed.error.issues);
     }
-    const { ownerId, from, to, visibility } = parsed.data;
+    const { ownerId, month, visibility } = parsed.data;
     const scope = buildViewerScope(householdService, ownerId, visibility);
-    const summary = await movementService.getSummary(scope, from, to);
+    const summary = await movementService.getSummary(scope, month);
     return reply.send(summary);
   });
 

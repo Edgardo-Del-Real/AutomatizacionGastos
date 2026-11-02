@@ -132,18 +132,9 @@ describe("movements savings exclusion (D1–D3)", () => {
     expect(kpis.expenses).toBe(300);
   });
 
-  it("summaryMonths excludes SAVINGS from income/expenses and reports the month savings", async () => {
-    await seedExclusionFixture();
-    const months = await repository.summaryMonths(scope);
-    const current = months.find((month) => month.month === currentBaMonthKey());
-    expect(current?.income).toBe(900);
-    expect(current?.expenses).toBe(300);
-    expect(current?.savings).toBe(100);
-  });
-
   it("summaryDaily excludes SAVINGS from the day buckets", async () => {
     await seedExclusionFixture();
-    const daily = await repository.summaryDaily(scope);
+    const daily = await repository.summaryDaily(scope, {});
     const day = daily.find((bucket) => bucket.day === currentBaDayKey());
     expect(day?.income).toBe(900);
     expect(day?.expenses).toBe(300);
@@ -166,7 +157,7 @@ describe("movements savings exclusion (D1–D3)", () => {
     expect(topIncome.map((movement) => movement.type)).toEqual(["INCOME"]);
   });
 
-  it("reports kpis.savings month-scoped: 150 current month, prior month excluded", async () => {
+  it("reports kpis.savings for the requested month: 150 current month, prior month excluded", async () => {
     await seed({ ownerId: OWNER, amount: 100, type: "SAVINGS", note: "a", category: "ahorro" });
     await seed({ ownerId: OWNER, amount: 50, type: "SAVINGS", note: "b", category: "ahorro" });
     await seed({
@@ -177,11 +168,14 @@ describe("movements savings exclusion (D1–D3)", () => {
       category: "ahorro",
       occurredAt: `${priorBaMonthKey()}-15T12:00:00.000Z`,
     });
-    const summary = await service.getSummary(scope);
+
+    const summary = await service.getSummary(scope, currentBaMonthKey());
     expect(summary.kpis.savings).toBe(150);
   });
 
-  it("reports mom.months[].savings per month", async () => {
+  // monthly-dashboard: kpis.savings used to be pinned to the current calendar
+  // month; asking for a past month now reports THAT month's savings.
+  it("reports a PAST month's savings when that month is requested", async () => {
     await seed({ ownerId: OWNER, amount: 150, type: "SAVINGS", note: "a", category: "ahorro" });
     await seed({
       ownerId: OWNER,
@@ -191,11 +185,10 @@ describe("movements savings exclusion (D1–D3)", () => {
       category: "ahorro",
       occurredAt: `${priorBaMonthKey()}-15T12:00:00.000Z`,
     });
-    const summary = await service.getSummary(scope);
-    const current = summary.mom.months.find((month) => month.month === currentBaMonthKey());
-    const prior = summary.mom.months.find((month) => month.month === priorBaMonthKey());
-    expect(current?.savings).toBe(150);
-    expect(prior?.savings).toBe(200);
+
+    const summary = await service.getSummary(scope, priorBaMonthKey());
+
+    expect(summary.kpis.savings).toBe(200);
   });
 
   it("GET /movements?type=SAVINGS returns only SAVINGS movements", async () => {
@@ -219,14 +212,11 @@ describe("movements savings exclusion (D1–D3)", () => {
     expect(response.statusCode).toBe(200);
     const body = response.json() as {
       kpis: { income: number; expenses: number; balance: number; savings: number };
-      mom: { months: { month: string; savings: number }[] };
     };
     expect(body.kpis.income).toBe(900);
     expect(body.kpis.expenses).toBe(300);
     expect(body.kpis.balance).toBe(600);
     expect(body.kpis.savings).toBe(100);
-    const current = body.mom.months.find((month) => month.month === currentBaMonthKey());
-    expect(current?.savings).toBe(100);
   });
 
   it("GET /movements/summary with no SAVINGS reports kpis.savings 0", async () => {
@@ -337,8 +327,7 @@ describe("movements savings exclusion (D1–D3)", () => {
     await seed({ ownerId: OWNER, amount: 300, type: "EXPENSE", note: "mercado", category: "food" });
 
     const currentKey = currentBaMonthKey();
-    const period = { from: `${currentKey}-01`, to: `${currentKey}-31` };
-    const summary = await service.getSummary(scope, period.from, period.to);
+    const summary = await service.getSummary(scope, currentKey);
 
     expect(summary.kpis.manualSavings).toBe(50);
     expect(summary.kpis.balance).toBe(550);

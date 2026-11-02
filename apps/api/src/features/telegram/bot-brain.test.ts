@@ -663,7 +663,7 @@ describe("GroqBotBrain.reply", () => {
       amount: null,
       note: null,
       query_type: "planned",
-      query: { query_type: "planned", month: "2026-09", total: 4000 },
+      query: { query_type: "planned", total: 4000 },
     });
 
     const call = calls[0];

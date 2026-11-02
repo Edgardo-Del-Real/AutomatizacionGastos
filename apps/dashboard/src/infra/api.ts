@@ -50,9 +50,8 @@ export class ApiError extends Error {
 /** Client-side movement list filters, mapped onto `/movements` query params. */
 export type MovementListFilters = {
   type?: "EXPENSE" | "INCOME" | "SAVINGS";
-  status?: "PAID" | "PENDING";
-  from?: string;
-  to?: string;
+  /** monthly-dashboard: the selected month; the API owns the day range. */
+  month?: string;
   category?: string;
   q?: string;
   /** Visibility select state; `undefined` means the default `all`. */
@@ -166,11 +165,14 @@ export function fetchHouseholdMembers(): Promise<HouseholdMember[]> {
 
 export function fetchMovementSummary(
   ownerId: string,
+  month?: string,
   visibility: VisibilityFilter = "mine",
 ): Promise<MovementSummary> {
+  const params: Record<string, string> = { ownerId, visibility };
+  if (month !== undefined) params.month = month;
   return request(
     "GET",
-    `/api/movements/summary?${new URLSearchParams({ ownerId, visibility })}`,
+    `/api/movements/summary?${new URLSearchParams(params)}`,
     undefined,
     {},
     movementSummarySchema,
@@ -184,11 +186,9 @@ export function fetchMovements(
 ): Promise<Movement[]> {
   const params: Record<string, string> = {};
   if (filters.type) params.type = filters.type;
-  if (filters.from) params.from = filters.from;
-  if (filters.to) params.to = filters.to;
+  if (filters.month) params.month = filters.month;
   if (filters.category) params.category = filters.category;
   if (filters.q) params.q = filters.q;
-  if (filters.status) params.status = filters.status;
   return request(
     "GET",
     `/api/movements?${new URLSearchParams({ ownerId, ...params, visibility })}`,

@@ -16,7 +16,6 @@ const kpis: MovementSummary["kpis"] = {
   avgPerMovement: 500,
   maxAmount: 1200,
   count: 6,
-  countThisMonth: 2,
 };
 
 const categories: MovementSummary["categories"] = [

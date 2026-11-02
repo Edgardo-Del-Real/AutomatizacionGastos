@@ -1,12 +1,10 @@
 import { updateMovementSchema, type Movement, type MovementSummary } from "@rita/contracts";
 import { ConflictError, NotFoundError, ValidationFailedError } from "../../infra/errors";
 import type { CategoryService } from "../categories/categories.service";
+import { monthToPeriod } from "./ba-month";
 import type { MovementRepository } from "./movements.repository";
 import type { MovementListFilters, SummaryPeriod, ViewerScope } from "./movements.types";
 
-const BA_OFFSET_MS = 3 * 60 * 60 * 1000;
-const MONTHS_WINDOW = 6;
-const DAYS_WINDOW = 30;
 const TOP_LIMIT = 5;
 
 export class MovementService {
@@ -16,7 +14,11 @@ export class MovementService {
   ) {}
 
   async listMovements(scope: ViewerScope, filters: MovementListFilters): Promise<Movement[]> {
-    return this.repository.listByOwner(scope, filters);
+    // monthly-dashboard: resolve the month key to a day range here, so the
+    // repository keeps working with plain dates and routes stay declarative.
+    const { month, ...rest } = filters;
+    const resolved = month === undefined ? rest : { ...rest, ...monthToPeriod(month) };
+    return this.repository.listByOwner(scope, resolved);
   }
 
   /**
@@ -86,29 +88,32 @@ export class MovementService {
     throw new ConflictError(`Movement ${id} is not a PENDING EXPENSE`);
   }
 
-  async getSummary(scope: ViewerScope, from?: string, to?: string): Promise<MovementSummary> {
-    const period: SummaryPeriod = { from, to };
-    const thisMonthPeriod = currentMonthPeriod();
-    const [kpis, thisMonthKpis, savings, manualSavings, months, daily, categories, topExpenses, topIncome, planned] =
+  /**
+   * monthly-dashboard: the summary is period-driven. `month` (`YYYY-MM`) scopes
+   * every block to that Buenos Aires calendar month; omitting it returns
+   * lifetime totals with an empty daily series (the bot's "cuánto tengo" is a
+   * lifetime question). Previstos carry no date, so `planned` never sees the
+   * month.
+   */
+  async getSummary(scope: ViewerScope, month?: string): Promise<MovementSummary> {
+    const period: SummaryPeriod = month === undefined ? {} : monthToPeriod(month);
+    const [kpis, savings, manualSavings, daily, categories, topExpenses, topIncome, pending] =
       await Promise.all([
         this.repository.summaryKpis(scope, period),
-        this.repository.summaryKpis(scope, thisMonthPeriod),
-        // D3: kpis.savings is the current-calendar-month SAVINGS sum (the
-        // period-scoped KPIs exclude SAVINGS entirely).
-        this.repository.summarySavings(scope, thisMonthPeriod),
-        // D3: kpis.manualSavings is the REQUESTED-period MANUAL SAVINGS sum
-        // (period-scoped, origin-filtered) — the two savings feeds must never
-        // be conflated; balance is the composition below, not either sum.
+        // kpis.savings and kpis.manualSavings share ONE scope: the requested
+        // period. They used to disagree (savings pinned to the current month),
+        // which made a past month report today's savings.
+        this.repository.summarySavings(scope, period),
+        // manualSavings is deducted from balance; savings is informational.
         this.repository.summaryManualSavings(scope, period),
-        this.repository.summaryMonths(scope),
-        this.repository.summaryDaily(scope),
+        this.repository.summaryDaily(scope, period),
         this.repository.summaryCategories(scope, period),
         this.repository.topByType(scope, "EXPENSE", TOP_LIMIT, period),
         this.repository.topByType(scope, "INCOME", TOP_LIMIT, period),
-        // D4: the planned block is ALWAYS the month following the current BA
-        // month and ignores the from/to filters (the repository composes no
-        // period conditions for it).
-        this.repository.summaryPlanned(scope, nextBaMonth()),
+        // Previstos carry no date, so they are NOT period-scoped: the block is
+        // the outstanding rows themselves (the monthly table cannot show them,
+        // and the mark-paid action needs a surface).
+        this.repository.listByOwner(scope, { type: "EXPENSE", status: "PENDING" }),
       ]);
 
     // manual-savings (D2): kpis excludes SAVINGS entirely, so manual savings
@@ -118,16 +123,8 @@ export class MovementService {
     const avgPerMonth = kpis.count === 0 ? 0 : balance / kpis.monthsWithData;
     const avgPerMovement = kpis.count === 0 ? 0 : (kpis.income + kpis.expenses) / kpis.count;
 
-    const monthsMap = new Map(months.map((m) => [m.month, m]));
-    const momMonths = lastMonths(MONTHS_WINDOW).map((month) => {
-      const bucket = monthsMap.get(month);
-      const income = bucket?.income ?? 0;
-      const expenses = bucket?.expenses ?? 0;
-      return { month, income, expenses, balance: income - expenses, savings: bucket?.savings ?? 0 };
-    });
-
     const dailyMap = new Map(daily.map((d) => [d.day, d]));
-    const dailySeries = lastDays(DAYS_WINDOW).map((day) => {
+    const dailySeries = daysOfPeriod(period).map((day) => {
       const bucket = dailyMap.get(day);
       const income = bucket?.income ?? 0;
       const expenses = bucket?.expenses ?? 0;
@@ -153,67 +150,36 @@ export class MovementService {
         avgPerMovement,
         maxAmount: kpis.maxAmount,
         count: kpis.count,
-        countThisMonth: thisMonthKpis.count,
       },
-      mom: { months: momMonths },
       daily: dailySeries,
       categories: categoryBreakdown,
       top: { expenses: topExpenses, income: topIncome },
-      planned,
+      // ARS-only total, mirroring the currency rule for every other block; the
+      // rows ride along so the dashboard can list and mark them paid.
+      planned: {
+        total: pending
+          .filter((movement) => movement.currency === "ARS")
+          .reduce((sum, movement) => sum + movement.amount, 0),
+        movements: pending,
+      },
     };
   }
 }
 
-function currentBaDate(): Date {
-  return new Date(Date.now() - BA_OFFSET_MS);
-}
-
 /**
- * D4 — the planned target month: the month following the current Buenos Aires
- * month, derived the same way `lastMonths` derives the current month (BA wall
- * clock, UTC arithmetic) so the service and the SQL derivation agree.
+ * Every day of the requested period, ascending; the service zero-fills the
+ * series from these keys. A period-less request (lifetime totals) has no daily
+ * series, so it returns nothing instead of inventing a window.
  */
-function nextBaMonth(): string {
-  const now = currentBaDate();
-  return formatMonthKey(new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1)));
-}
-
-function currentMonthPeriod(): SummaryPeriod {
-  const now = currentBaDate();
-  const monthKey = formatMonthKey(now);
-  const lastDay = new Date(
-    Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 0),
-  ).getUTCDate();
-  return {
-    from: `${monthKey}-01`,
-    to: `${monthKey}-${String(lastDay).padStart(2, "0")}`,
-  };
-}
-
-function lastMonths(count: number): string[] {
-  const now = currentBaDate();
-  const keys: string[] = [];
-  for (let i = count - 1; i >= 0; i--) {
-    const d = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - i, 1));
-    keys.push(formatMonthKey(d));
+function daysOfPeriod(period: SummaryPeriod): string[] {
+  if (period.from === undefined || period.to === undefined) {
+    return [];
   }
-  return keys;
-}
-
-function lastDays(count: number): string[] {
-  const now = currentBaDate();
-  const keys: string[] = [];
-  for (let i = count - 1; i >= 0; i--) {
-    const d = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() - i));
-    keys.push(formatDayKey(d));
+  const start = Date.parse(`${period.from}T00:00:00Z`);
+  const end = Date.parse(`${period.to}T00:00:00Z`);
+  const days: string[] = [];
+  for (let at = start; at <= end; at += 86_400_000) {
+    days.push(new Date(at).toISOString().slice(0, 10));
   }
-  return keys;
-}
-
-function formatMonthKey(d: Date): string {
-  return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}`;
-}
-
-function formatDayKey(d: Date): string {
-  return `${formatMonthKey(d)}-${String(d.getUTCDate()).padStart(2, "0")}`;
+  return days;
 }

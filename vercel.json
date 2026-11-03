@@ -5,9 +5,8 @@
   "outputDirectory": "apps/dashboard/dist",
   "rewrites": [
     {
-      "//": "Replace the destination with the Render URL once the service exists (e.g. https://rita-api.onrender.com). The proxy keeps the session cookie first-party.",
       "source": "/api/:path*",
-      "destination": "https://REPLACE-WITH-RENDER-URL/:path*"
+      "destination": "https://rita-api.onrender.com/:path*"
     }
   ]
 }

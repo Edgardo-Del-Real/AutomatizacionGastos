@@ -249,7 +249,50 @@ export type LoginInput = z.infer<typeof loginSchema>;
 export const sessionSchema = z
   .object({
     ownerId: z.string().min(1),
+    name: z.string().min(1),
   })
   .strict();
 
 export type Session = z.infer<typeof sessionSchema>;
+
+/** household-isolation: profile password change (the form mirrors the minimum). */
+export const changePasswordSchema = z
+  .object({
+    currentPassword: z.string().min(1),
+    newPassword: z.string().min(8),
+  })
+  .strict();
+
+export type ChangePasswordInput = z.infer<typeof changePasswordSchema>;
+/** household-isolation: the requester's view of the temporary permission. */
+export const accessStatusSchema = z
+  .object({
+    grant: z
+      .object({ targetOwnerId: z.string().min(1), expiresAt: z.string().min(1) })
+      .strict()
+      .nullable(),
+    pending: z
+      .object({
+        requestId: z.string().min(1),
+        targetOwnerId: z.string().min(1),
+        expiresAt: z.string().min(1),
+      })
+      .strict()
+      .nullable(),
+  })
+  .strict();
+
+export type AccessStatusPayload = z.infer<typeof accessStatusSchema>;
+
+export const accessHistorySchema = z.array(
+  z
+    .object({
+      requesterId: z.string().min(1),
+      createdAt: z.string().min(1),
+      expiresAt: z.string().min(1),
+      revokedAt: z.string().min(1).nullable(),
+    })
+    .strict(),
+);
+
+export type AccessHistory = z.infer<typeof accessHistorySchema>;

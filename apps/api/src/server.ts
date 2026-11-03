@@ -33,9 +33,34 @@ try {
   process.exit(1);
 }
 
-// D12 — startTelegramBot registers setMyCommands (tolerating failures) and
-// then starts the polling loop.
-void startTelegramBot(bot).catch((error: unknown) => {
-  app.log.error(redactToken(error instanceof Error ? error.message : String(error), env.TELEGRAM_BOT_TOKEN));
-  process.exit(1);
-});
+// D12 - startTelegramBot registers setMyCommands (tolerating failures) and
+// then starts the polling loop, which runs until the bot stops.
+//
+// Deploy overlap (learned in production): Render starts the new instance
+// BEFORE draining the old one, so for a few seconds two processes poll with
+// the same token and Telegram answers 409 Conflict. That is not a reason to
+// die: the HTTP API is already serving, and the old instance disappears on its
+// own. Retry with a backoff instead of exiting, so a deploy never emails
+// "server failed".
+const BOT_RETRY_DELAYS_MS = [5_000, 15_000, 30_000, 60_000];
+
+async function startBotWithRetry(): Promise<void> {
+  for (let attempt = 0; ; attempt += 1) {
+    const delay = BOT_RETRY_DELAYS_MS[Math.min(attempt, BOT_RETRY_DELAYS_MS.length - 1)]!;
+    try {
+      await startTelegramBot(bot);
+      app.log.info("telegram bot stopped polling");
+      return;
+    } catch (error) {
+      const message = redactToken(
+        error instanceof Error ? error.message : String(error),
+        env.TELEGRAM_BOT_TOKEN,
+      );
+      app.log.error(`telegram bot failed to start (attempt ${attempt + 1}): ${message}`);
+      app.log.info(`retrying in ${Math.round(delay / 1000)}s; the API keeps serving`);
+      await new Promise((resolve) => setTimeout(resolve, delay));
+    }
+  }
+}
+
+void startBotWithRetry();

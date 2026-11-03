@@ -1,0 +1,38 @@
+# Render blueprint for the API + Telegram bot.
+#
+# Free plan = the service sleeps after 15 minutes without inbound traffic. With
+# long polling that means the bot answers only after someone opens the
+# dashboard (which wakes the service). Acceptable for now; the `plan` line is
+# the single place to switch to starter when that becomes annoying.
+services:
+  - type: web
+    name: rita-api
+    runtime: docker
+    plan: free
+    region: oregon
+    dockerfilePath: ./apps/api/Dockerfile
+    dockerContext: .
+    healthCheckPath: /health
+    autoDeploy: true
+    envVars:
+      # Values below are secrets: `sync: false` asks Render to prompt for them.
+      - key: DATABASE_URL
+        sync: false
+      - key: DIRECT_URL
+        sync: false
+      - key: AUTH_SECRET
+        sync: false
+      - key: AUTH_USERS
+        sync: false
+      - key: AUTH_COOKIE_SECURE
+        value: "true"
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: HOUSEHOLD_MEMBERS
+        sync: false
+      - key: OWNER_ID
+        value: default
+      - key: GROQ_API_KEY
+        sync: false
+      - key: NODE_ENV
+        value: production

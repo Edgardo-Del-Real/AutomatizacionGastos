@@ -11,6 +11,9 @@ import {
   fetchHouseholdMembers,
   fetchMovementSummary,
   fetchMovements,
+  fetchSession,
+  login,
+  logout,
   patchMovement,
 } from "./infra/api";
 import { currentBaMonth, monthLabel } from "./infra/month";
@@ -22,6 +25,9 @@ vi.mock("./infra/api", async (importOriginal) => ({
   fetchMovements: vi.fn(),
   fetchCategories: vi.fn(),
   fetchHouseholdMembers: vi.fn(),
+  fetchSession: vi.fn(),
+  login: vi.fn(),
+  logout: vi.fn(),
   patchMovement: vi.fn(),
   deleteMovement: vi.fn(),
 }));
@@ -117,8 +123,21 @@ const fetchMovementSummaryMock = vi.mocked(fetchMovementSummary);
 const fetchMovementsMock = vi.mocked(fetchMovements);
 const fetchCategoriesMock = vi.mocked(fetchCategories);
 const fetchHouseholdMembersMock = vi.mocked(fetchHouseholdMembers);
+const fetchSessionMock = vi.mocked(fetchSession);
+const loginMock = vi.mocked(login);
+const logoutMock = vi.mocked(logout);
 const patchMovementMock = vi.mocked(patchMovement);
 const deleteMovementMock = vi.mocked(deleteMovement);
+
+
+/**
+ * online-access: the dashboard mounts only after the session fetch resolves, so
+ * every test that expects the app shell must wait for the nav to appear.
+ */
+async function renderApp() {
+  render(<App />);
+  await screen.findByRole("button", { name: "Movimientos" });
+}
 
 beforeEach(() => {
   // Single-member household: existing tests keep the fixed "default" viewer.
@@ -128,6 +147,8 @@ beforeEach(() => {
   // monthly-dashboard: the selected month lives in the URL, so every test must
   // start from a clean one or the previous test's ?mes= would leak.
   window.history.replaceState({}, "", "/");
+  // online-access: a logged-in session by default; the gate has its own tests.
+  fetchSessionMock.mockResolvedValue({ ownerId: "default" });
 });
 
 afterEach(() => {
@@ -139,7 +160,7 @@ describe("App", () => {
     fetchMovementSummaryMock.mockResolvedValue(summary);
     fetchCategoriesMock.mockResolvedValue([]);
 
-    render(<App />);
+    await renderApp();
 
     // Spanish header.
     expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent("Rita");
@@ -171,7 +192,7 @@ describe("App", () => {
     fetchMovementSummaryMock.mockResolvedValue(summary);
     fetchCategoriesMock.mockResolvedValue([]);
 
-    render(<App />);
+    await renderApp();
 
     await waitFor(() =>
       expect(fetchMovementSummaryMock).toHaveBeenLastCalledWith(
@@ -190,7 +211,7 @@ describe("App", () => {
     fetchMovementSummaryMock.mockResolvedValue(summary);
     fetchCategoriesMock.mockResolvedValue([]);
 
-    render(<App />);
+    await renderApp();
 
     await waitFor(() =>
       expect(fetchMovementSummaryMock).toHaveBeenLastCalledWith(
@@ -206,7 +227,7 @@ describe("App", () => {
     fetchMovementSummaryMock.mockResolvedValue(summary);
     fetchCategoriesMock.mockResolvedValue([]);
 
-    render(<App />);
+    await renderApp();
 
     await waitFor(() =>
       expect(fetchMovementSummaryMock).toHaveBeenLastCalledWith(
@@ -223,7 +244,7 @@ describe("App", () => {
     fetchMovementsMock.mockResolvedValue(movements);
     fetchCategoriesMock.mockResolvedValue([]);
 
-    render(<App />);
+    await renderApp();
     await waitFor(() =>
       expect(screen.getByRole("heading", { name: "Ingresos" })).toBeInTheDocument(),
     );
@@ -257,7 +278,7 @@ describe("App", () => {
     fetchMovementSummaryMock.mockResolvedValue(summary);
     fetchCategoriesMock.mockResolvedValue([]);
 
-    render(<App />);
+    await renderApp();
     await waitFor(() =>
       expect(screen.getByRole("heading", { name: "Ingresos" })).toBeInTheDocument(),
     );
@@ -275,7 +296,7 @@ describe("App", () => {
     fetchMovementSummaryMock.mockResolvedValue(summary);
     fetchCategoriesMock.mockResolvedValue([]);
 
-    render(<App />);
+    await renderApp();
     await waitFor(() =>
       expect(screen.getByRole("heading", { name: "Ingresos" })).toBeInTheDocument(),
     );
@@ -304,7 +325,7 @@ describe("App", () => {
     fetchMovementsMock.mockResolvedValue(movements);
     fetchCategoriesMock.mockResolvedValue([]);
 
-    render(<App />);
+    await renderApp();
     expect(fetchMovementSummaryMock).toHaveBeenCalledTimes(1);
     expect(fetchMovementsMock).not.toHaveBeenCalled();
 
@@ -324,7 +345,7 @@ describe("App", () => {
     fetchMovementSummaryMock.mockResolvedValue(emptySummary);
     fetchMovementsMock.mockResolvedValue(movements);
 
-    render(<App />);
+    await renderApp();
 
     await waitFor(() =>
       expect(
@@ -344,7 +365,7 @@ describe("App", () => {
     fetchMovementsMock.mockResolvedValue(movements);
     fetchCategoriesMock.mockResolvedValue([]);
 
-    render(<App />);
+    await renderApp();
 
     const alert = await screen.findByRole("alert");
     expect(alert).toHaveTextContent(/no se pudieron cargar los indicadores/i);
@@ -365,7 +386,7 @@ describe("App", () => {
     );
     fetchMovementsMock.mockResolvedValue(movements);
 
-    render(<App />);
+    await renderApp();
 
     const alert = await screen.findByRole("alert");
     expect(alert).toHaveTextContent(/no se pudieron cargar los indicadores/i);
@@ -388,7 +409,7 @@ describe("App", () => {
     fetchCategoriesMock.mockResolvedValue([]);
     deleteMovementMock.mockResolvedValue(undefined);
 
-    render(<App />);
+    await renderApp();
     await user.click(screen.getByRole("button", { name: "Movimientos" }));
     await waitFor(() => expect(screen.getByRole("table")).toBeInTheDocument());
     expect(fetchMovementsMock).toHaveBeenCalledTimes(1);
@@ -427,7 +448,7 @@ describe("App", () => {
     fetchCategoriesMock.mockResolvedValue([{ name: "sueldo", keywords: [] }]);
     patchMovementMock.mockResolvedValue(movements[0]!);
 
-    render(<App />);
+    await renderApp();
     await user.click(screen.getByRole("button", { name: "Movimientos" }));
     await waitFor(() => expect(screen.getByRole("table")).toBeInTheDocument());
 
@@ -457,72 +478,13 @@ describe("App", () => {
     );
   });
 
-  it("renders no viewer selector for a single-member household", async () => {
-    fetchMovementSummaryMock.mockResolvedValue(summary);
-    fetchCategoriesMock.mockResolvedValue([]);
-
-    render(<App />);
-
-    await waitFor(() =>
-      expect(fetchMovementSummaryMock).toHaveBeenLastCalledWith(
-        "default",
-        expect.any(String),
-        "mine",
-      ),
-    );
-    expect(screen.queryByLabelText("Ver como")).toBeNull();
-  });
-
-  it("switching the viewer re-queries the list and the summary with the new owner", async () => {
-    const user = userEvent.setup();
-    fetchHouseholdMembersMock.mockResolvedValue([
-      { ownerId: "rita", name: "Rita" },
-      { ownerId: "edgardo", name: "Edgardo" },
-    ]);
-    fetchMovementSummaryMock.mockResolvedValue(summary);
-    fetchMovementsMock.mockResolvedValue(movements);
-    fetchCategoriesMock.mockResolvedValue([]);
-
-    render(<App />);
-
-    // No persisted viewer and VITE_OWNER_ID ("default") is not a member, so the
-    // viewer falls back to the first member.
-    await waitFor(() =>
-      expect(fetchMovementSummaryMock).toHaveBeenLastCalledWith("rita", expect.any(String), "mine"),
-    );
-
-    await user.click(screen.getByRole("button", { name: "Movimientos" }));
-    await waitFor(() =>
-      expect(fetchMovementsMock).toHaveBeenLastCalledWith("rita", { month: expect.any(String) }, "mine"),
-    );
-
-    await user.selectOptions(screen.getByLabelText("Ver como"), "edgardo");
-
-    await waitFor(() =>
-      expect(fetchMovementSummaryMock).toHaveBeenLastCalledWith(
-        "edgardo",
-        expect.any(String),
-        "mine",
-      ),
-    );
-    await waitFor(() =>
-      expect(fetchMovementsMock).toHaveBeenLastCalledWith(
-        "edgardo",
-        { month: expect.any(String) },
-
-        "mine",
-      ),
-    );
-    expect(window.localStorage.getItem("rita.viewer")).toBe("edgardo");
-  });
-
   it("the hoisted visibility filter re-queries the list and the summary together", async () => {
     const user = userEvent.setup();
     fetchMovementSummaryMock.mockResolvedValue(summary);
     fetchMovementsMock.mockResolvedValue(movements);
     fetchCategoriesMock.mockResolvedValue([]);
 
-    render(<App />);
+    await renderApp();
     await waitFor(() =>
       expect(fetchMovementSummaryMock).toHaveBeenLastCalledWith(
         "default",
@@ -573,7 +535,7 @@ describe("App", () => {
     });
     fetchCategoriesMock.mockResolvedValue([]);
 
-    render(<App />);
+    await renderApp();
 
     const kpisHeading = await screen.findByRole("heading", {
       name: "Ingresos",
@@ -605,7 +567,7 @@ describe("App", () => {
     fetchMovementsMock.mockResolvedValue(movements);
     fetchCategoriesMock.mockResolvedValue([]);
 
-    render(<App />);
+    await renderApp();
 
     expect(
       await screen.findByRole("heading", { name: "Gastos fijos previstos" }),
@@ -615,5 +577,63 @@ describe("App", () => {
     expect(
       screen.getByRole("form", { name: "Agregar previsto" }),
     ).toBeInTheDocument();
+  });
+});
+
+describe("App login gate", () => {
+  it("shows the login form without a session and enters after login", async () => {
+    const user = userEvent.setup();
+    fetchSessionMock.mockResolvedValueOnce(null);
+    loginMock.mockResolvedValue({ ownerId: "rita" });
+    fetchMovementSummaryMock.mockResolvedValue(summary);
+    fetchCategoriesMock.mockResolvedValue([]);
+
+    render(<App />);
+
+    const form = await screen.findByRole("form", { name: "Ingresar" });
+    expect(screen.queryByRole("button", { name: "Movimientos" })).toBeNull();
+
+    await user.type(within(form).getByLabelText("Contraseña"), "clave-rita");
+    await user.click(within(form).getByRole("button", { name: "Entrar" }));
+
+    await waitFor(() => expect(loginMock).toHaveBeenCalledWith("default", "clave-rita"));
+    await screen.findByRole("button", { name: "Movimientos" });
+    await waitFor(() =>
+      expect(fetchMovementSummaryMock).toHaveBeenLastCalledWith(
+        "rita",
+        expect.any(String),
+        "mine",
+      ),
+    );
+  });
+
+  it("keeps the form open with a Spanish error on bad credentials", async () => {
+    const user = userEvent.setup();
+    fetchSessionMock.mockResolvedValueOnce(null);
+    loginMock.mockRejectedValue(new ApiError("http", { status: 401 }));
+
+    render(<App />);
+
+    const form = await screen.findByRole("form", { name: "Ingresar" });
+    await user.type(within(form).getByLabelText("Contraseña"), "mal");
+    await user.click(within(form).getByRole("button", { name: "Entrar" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      /usuario o contraseña incorrectos/i,
+    );
+    expect(screen.queryByRole("button", { name: "Movimientos" })).toBeNull();
+  });
+
+  it("returns to the form after logging out", async () => {
+    const user = userEvent.setup();
+    fetchMovementSummaryMock.mockResolvedValue(summary);
+    fetchCategoriesMock.mockResolvedValue([]);
+    logoutMock.mockResolvedValue(undefined);
+
+    await renderApp();
+    await user.click(screen.getByRole("button", { name: "Salir" }));
+
+    expect(await screen.findByRole("form", { name: "Ingresar" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Movimientos" })).toBeNull();
   });
 });

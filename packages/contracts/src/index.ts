@@ -231,3 +231,25 @@ export const movementSummarySchema = z.object({
 }).strict();
 
 export type MovementSummary = z.infer<typeof movementSummarySchema>;
+
+/**
+ * online-access: the two wire shapes of the login flow. The session itself
+ * travels in an httpOnly cookie, so `sessionSchema` is only the identity the
+ * dashboard needs to render.
+ */
+export const loginSchema = z
+  .object({
+    ownerId: z.string().min(1),
+    password: z.string().min(1),
+  })
+  .strict();
+
+export type LoginInput = z.infer<typeof loginSchema>;
+
+export const sessionSchema = z
+  .object({
+    ownerId: z.string().min(1),
+  })
+  .strict();
+
+export type Session = z.infer<typeof sessionSchema>;

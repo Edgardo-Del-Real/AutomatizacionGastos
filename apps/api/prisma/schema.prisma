@@ -3,8 +3,11 @@ generator client {
 }
 
 datasource db {
-  provider = "postgresql"
-  url      = env("DATABASE_URL")
+  provider  = "postgresql"
+  // Pooled connection for the app (Supabase pooler on 6543 in production).
+  url       = env("DATABASE_URL")
+  // Direct connection for the CLI: migrations must not run through the pooler.
+  directUrl = env("DIRECT_URL")
 }
 
 enum MovementType {

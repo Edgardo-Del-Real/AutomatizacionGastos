@@ -1,5 +1,7 @@
 import { buildApp } from "./app";
 import { env } from "./config/env";
+import { parseAuthEnv } from "./features/auth/auth.env";
+import { AuthService } from "./features/auth/auth.service";
 import {
   createTelegramBot,
   redactToken,
@@ -7,7 +9,12 @@ import {
   startTelegramBot,
 } from "./features/telegram/telegram.bot";
 
-const app = buildApp({ logger: true });
+// online-access: parsing here throws when the auth env is missing or malformed,
+// so the process refuses to start wide open.
+const authEnv = parseAuthEnv(process.env);
+const auth = new AuthService({ credentials: authEnv.users, secret: authEnv.secret });
+
+const app = buildApp({ logger: true, auth });
 const bot = createTelegramBot(env.TELEGRAM_BOT_TOKEN, app.telegramService);
 
 registerGracefulStop(app, bot);

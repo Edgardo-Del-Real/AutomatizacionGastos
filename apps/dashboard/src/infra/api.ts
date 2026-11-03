@@ -3,8 +3,10 @@ import {
   expenseSchema,
   householdMembersSchema,
   listMovementsSchema,
+  loginSchema,
   movementSchema,
   movementSummarySchema,
+  sessionSchema,
 } from "@rita/contracts";
 import type {
   Expense,
@@ -12,6 +14,7 @@ import type {
   Movement,
   MovementSummary,
   OwnerCategory,
+  Session,
   VisibilityFilter,
 } from "@rita/contracts";
 import { z } from "zod";
@@ -268,4 +271,28 @@ export function markMovementPaid(
     { "x-owner-id": ownerId },
     movementSchema,
   );
+}
+// --------------------------------------------------------------- online-access
+
+/**
+ * The session is an httpOnly cookie, so the client never sees a token: it just
+ * asks who it is. `null` means "no session" and is not an error.
+ */
+export async function fetchSession(): Promise<Session | null> {
+  const response = await fetch("/api/auth/session", { credentials: "include" });
+  if (response.status === 401) return null;
+  if (!response.ok) throw new ApiError("http", { status: response.status });
+  const json = await response.json();
+  const parsed = sessionSchema.safeParse(json);
+  if (!parsed.success) throw new ApiError("validation", { issues: parsed.error.issues });
+  return parsed.data;
+}
+
+/** Throws ApiError("http", { status: 401 }) on bad credentials. */
+export async function login(ownerId: string, password: string): Promise<Session> {
+  return request("POST", "/api/auth/login", loginSchema.parse({ ownerId, password }), {}, sessionSchema);
+}
+
+export async function logout(): Promise<void> {
+  return request("POST", "/api/auth/logout", undefined, {});
 }

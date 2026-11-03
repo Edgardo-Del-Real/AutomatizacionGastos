@@ -108,7 +108,10 @@ const duo: HouseholdMember[] = [
 /** Renders inside a real ViewerProvider with a resolved household. */
 function renderWithViewer(ui: ReactElement, members: HouseholdMember[]) {
   fetchHouseholdMembersMock.mockResolvedValue(members);
-  return render(<ViewerProvider>{ui}</ViewerProvider>);
+  // online-access: the viewer comes from the session, not a selector. These
+  // duo tests always spoke as the first member (rita).
+  const viewer = members[0]?.ownerId ?? "default";
+  return render(<ViewerProvider ownerId={viewer}>{ui}</ViewerProvider>);
 }
 
 const sharedMovements: Movement[] = [

@@ -1,7 +1,5 @@
 import { createHmac, randomBytes, scryptSync, timingSafeEqual } from "node:crypto";
 
-import type { AuthCredential } from "./auth.config";
-
 export const SESSION_COOKIE = "rita_session";
 const SCRYPT_KEYLEN = 32;
 const DEFAULT_TTL_MS = 30 * 24 * 60 * 60 * 1000;
@@ -9,7 +7,6 @@ const DEFAULT_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 export type SessionPayload = { ownerId: string; expiresAt: number };
 
 export type AuthServiceOptions = {
-  credentials: AuthCredential[];
   /** HMAC key for the session token. Must be long and secret. */
   secret: string;
   /** TTL in ms; defaults to 30 days. */
@@ -30,33 +27,22 @@ export function newSalt(): string {
 /**
  * Sessions are stateless: a signed payload in a httpOnly cookie. There is no
  * session table to migrate, and a logout is just clearing the cookie — fine
- * for a two-person household, and it keeps the deploy free tier stateless.
+ * for a two-person household, and it keeps the free-tier deploy stateless.
+ *
+ * household-isolation: identities and passwords moved to the `User` table, so
+ * this service no longer knows who exists. It only signs and verifies tokens;
+ * `UserService` owns the credentials. Known limitation: a deleted user's token
+ * stays valid until it expires (there is no user deletion yet).
  */
 export class AuthService {
-  private readonly credentials: Map<string, AuthCredential>;
   private readonly secret: string;
   private readonly ttlMs: number;
   private readonly now: () => number;
 
   constructor(options: AuthServiceOptions) {
-    this.credentials = new Map(options.credentials.map((c) => [c.ownerId, c]));
     this.secret = options.secret;
     this.ttlMs = options.ttlMs ?? DEFAULT_TTL_MS;
     this.now = options.now ?? (() => Date.now());
-  }
-
-  /** True when the ownerId exists and the password derives the stored hash. */
-  verifyPassword(ownerId: string, password: string): boolean {
-    const credential = this.credentials.get(ownerId);
-    if (credential === undefined) {
-      // Still spend the work: a fast "unknown user" leak is a login oracle.
-      hashPassword(password, newSalt());
-      return false;
-    }
-    const expected = Buffer.from(credential.hash, "hex");
-    const actual = Buffer.from(hashPassword(password, credential.salt), "hex");
-    if (expected.length !== actual.length) return false;
-    return timingSafeEqual(expected, actual);
   }
 
   issueToken(ownerId: string): string {
@@ -81,7 +67,6 @@ export class AuthService {
       const { ownerId, expiresAt } = parsed as Partial<SessionPayload>;
       if (typeof ownerId !== "string" || typeof expiresAt !== "number") return null;
       if (expiresAt <= this.now()) return null;
-      if (!this.credentials.has(ownerId)) return null;
       return { ownerId, expiresAt };
     } catch {
       return null;

@@ -1,5 +1,8 @@
 import {
+  accessHistorySchema,
+  accessStatusSchema,
   categoryListSchema,
+  changePasswordSchema,
   expenseSchema,
   householdMembersSchema,
   listMovementsSchema,
@@ -9,6 +12,8 @@ import {
   sessionSchema,
 } from "@rita/contracts";
 import type {
+  AccessHistory,
+  AccessStatusPayload,
   Expense,
   HouseholdMember,
   Movement,
@@ -295,4 +300,44 @@ export async function login(ownerId: string, password: string): Promise<Session>
 
 export async function logout(): Promise<void> {
   return request("POST", "/api/auth/logout", undefined, {});
+}
+
+// ------------------------------------------------------------ household-access
+
+export type AccessStatus = AccessStatusPayload;
+
+export async function requestAccess(): Promise<{
+  requestId: string;
+  targetOwnerId: string;
+  expiresAt: string;
+}> {
+  return request("POST", "/api/access/requests", undefined, {}, z.object({
+    requestId: z.string(),
+    targetOwnerId: z.string(),
+    expiresAt: z.string(),
+  }));
+}
+
+export async function fetchAccessStatus(): Promise<AccessStatus> {
+  return request("GET", "/api/access", undefined, {}, accessStatusSchema);
+}
+
+export async function revokeAccess(): Promise<void> {
+  return request("DELETE", "/api/access", undefined, {});
+}
+
+export async function fetchAccessHistory(): Promise<AccessHistory> {
+  return request("GET", "/api/access/history", undefined, {}, accessHistorySchema);
+}
+
+export async function changePassword(
+  currentPassword: string,
+  newPassword: string,
+): Promise<void> {
+  return request(
+    "POST",
+    "/api/auth/password",
+    changePasswordSchema.parse({ currentPassword, newPassword }),
+    {},
+  );
 }

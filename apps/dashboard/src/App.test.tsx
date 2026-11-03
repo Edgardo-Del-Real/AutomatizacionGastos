@@ -148,7 +148,7 @@ beforeEach(() => {
   // start from a clean one or the previous test's ?mes= would leak.
   window.history.replaceState({}, "", "/");
   // online-access: a logged-in session by default; the gate has its own tests.
-  fetchSessionMock.mockResolvedValue({ ownerId: "default" });
+  fetchSessionMock.mockResolvedValue({ ownerId: "default", name: "Edgardo" });
 });
 
 afterEach(() => {
@@ -584,7 +584,7 @@ describe("App login gate", () => {
   it("shows the login form without a session and enters after login", async () => {
     const user = userEvent.setup();
     fetchSessionMock.mockResolvedValueOnce(null);
-    loginMock.mockResolvedValue({ ownerId: "rita" });
+    loginMock.mockResolvedValue({ ownerId: "rita", name: "Rita" });
     fetchMovementSummaryMock.mockResolvedValue(summary);
     fetchCategoriesMock.mockResolvedValue([]);
 
@@ -631,7 +631,9 @@ describe("App login gate", () => {
     logoutMock.mockResolvedValue(undefined);
 
     await renderApp();
-    await user.click(screen.getByRole("button", { name: "Salir" }));
+    // Identity and logout live in the profile menu now.
+    await user.click(screen.getByRole("button", { name: /Edgardo/ }));
+    await user.click(screen.getByRole("menuitem", { name: "Salir" }));
 
     expect(await screen.findByRole("form", { name: "Ingresar" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Movimientos" })).toBeNull();

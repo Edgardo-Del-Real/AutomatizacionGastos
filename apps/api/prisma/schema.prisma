@@ -115,3 +115,50 @@ model BotState {
   pendingNote       String?
   updatedAt         DateTime @updatedAt
 }
+
+// household-isolation: users live in the database, not in the deploy env.
+// AUTH_USERS/HOUSEHOLD_MEMBERS are only a bootstrap seed (insert-if-missing).
+model User {
+  ownerId   String   @id
+  name      String
+  chatId    String   @unique
+  salt      String
+  hash      String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+enum AccessRequestStatus {
+  PENDING
+  APPROVED
+  DENIED
+  EXPIRED
+}
+
+// A pending "may I see your dashboard?" ask. It expires on its own so a
+// forgotten request can never be accepted days later.
+model AccessRequest {
+  id                String              @id @default(cuid())
+  requesterId       String
+  targetOwnerId     String
+  status            AccessRequestStatus @default(PENDING)
+  telegramMessageId Int?
+  createdAt         DateTime            @default(now())
+  decidedAt         DateTime?
+  expiresAt         DateTime
+
+  @@index([requesterId, status])
+  @@index([targetOwnerId, status])
+}
+
+// The granted permission: read-only, 30 minutes, revocable before it expires.
+model AccessGrant {
+  id            String    @id @default(cuid())
+  requesterId   String
+  targetOwnerId String
+  createdAt     DateTime  @default(now())
+  expiresAt     DateTime
+  revokedAt     DateTime?
+
+  @@index([requesterId, expiresAt])
+}

@@ -1,7 +1,14 @@
 import { buildApp } from "./app";
 import { env } from "./config/env";
+import { prismaClient } from "./infra/db/prisma";
+import { parseHouseholdMembers } from "./features/household/household.config";
 import { parseAuthEnv } from "./features/auth/auth.env";
 import { AuthService } from "./features/auth/auth.service";
+import { PrismaUserRepository } from "./features/auth/user.repository";
+import { UserService } from "./features/auth/user.service";
+import { loadHousehold, seedUsers } from "./features/auth/user.seed";
+import { PrismaAccessRepository } from "./features/access/access.repository";
+import { AccessService, type Notifier } from "./features/access/access.service";
 import {
   createTelegramBot,
   redactToken,
@@ -12,10 +19,63 @@ import {
 // online-access: parsing here throws when the auth env is missing or malformed,
 // so the process refuses to start wide open.
 const authEnv = parseAuthEnv(process.env);
-const auth = new AuthService({ credentials: authEnv.users, secret: authEnv.secret });
+const auth = new AuthService({ secret: authEnv.secret });
 
-const app = buildApp({ logger: true, auth });
-const bot = createTelegramBot(env.TELEGRAM_BOT_TOKEN, app.telegramService);
+// household-isolation: the env is only a bootstrap seed. The table is the
+// source of truth, so a password changed from the profile survives deploys.
+const userRepository = new PrismaUserRepository(prismaClient);
+const fallbackMembers = parseHouseholdMembers(env.HOUSEHOLD_MEMBERS, {
+  ownerId: env.OWNER_ID,
+  chatId: env.TELEGRAM_OWNER_CHAT_ID!,
+});
+await seedUsers(userRepository, { members: fallbackMembers, credentials: authEnv.users });
+const members = await loadHousehold(userRepository, fallbackMembers);
+console.log(`users ready: ${members.map((member) => member.ownerId).join(", ")}`);
+
+// household-isolation: the access flow needs to message the target's chat, but
+// the bot is built from the app's services — so the port is late-bound here,
+// in the composition root, instead of inside either of them.
+let notifierPort: Notifier | null = null;
+const accessService = new AccessService(
+  new PrismaAccessRepository(prismaClient),
+  userRepository,
+  {
+    send: async (chatId, text, keyboard) => {
+      if (notifierPort === null) throw new Error("telegram notifier is not wired yet");
+      return notifierPort.send(chatId, text, keyboard);
+    },
+    edit: async (chatId, messageId, text) => {
+      if (notifierPort === null) throw new Error("telegram notifier is not wired yet");
+      await notifierPort.edit(chatId, messageId, text);
+    },
+  },
+);
+
+const app = buildApp({
+  logger: true,
+  auth,
+  users: new UserService(userRepository),
+  members,
+  access: accessService,
+});const bot = createTelegramBot(env.TELEGRAM_BOT_TOKEN, app.telegramService, accessService);
+
+// Now that the bot exists, the access flow can actually send the request
+// message with its Dar acceso / Denegar buttons.
+notifierPort = {
+  send: async (chatId, text, keyboard) => {
+    const sent = await bot.api.sendMessage(chatId, text, {
+      reply_markup: {
+        inline_keyboard: keyboard.map((row) =>
+          row.map((button) => ({ text: button.text, callback_data: button.data })),
+        ),
+      },
+    });
+    return sent.message_id;
+  },
+  edit: async (chatId, messageId, text) => {
+    await bot.api.editMessageText(chatId, messageId, text);
+  },
+};
 
 registerGracefulStop(app, bot);
 

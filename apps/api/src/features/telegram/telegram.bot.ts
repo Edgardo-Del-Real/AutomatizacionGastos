@@ -2,6 +2,7 @@ import { Bot, type Context } from "grammy";
 import type { Transformer } from "grammy";
 import type { FastifyInstance } from "fastify";
 import type { TelegramService } from "./telegram.service";
+import { ACCESS_CALLBACK_PREFIX, type AccessService } from "../access/access.service";
 import type { InlineKeyboard } from "./telegram.parser";
 
 export type RecordedApiCall = {
@@ -75,16 +76,37 @@ function buildReplyPort(ctx: Context): (text: string, keyboard?: InlineKeyboard,
   };
 }
 
-export function createTelegramBot(token: string, service: TelegramService): Bot {
+export function createTelegramBot(
+  token: string,
+  service: TelegramService,
+  access?: AccessService,
+): Bot {
   const bot = new Bot(token);
 
   bot.on("message", (ctx) =>
     service.handleUpdate(ctx.update, buildReplyPort(ctx)),
   );
 
-  // D4 — the callback channel: parse the callback through the service's
+  // D4 - the callback channel: parse the callback through the service's
   // handleCallback; every processed callback is answered so the spinner stops.
+  //
+  // household-isolation: the access decision buttons belong to the target's
+  // chat, not to the capture flow, so they are handled here and never reach the
+  // capture state machine.
   bot.on("callback_query", async (ctx) => {
+    const data = ctx.callbackQuery.data ?? "";
+    if (access !== undefined && data.startsWith(ACCESS_CALLBACK_PREFIX)) {
+      const outcome = await access.decideFromCallback(
+        data,
+        (chatId) => service.ownerOfChat(chatId),
+        ctx.chat?.id ?? 0,
+      );
+      const answer = typeof outcome === "string" ? outcome : "Listo";
+      await ctx.answerCallbackQuery({ text: answer === "not-access" ? undefined : answer }).catch(
+        () => undefined,
+      );
+      return;
+    }
     const processed = await service.handleCallback(ctx.update, buildReplyPort(ctx));
     if (processed) {
       await ctx.answerCallbackQuery().catch(() => undefined);

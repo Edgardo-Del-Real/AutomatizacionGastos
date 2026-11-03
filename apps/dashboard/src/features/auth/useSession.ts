@@ -12,7 +12,7 @@ import {
 export type SessionState =
   | { status: "loading" }
   | { status: "anonymous" }
-  | { status: "authenticated"; ownerId: string }
+  | { status: "authenticated"; ownerId: string; name: string }
   | { status: "error"; error: ApiError };
 
 export type UseSession = {
@@ -46,7 +46,7 @@ export function useSession(): UseSession {
         setState(
           session === null
             ? { status: "anonymous" }
-            : { status: "authenticated", ownerId: session.ownerId },
+            : { status: "authenticated", ownerId: session.ownerId, name: session.name },
         );
       })
       .catch((caught: unknown) => {
@@ -66,7 +66,7 @@ export function useSession(): UseSession {
     setError(null);
     try {
       const session = await loginRequest(ownerId, password);
-      setState({ status: "authenticated", ownerId: session.ownerId });
+      setState({ status: "authenticated", ownerId: session.ownerId, name: session.name });
       return true;
     } catch (caught) {
       setError(caught instanceof ApiError ? caught : new ApiError("network"));

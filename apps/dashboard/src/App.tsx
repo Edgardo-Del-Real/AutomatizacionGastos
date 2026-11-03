@@ -2,6 +2,10 @@ import { useCallback, useState } from "react";
 
 import type { VisibilityFilter } from "@rita/contracts";
 
+import { ProfileDialog } from "./features/access/ProfileDialog";
+import { ProfileMenu } from "./features/access/ProfileMenu";
+import { useAccess } from "./features/access/useAccess";
+import type { UseAccess } from "./features/access/useAccess";
 import { LoginForm } from "./features/auth/LoginForm";
 import { useSession } from "./features/auth/useSession";
 import { ViewerProvider, useViewer } from "./features/household/ViewerContext";
@@ -29,8 +33,28 @@ const NAV_BUTTON_CLASS =
 const NAV_ACTIVE_CLASS = "border-accent/20 bg-accent-soft text-accent";
 const NAV_IDLE_CLASS = "text-ink-soft hover:bg-surface-raised hover:text-ink";
 
-function Dashboard({ onLogout }: { onLogout: () => void }) {
-  const { viewerId } = useViewer();
+function clockLabel(iso: string): string {
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return "";
+  return new Intl.DateTimeFormat("es-AR", { hour: "2-digit", minute: "2-digit" }).format(date);
+}
+
+type DashboardProps = {
+  session: { ownerId: string; name: string };
+  access: UseAccess;
+  onLogout: () => void;
+};
+
+function Dashboard({ session, access, onLogout }: DashboardProps) {
+  // The viewer is the session owner, unless a live grant lets us read the
+  // other person's dashboard (household-isolation).
+  const { viewerId, members } = useViewer();
+  const partner = members.find((member) => member.ownerId !== session.ownerId) ?? null;
+  const viewingName =
+    access.viewAs === null
+      ? null
+      : (members.find((member) => member.ownerId === access.viewAs)?.name ?? access.viewAs);
+
   // Single App-level refresh token (D11): bumping it re-fetches both the
   // movement list and the summary in place after any successful mutation.
   const [refreshKey, setRefreshKey] = useState(0);
@@ -40,8 +64,8 @@ function Dashboard({ onLogout }: { onLogout: () => void }) {
   // list requests so the charts and the table always agree.
   const [visibility, setVisibility] = useState<VisibilityFilter>("mine");
 
-  const [activeSection, setActiveSection] =
-    useState<DashboardSection>("kpis");
+  const [activeSection, setActiveSection] = useState<DashboardSection>("kpis");
+  const [profileOpen, setProfileOpen] = useState(false);
   // monthly-dashboard: ONE month for the whole dashboard, backed by the URL so
   // it survives a reload and a shared link. Every section reads it from here.
   const { month, setMonth } = useSelectedMonth();
@@ -86,13 +110,17 @@ function Dashboard({ onLogout }: { onLogout: () => void }) {
               </div>
             </div>
             <MonthSelector month={month} onChange={setMonth} />
-            <button
-              type="button"
-              onClick={onLogout}
-              className="rounded-control border border-border bg-surface px-3 py-1.5 text-sm font-semibold text-ink-soft transition-colors hover:bg-surface-raised hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-soft"
-            >
-              Salir
-            </button>
+            <ProfileMenu
+              userName={session.name}
+              viewingName={viewingName}
+              partnerName={partner?.name ?? null}
+              grantExpiresAt={access.status?.grant?.expiresAt ?? null}
+              waiting={access.waiting}
+              onRequestAccess={() => void access.request()}
+              onRevoke={() => void access.revoke()}
+              onOpenProfile={() => setProfileOpen(true)}
+              onLogout={onLogout}
+            />
             <nav
               aria-label="Secciones del dashboard"
               className="flex flex-wrap items-center gap-1.5"
@@ -117,8 +145,32 @@ function Dashboard({ onLogout }: { onLogout: () => void }) {
             </nav>
           </div>
         </div>
+        {viewingName !== null ? (
+          <div
+            role="status"
+            className="border-t border-accent/30 bg-accent-soft px-4 py-2 text-center text-sm font-medium text-accent sm:px-6"
+          >
+            Estás viendo el dashboard de {viewingName}
+            {access.status?.grant?.expiresAt !== undefined
+              ? ` · se cierra a las ${clockLabel(access.status.grant.expiresAt)}`
+              : ""}
+            {" · "}
+            <button
+              type="button"
+              onClick={() => void access.revoke()}
+              className="underline underline-offset-2 hover:no-underline"
+            >
+              Volver al mío
+            </button>
+          </div>
+        ) : null}
       </header>
       <div className="mx-auto w-full max-w-6xl px-4 py-8 sm:px-6 lg:px-8">
+        {access.waiting ? (
+          <p role="status" className="mb-6 rounded-card border border-dashed border-border bg-surface p-3 text-center text-sm text-ink-soft">
+            Esperando que {partner?.name ?? "la otra persona"} responda en Telegram…
+          </p>
+        ) : null}
         {activeSection === "kpis" && (
           <div className="space-y-6">
             <div className="max-w-2xl">
@@ -126,10 +178,14 @@ function Dashboard({ onLogout }: { onLogout: () => void }) {
                 Resumen financiero
               </p>
               <h2 className="mt-2 text-3xl font-bold tracking-tight text-ink sm:text-4xl">
-                Tomá el control de tu mes.
+                {viewingName === null
+                  ? "Tomá el control de tu mes."
+                  : `El mes de ${viewingName}.`}
               </h2>
               <p className="mt-2 text-sm leading-6 text-ink-soft">
-                Una vista simple de lo que entra, lo que sale y lo que estás construyendo.
+                {viewingName === null
+                  ? "Una vista simple de lo que entra, lo que sale y lo que estás construyendo."
+                  : "Estás mirando su dashboard en modo lectura: no podés editar ni borrar nada."}
               </p>
             </div>
             <SummarySection state={summaryState} month={month}>
@@ -176,12 +232,24 @@ function Dashboard({ onLogout }: { onLogout: () => void }) {
           />
         )}
       </div>
+      {profileOpen ? (
+        <ProfileDialog
+          userName={session.name}
+          ownerId={session.ownerId}
+          nameOf={(ownerId) =>
+            members.find((member) => member.ownerId === ownerId)?.name ?? ownerId
+          }
+          onClose={() => setProfileOpen(false)}
+        />
+      ) : null}
     </main>
   );
 }
 
 export default function App() {
   const session = useSession();
+  const authenticated = session.state.status === "authenticated";
+  const access = useAccess(authenticated);
 
   if (session.state.status === "loading") {
     return (
@@ -222,9 +290,15 @@ export default function App() {
     );
   }
 
+  const effectiveOwnerId = access.viewAs ?? session.state.ownerId;
+
   return (
-    <ViewerProvider ownerId={session.state.ownerId}>
-      <Dashboard onLogout={session.logout} />
+    <ViewerProvider ownerId={effectiveOwnerId}>
+      <Dashboard
+        session={{ ownerId: session.state.ownerId, name: session.state.name }}
+        access={access}
+        onLogout={session.logout}
+      />
     </ViewerProvider>
   );
 }

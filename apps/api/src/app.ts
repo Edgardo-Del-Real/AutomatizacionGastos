@@ -21,19 +21,29 @@ import { SavingsRuleService } from "./features/savings/savings.service";
 import { parseHouseholdMembers } from "./features/household/household.config";
 import { HouseholdService } from "./features/household/household.service";
 import { householdRoute } from "./features/household/household.route";
+import { registerAuthGuard, authRoute } from "./features/auth/auth.route";
+import type { AuthService } from "./features/auth/auth.service";
 
 export type AppOptions = {
   prisma?: PrismaClient;
   logger?: boolean;
+  /**
+   * online-access: when present, every data route requires a session. Tests
+   * omit it and keep using the legacy ownerId inputs; server.ts always passes
+   * it, so production can never run unauthenticated.
+   */
+  auth?: AuthService | null;
 };
 
 export function buildApp(options: AppOptions = {}): FastifyInstance {
   const prisma = options.prisma ?? prismaClient;
   const expenseRepository = new PrismaExpenseRepository(prisma);
-  const expenseService = new ExpenseService(expenseRepository);
   const movementRepository = new PrismaMovementRepository(prisma);
   const categoryRepository = new PrismaCategoryRepository(prisma);
   const categoryService = new CategoryService(categoryRepository);
+  // manual-savings (D6): ExpenseService takes CategoryService as a required
+  // 2nd constructor param — the category wiring must sit above it.
+  const expenseService = new ExpenseService(expenseRepository, categoryService);
   const savingsRepository = new PrismaSavingsRuleRepository(prisma);
   const savingsService = new SavingsRuleService(savingsRepository);
   const movementService = new MovementService(movementRepository, categoryService);
@@ -75,6 +85,17 @@ export function buildApp(options: AppOptions = {}): FastifyInstance {
 
   app.setErrorHandler(errorHandler);
   void app.register(cors, { origin: true });
+
+  // online-access: with an AuthService every data route requires a session, and
+  // the owner id comes from the cookie — `?ownerId=` stops meaning anything.
+  if (options.auth !== undefined && options.auth !== null) {
+    registerAuthGuard(app, options.auth);
+    void app.register(authRoute, { auth: options.auth });
+  }
+
+  // Render pings this; it must not require a session.
+  app.get("/health", async (_request, reply) => reply.send({ status: "ok" }));
+
   void app.register(expensesRoute, { expenseService });
   void app.register(movementsRoute, { movementService, categoryService, householdService });
   void app.register(householdRoute, { householdService });

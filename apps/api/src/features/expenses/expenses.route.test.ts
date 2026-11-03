@@ -79,14 +79,44 @@ describe("expenses route", () => {
     expect(response.json().code).toBe("ValidationFailed");
   });
 
-  it("rejects a request without an owner id with 422", async () => {
+  it("creates a SAVINGS movement defaulting the category to ahorro", async () => {
+    const response = await app.inject({
+      method: "POST",
+      url: "/expenses",
+      headers: { "x-owner-id": "owner-1" },
+      payload: { type: "SAVINGS", amount: 50, note: "fondo", occurredAt: "2026-08-01T12:00:00.000Z" },
+    });
+
+    expect(response.statusCode).toBe(201);
+    const body = response.json();
+    expect(body.category).toBe("ahorro");
+
+    const movements = await app.inject({ method: "GET", url: "/movements?ownerId=owner-1" });
+    const list = movements.json() as { type: string; savingsOrigin: string | null }[];
+    const savings = list.find((movement) => movement.type === "SAVINGS");
+    expect(savings?.savingsOrigin).toBe("MANUAL");
+  });
+
+  it("rejects a SAVINGS movement with a non-ahorro category with 422", async () => {
+    const response = await app.inject({
+      method: "POST",
+      url: "/expenses",
+      headers: { "x-owner-id": "owner-1" },
+      payload: { type: "SAVINGS", amount: 50, category: "bolsillo", occurredAt: "2026-08-01T12:00:00.000Z" },
+    });
+
+    expect(response.statusCode).toBe(422);
+    expect(response.json().code).toBe("ValidationFailed");
+  });
+
+  it("rejects a request without an owner id (401: identity is auth)", async () => {
     const response = await app.inject({
       method: "POST",
       url: "/expenses",
       payload: { amount: 100, occurredAt: "2026-08-01T12:00:00.000Z" },
     });
 
-    expect(response.statusCode).toBe(422);
+    expect(response.statusCode).toBe(401);
   });
 
   it("lists expenses for an owner only", async () => {
@@ -178,11 +208,11 @@ describe("expenses route", () => {
     expect(response.json().code).toBe("NotFound");
   });
 
-  it("rejects a get-by-id request without an ownerId query parameter with 422", async () => {
+  it("rejects a get-by-id request without an ownerId query parameter", async () => {
     const response = await app.inject({ method: "GET", url: "/expenses/exp_1" });
 
-    expect(response.statusCode).toBe(422);
-    expect(response.json().code).toBe("ValidationFailed");
+    expect(response.statusCode).toBe(401);
+    expect(response.json().code).toBe("Unauthorized");
   });
 
   it("deletes an expense by id for the owner and returns 204", async () => {
@@ -238,11 +268,11 @@ describe("expenses route", () => {
     expect(after.statusCode).toBe(200);
   });
 
-  it("rejects a delete request without an x-owner-id header with 422", async () => {
+  it("rejects a delete request without an x-owner-id header", async () => {
     const response = await app.inject({ method: "DELETE", url: "/expenses/exp_1" });
 
-    expect(response.statusCode).toBe(422);
-    expect(response.json().code).toBe("ValidationFailed");
+    expect(response.statusCode).toBe(401);
+    expect(response.json().code).toBe("Unauthorized");
   });
 
   it("returns monthly summary buckets for the owner across months", async () => {
@@ -296,11 +326,11 @@ describe("expenses route", () => {
     expect(response.json()).toEqual({ months: [] });
   });
 
-  it("rejects a summary request without an ownerId query parameter with 422", async () => {
+  it("rejects a summary request without an ownerId query parameter", async () => {
     const response = await app.inject({ method: "GET", url: "/expenses/summary" });
 
-    expect(response.statusCode).toBe(422);
-    expect(response.json().code).toBe("ValidationFailed");
+    expect(response.statusCode).toBe(401);
+    expect(response.json().code).toBe("Unauthorized");
   });
 
   async function seedExpense(owner: string, amount: number, occurredAt: string): Promise<void> {

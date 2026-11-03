@@ -153,7 +153,7 @@ describe("movements route", () => {
 
       const response = await app.inject({
         method: "GET",
-        url: "/movements?ownerId=owner-1&type=INCOME&from=2026-08-01&to=2026-08-31&q=venta",
+        url: "/movements?ownerId=owner-1&type=INCOME&month=2026-08&q=venta",
       });
 
       expect(response.statusCode).toBe(200);
@@ -187,14 +187,16 @@ describe("movements route", () => {
     it("rejects invalid filters with 422", async () => {
       const response = await app.inject({
         method: "GET",
-        url: "/movements?ownerId=owner-1&from=not-a-date",
+        url: "/movements?ownerId=owner-1&month=2026-13",
       });
 
       expect(response.statusCode).toBe(422);
       expect(response.json().code).toBe("ValidationFailed");
     });
 
-    it("filters by status=PENDING, returning only planned expenses", async () => {
+    // monthly-dashboard: previstos carry no date, so they cannot belong to a
+    // month and the monthly table is PAID-only.
+    it("never returns planned expenses, and rejects the removed status filter", async () => {
       await seed({
         ownerId: "owner-1",
         amount: 300,
@@ -208,22 +210,27 @@ describe("movements route", () => {
         amount: 2500,
         category: "rent",
         note: "alquiler",
-        occurredAt: "2026-08-15T12:00:00.000Z",
+        occurredAt: "2026-08-10T12:00:00.000Z",
         type: "EXPENSE",
         status: "PENDING",
       });
 
-      const response = await app.inject({
+      const list = await app.inject({
         method: "GET",
-        url: "/movements?ownerId=owner-1&type=EXPENSE&status=PENDING",
+        url: "/movements?ownerId=owner-1&month=2026-08",
       });
-
-      expect(response.statusCode).toBe(200);
-      const movements = response.json();
+      expect(list.statusCode).toBe(200);
+      const movements = list.json() as { status: string; note: string }[];
       expect(movements).toHaveLength(1);
-      expect(movements[0].status).toBe("PENDING");
-      expect(movements[0].amount).toBe(2500);
+      expect(movements[0]?.note).toBe("mercado");
+
+      const rejected = await app.inject({
+        method: "GET",
+        url: "/movements?ownerId=owner-1&status=PENDING",
+      });
+      expect(rejected.statusCode).toBe(422);
     });
+
   });
 
   describe("GET /movements/summary", () => {
@@ -257,7 +264,7 @@ describe("movements route", () => {
     });
 
     it("buckets movements to the Buenos Aires month", async () => {
-      // 2026-08-01T02:59:00Z == 2026-07-31 23:59 in Buenos Aires -> July bucket.
+      // 2026-08-01T02:59:00Z == 2026-07-31 23:59 in Buenos Aires -> July.
       await seed({
         ownerId: "owner-1",
         amount: 777,
@@ -267,18 +274,26 @@ describe("movements route", () => {
         type: "EXPENSE",
       });
 
-      const response = await app.inject({ method: "GET", url: "/movements/summary?ownerId=owner-1" });
+      const july = (
+        await app.inject({
+          method: "GET",
+          url: "/movements/summary?ownerId=owner-1&month=2026-07",
+        })
+      ).json();
+      expect(july.kpis.expenses).toBe(777);
+      expect(july.kpis.count).toBe(1);
 
-      expect(response.statusCode).toBe(200);
-      const summary = response.json();
-      const july = summary.mom.months.find((m: { month: string }) => m.month === "2026-07");
-      const august = summary.mom.months.find((m: { month: string }) => m.month === "2026-08");
-      expect(july).toBeTruthy();
-      expect(july.expenses).toBe(777);
-      expect(august?.expenses ?? 0).toBe(0);
+      const august = (
+        await app.inject({
+          method: "GET",
+          url: "/movements/summary?ownerId=owner-1&month=2026-08",
+        })
+      ).json();
+      expect(august.kpis.expenses).toBe(0);
+      expect(august.kpis.count).toBe(0);
     });
 
-    it("returns zero-filled kpis/daily and empty categories for no data", async () => {
+    it("returns zero-filled kpis and empty categories for no data", async () => {
       const response = await app.inject({ method: "GET", url: "/movements/summary?ownerId=owner-empty" });
 
       expect(response.statusCode).toBe(200);
@@ -288,24 +303,20 @@ describe("movements route", () => {
         expenses: 0,
         balance: 0,
         savings: 0,
+        manualSavings: 0,
         avgPerMonth: 0,
         avgPerMovement: 0,
         maxAmount: 0,
         count: 0,
-        countThisMonth: 0,
       });
-      expect(summary.mom.months).toHaveLength(6);
-      expect(summary.daily).toHaveLength(30);
-      expect(
-        summary.daily.every(
-          (d: { income: number; expenses: number; balance: number }) =>
-            d.income === 0 && d.expenses === 0 && d.balance === 0,
-        ),
-      ).toBe(true);
+      expect(summary.daily).toEqual([]);
       expect(summary.categories).toEqual([]);
+      expect(summary.planned).toEqual({ total: 0, movements: [] });
     });
 
-    it("returns month-over-month income, expenses and balance", async () => {
+    // monthly-dashboard: the month IS the period. One request answers "how was
+    // October", and the daily series is that month's days, not a rolling 30.
+    it("scopes the summary to the requested month", async () => {
       await seed({
         ownerId: "owner-1",
         amount: 100,
@@ -323,19 +334,77 @@ describe("movements route", () => {
         type: "EXPENSE",
       });
 
-      const response = await app.inject({ method: "GET", url: "/movements/summary?ownerId=owner-1" });
+      const june = (
+        await app.inject({
+          method: "GET",
+          url: "/movements/summary?ownerId=owner-1&month=2026-06",
+        })
+      ).json();
+      expect(june.kpis.income).toBe(100);
+      expect(june.kpis.expenses).toBe(0);
+      expect(june.kpis.balance).toBe(100);
+      expect(june.kpis.count).toBe(1);
+      expect(june.daily).toHaveLength(30);
 
-      expect(response.statusCode).toBe(200);
-      const summary = response.json();
-      const june = summary.mom.months.find((m: { month: string }) => m.month === "2026-06");
-      const july = summary.mom.months.find((m: { month: string }) => m.month === "2026-07");
-      expect(june.income).toBe(100);
-      expect(june.balance).toBe(100);
-      expect(july.expenses).toBe(50);
-      expect(july.balance).toBe(-50);
+      const july = (
+        await app.inject({
+          method: "GET",
+          url: "/movements/summary?ownerId=owner-1&month=2026-07",
+        })
+      ).json();
+      expect(july.kpis.income).toBe(0);
+      expect(july.kpis.expenses).toBe(50);
+      expect(july.kpis.balance).toBe(-50);
+      expect(july.daily).toHaveLength(31);
+      expect(july.daily[14]).toEqual({
+        day: "2026-07-15",
+        income: 0,
+        expenses: 50,
+        balance: -50,
+      });
     });
 
-    it("counts current-month movements separately from the all-time total", async () => {
+    it("returns lifetime totals when no month is requested", async () => {
+      await seed({
+        ownerId: "owner-1",
+        amount: 100,
+        currency: "ARS",
+        category: "salary",
+        occurredAt: "2026-06-15T12:00:00.000Z",
+        type: "INCOME",
+      });
+      await seed({
+        ownerId: "owner-1",
+        amount: 50,
+        currency: "ARS",
+        category: "food",
+        occurredAt: "2026-07-15T12:00:00.000Z",
+        type: "EXPENSE",
+      });
+
+      const response = await app.inject({
+        method: "GET",
+        url: "/movements/summary?ownerId=owner-1",
+      });
+
+      const summary = response.json();
+      expect(summary.kpis.income).toBe(100);
+      expect(summary.kpis.expenses).toBe(50);
+      expect(summary.kpis.count).toBe(2);
+      expect(summary.daily).toEqual([]);
+    });
+
+    it("rejects a malformed month with 422", async () => {
+      const response = await app.inject({
+        method: "GET",
+        url: "/movements/summary?ownerId=owner-1&month=2026-13",
+      });
+
+      expect(response.statusCode).toBe(422);
+      expect(response.json().code).toBe("ValidationFailed");
+    });
+
+    it("counts only the requested month's movements", async () => {
       // Relative to now (Buenos Aires) so the test never goes stale.
       const baNow = new Date(Date.now() - BA_OFFSET_MS);
       const thisMonthNoon = new Date(
@@ -362,12 +431,16 @@ describe("movements route", () => {
         type: "EXPENSE",
       });
 
-      const response = await app.inject({ method: "GET", url: "/movements/summary?ownerId=owner-1" });
+      const thisMonthKey = `${baNow.getUTCFullYear()}-${String(baNow.getUTCMonth() + 1).padStart(2, "0")}`;
+      const response = await app.inject({
+        method: "GET",
+        url: `/movements/summary?ownerId=owner-1&month=${thisMonthKey}`,
+      });
 
       expect(response.statusCode).toBe(200);
       const summary = response.json();
-      expect(summary.kpis.count).toBe(2);
-      expect(summary.kpis.countThisMonth).toBe(1);
+      expect(summary.kpis.count).toBe(1);
+      expect(summary.kpis.expenses).toBe(100);
     });
   });
 
@@ -884,16 +957,18 @@ describe("movements route", () => {
         status: "PENDING",
       });
 
-      const response = await app.inject({ method: "GET", url: "/movements/summary?ownerId=owner-1" });
+      const response = await app.inject({
+        method: "GET",
+        url: `/movements/summary?ownerId=owner-1&month=${monthKey}`,
+      });
 
       expect(response.statusCode).toBe(200);
       const summary = response.json();
-      const month = summary.mom.months.find((m: { month: string }) => m.month === monthKey);
-      expect(month).toBeTruthy();
-      expect(month.expenses).toBe(300);
       const day = summary.daily.find((d: { day: string }) => d.day === noon.slice(0, 10));
       expect(day).toBeTruthy();
       expect(day.expenses).toBe(300);
+      // The month totals are the kpis themselves now (no separate month bucket).
+      expect(summary.kpis.expenses).toBe(300);
     });
 
     it("excludes PENDING from the category breakdown", async () => {
@@ -955,7 +1030,7 @@ describe("movements route", () => {
       expect(summary.top.expenses[0].note).toBe("mercado");
     });
 
-    it("keeps the mom SAVINGS column while PENDING is excluded (savings 100, planned 2500)", async () => {
+    it("keeps kpis.savings while PENDING is excluded (savings 100, planned 2500)", async () => {
       const noon = thisMonthNoonIso();
       const monthKey = baMonthKey(baNow());
       await seed({
@@ -976,20 +1051,22 @@ describe("movements route", () => {
         status: "PENDING",
       });
 
-      const response = await app.inject({ method: "GET", url: "/movements/summary?ownerId=owner-1" });
+      const response = await app.inject({
+        method: "GET",
+        url: `/movements/summary?ownerId=owner-1&month=${monthKey}`,
+      });
 
       expect(response.statusCode).toBe(200);
       const summary = response.json();
-      const month = summary.mom.months.find((m: { month: string }) => m.month === monthKey);
-      expect(month).toBeTruthy();
-      expect(month.savings).toBe(100);
-      expect(month.expenses).toBe(0);
-      expect(summary.planned).toEqual({ month: nextBaMonthKey(), total: 2500 });
+      expect(summary.kpis.savings).toBe(100);
+      expect(summary.kpis.expenses).toBe(0);
+      expect(summary.planned.total).toBe(2500);
+      expect(summary.planned.movements).toHaveLength(1);
+      expect(summary.planned.movements[0].note).toBe("alquiler");
     });
 
     it("reports every outstanding PENDING total (previstos have no planned date)", async () => {
       const noon = thisMonthNoonIso();
-      const nextKey = nextBaMonthKey();
       await seed({
         ownerId: "owner-1",
         amount: 2500,
@@ -1013,14 +1090,14 @@ describe("movements route", () => {
 
       expect(response.statusCode).toBe(200);
       const summary = response.json();
-      expect(summary.planned).toEqual({ month: nextKey, total: 4000 });
+      expect(summary.planned.total).toBe(4000);
+      expect(summary.planned.movements).toHaveLength(2);
     });
 
-    it("reports planned even when from/to exclude the row's month (planned ignores filters)", async () => {
+    it("reports planned even when the requested month is another one (planned ignores the month)", async () => {
       const now = baNow();
       const lastKey = baMonthKey(new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 1, 1)));
       const noon = thisMonthNoonIso();
-      const nextKey = nextBaMonthKey();
       await seed({
         ownerId: "owner-1",
         amount: 2500,
@@ -1033,14 +1110,14 @@ describe("movements route", () => {
 
       const response = await app.inject({
         method: "GET",
-        url: `/movements/summary?ownerId=owner-1&from=${lastKey}-01&to=${lastKey}-28`,
+        url: `/movements/summary?ownerId=owner-1&month=${lastKey}`,
       });
 
       expect(response.statusCode).toBe(200);
       const summary = response.json();
-      // The PENDING row lives in the current month, outside the filtered range,
-      // yet planned still reports the outstanding total (filters are ignored).
-      expect(summary.planned).toEqual({ month: nextKey, total: 2500 });
+      // The previsto was loaded in the current month; the requested month is the
+      // previous one, yet planned still reports the outstanding total.
+      expect(summary.planned.total).toBe(2500);
     });
 
     it("reports a zero planned total when no PENDING expense exists", async () => {
@@ -1048,7 +1125,7 @@ describe("movements route", () => {
 
       expect(response.statusCode).toBe(200);
       const summary = response.json();
-      expect(summary.planned).toEqual({ month: nextBaMonthKey(), total: 0 });
+      expect(summary.planned).toEqual({ total: 0, movements: [] });
     });
 
     it("counts any outstanding PENDING regardless of its occurredAt month (no derived date)", async () => {
@@ -1072,7 +1149,7 @@ describe("movements route", () => {
 
       expect(response.statusCode).toBe(200);
       const summary = response.json();
-      expect(summary.planned).toEqual({ month: nextKey, total: 500 });
+      expect(summary.planned.total).toBe(500);
     });
 
     it("includes PENDING rows regardless of created month (previstos carry no date)", async () => {
@@ -1092,10 +1169,10 @@ describe("movements route", () => {
 
       expect(response.statusCode).toBe(200);
       const summary = response.json();
-      expect(summary.planned).toEqual({ month: nextBaMonthKey(), total: 777 });
+      expect(summary.planned.total).toBe(777);
     });
 
-    it("returns PENDING rows in the movement list, newest first, with their status", async () => {
+    it("does not return PENDING rows in the movement list (they have no month)", async () => {
       await seed({
         ownerId: "owner-1",
         amount: 300,
@@ -1114,14 +1191,26 @@ describe("movements route", () => {
         status: "PENDING",
       });
 
-      const response = await app.inject({ method: "GET", url: "/movements?ownerId=owner-1" });
+      const response = await app.inject({
+        method: "GET",
+        url: "/movements?ownerId=owner-1&month=2026-08",
+      });
 
       expect(response.statusCode).toBe(200);
       const movements = response.json();
-      expect(movements).toHaveLength(2);
-      expect(movements[0].status).toBe("PENDING");
-      expect(movements[0].amount).toBe(2500);
-      expect(movements[1].status).toBe("PAID");
+      expect(movements).toHaveLength(1);
+      expect(movements[0].status).toBe("PAID");
+      expect(movements[0].note).toBe("mercado");
+
+      // The previsto is still reachable through the summary's planned block.
+      const summary = (
+        await app.inject({
+          method: "GET",
+          url: "/movements/summary?ownerId=owner-1&month=2026-08",
+        })
+      ).json();
+      expect(summary.planned.total).toBe(2500);
+      expect(summary.planned.movements).toHaveLength(1);
     });
   });
 
@@ -1302,11 +1391,11 @@ describe("movements route", () => {
       });
 
       expect(response.statusCode).toBe(201);
-      const list = await app.inject({ method: "GET", url: "/movements?ownerId=owner-1" });
-      const movements = list.json();
-      expect(movements).toHaveLength(1);
-      expect(movements[0].status).toBe("PENDING");
-      expect(movements[0].amount).toBe(2500);
+      // monthly-dashboard: the monthly table is PAID-only, so the previsto is
+      // observed through the planned block instead of the list.
+      const summary = await app.inject({ method: "GET", url: "/movements/summary?ownerId=owner-1" });
+      expect(summary.json().planned.total).toBe(2500);
+      expect(summary.json().planned.movements[0].status).toBe("PENDING");
     });
 
     it("ignores a visibility key and persists a planned expense as INDIVIDUAL", async () => {
@@ -1329,10 +1418,8 @@ describe("movements route", () => {
       });
 
       expect(response.statusCode).toBe(201);
-      const list = await app.inject({ method: "GET", url: "/movements?ownerId=owner-1" });
-      const movements = list.json();
-      expect(movements).toHaveLength(1);
-      expect(movements[0].visibility).toBe("INDIVIDUAL");
+      const summary = await app.inject({ method: "GET", url: "/movements/summary?ownerId=owner-1" });
+      expect(summary.json().planned.movements[0].visibility).toBe("INDIVIDUAL");
     });
   });
 });

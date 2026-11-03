@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { parseCommand, parseLegacyCategoryCrud, parseSavingsPercentInput, parseSetupBatchCommand, parseSharedContributionInput } from "./telegram.commands";
+import {
+  parseCommand,
+  parseLegacyCategoryCrud,
+  parseManualSavingsPayload,
+  parseSavingsPercentInput,
+  parseSetupBatchCommand,
+  parseSharedContributionInput,
+} from "./telegram.commands";
 
 describe("parseCommand (D12 normalization)", () => {
   it("normalizes a leading slash on the menu command", () => {
@@ -200,6 +207,115 @@ describe("parseSharedContributionInput (D4: es-AR percent-or-amount, 1..99)", ()
     expect(parseSharedContributionInput("quince", 40000)).toBeNull();
     expect(parseSharedContributionInput("-5", 40000)).toBeNull();
     expect(parseSharedContributionInput("", 40000)).toBeNull();
+  });
+});
+
+describe("parseCommand manual savings (D9)", () => {
+  it("parses 'registrar ahorro manual: <monto>' with an amount only", () => {
+    expect(parseCommand("registrar ahorro manual: 500")).toEqual({
+      type: "manual-savings",
+      amount: 500,
+      note: null,
+    });
+  });
+
+  it("parses the amount with an optional note preserving the original spelling", () => {
+    expect(parseCommand("registrar ahorro manual: 500 Fondo Vacaciones")).toEqual({
+      type: "manual-savings",
+      amount: 500,
+      note: "Fondo Vacaciones",
+    });
+    expect(parseCommand("REGISTRAR AHORRO MANUAL: 500 ahorro más para el viaje")).toEqual({
+      type: "manual-savings",
+      amount: 500,
+      note: "ahorro más para el viaje",
+    });
+  });
+
+  it("accepts es-AR dotted and comma thousands in the amount", () => {
+    expect(parseCommand("registrar ahorro manual: 1.500 fondo")).toEqual({
+      type: "manual-savings",
+      amount: 1500,
+      note: "fondo",
+    });
+    expect(parseCommand("registrar ahorro manual: 1,500 fondo")).toEqual({
+      type: "manual-savings",
+      amount: 1500,
+      note: "fondo",
+    });
+  });
+
+  it("normalizes the slash and underscore command form with a payload", () => {
+    expect(parseCommand("/registrar_ahorro_manual: 500 fondo")).toEqual({
+      type: "manual-savings",
+      amount: 500,
+      note: "fondo",
+    });
+  });
+
+  it("returns manual-savings-invalid for a zero amount (nothing is stored)", () => {
+    expect(parseCommand("registrar ahorro manual: 0")).toEqual({ type: "manual-savings-invalid" });
+  });
+
+  it("returns manual-savings-invalid for a non-numeric or empty payload", () => {
+    expect(parseCommand("registrar ahorro manual: abc")).toEqual({ type: "manual-savings-invalid" });
+    expect(parseCommand("registrar ahorro manual:")).toEqual({ type: "manual-savings-invalid" });
+    expect(parseCommand("registrar ahorro manual:   ")).toEqual({ type: "manual-savings-invalid" });
+  });
+
+  it("rejects a non-first-token amount (the amount must lead the payload)", () => {
+    expect(parseCommand("registrar ahorro manual: fondo 500")).toEqual({ type: "manual-savings-invalid" });
+  });
+
+  it("keeps the savings rule a rule: 'registrar ahorro: manual al 10%' is a rule with keyword manual (disjoint)", () => {
+    expect(parseCommand("registrar ahorro: manual al 10%")).toEqual({
+      type: "savings-rule",
+      keyword: "manual",
+      percent: 10,
+    });
+  });
+
+  it("checks the manual command BEFORE the savings-rule regex (order pin)", () => {
+    // "manual" sits between "ahorro" and ":" so the rule regex cannot match;
+    // this is a manual savings ONLY because the manual branch runs first.
+    expect(parseCommand("registrar ahorro manual: 500 al 10%")).toEqual({
+      type: "manual-savings",
+      amount: 500,
+      note: "al 10%",
+    });
+  });
+});
+
+describe("parseManualSavingsPayload (D9 first-token amount)", () => {
+  it("parses an amount-only payload", () => {
+    expect(parseManualSavingsPayload("500")).toEqual({ amount: 500, note: null });
+  });
+
+  it("parses amount + note with normalized inner whitespace", () => {
+    expect(parseManualSavingsPayload("500 fondo vacaciones")).toEqual({ amount: 500, note: "fondo vacaciones" });
+    expect(parseManualSavingsPayload("500   fondo    vacaciones")).toEqual({ amount: 500, note: "fondo vacaciones" });
+  });
+
+  it("accepts dotted and comma thousands (parseNumberToken rules)", () => {
+    expect(parseManualSavingsPayload("1.500 fondo")).toEqual({ amount: 1500, note: "fondo" });
+    expect(parseManualSavingsPayload("1,500 fondo")).toEqual({ amount: 1500, note: "fondo" });
+  });
+
+  it("rejects decimals — uniform with captureParse (D9)", () => {
+    expect(parseManualSavingsPayload("500.50")).toBeNull();
+    expect(parseManualSavingsPayload("500,50")).toBeNull();
+  });
+
+  it("rejects zero, negatives, non-numeric and empty payloads", () => {
+    expect(parseManualSavingsPayload("0")).toBeNull();
+    expect(parseManualSavingsPayload("-5")).toBeNull();
+    expect(parseManualSavingsPayload("abc")).toBeNull();
+    expect(parseManualSavingsPayload("")).toBeNull();
+    expect(parseManualSavingsPayload("   ")).toBeNull();
+  });
+
+  it("rejects a non-first-token amount", () => {
+    expect(parseManualSavingsPayload("fondo 500")).toBeNull();
   });
 });
 

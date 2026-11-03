@@ -17,22 +17,16 @@ const summary: MovementSummary = {
     expenses: 1500,
     balance: 1500,
     savings: 0,
+    manualSavings: 0,
     avgPerMonth: 1500,
     avgPerMovement: 500,
     maxAmount: 1000,
     count: 3,
-    countThisMonth: 1,
-  },
-  mom: {
-    months: [
-      { month: "2026-06", income: 2000, expenses: 1000, balance: 1000, savings: 0 },
-      { month: "2026-07", income: 1000, expenses: 500, balance: 500, savings: 0 },
-    ],
   },
   daily: [{ day: "2026-07-01", income: 100, expenses: 50, balance: 50 }],
   categories: [],
   top: { expenses: [], income: [] },
-  planned: { month: "2026-08", total: 0 },
+  planned: { total: 0, movements: [] },
 };
 
 const fetchMovementSummaryMock = vi.mocked(fetchMovementSummary);
@@ -47,7 +41,7 @@ describe("useMovementSummary", () => {
 
     const statuses: string[] = [];
     const { result } = renderHook(() => {
-      const state = useMovementSummary("default");
+      const state = useMovementSummary("default", "2026-09");
       statuses.push(state.status);
       return state;
     });
@@ -61,7 +55,7 @@ describe("useMovementSummary", () => {
     if (state.status === "success") {
       expect(state.data.kpis.balance).toBe(1500);
     }
-    expect(fetchMovementSummaryMock).toHaveBeenCalledWith("default", "mine");
+    expect(fetchMovementSummaryMock).toHaveBeenCalledWith("default", "2026-09", "mine");
   });
 
   it("refetches the summary when the visibility filter changes", async () => {
@@ -69,18 +63,19 @@ describe("useMovementSummary", () => {
 
     const { result, rerender } = renderHook(
       ({ visibility }: { visibility: VisibilityFilter }) =>
-        useMovementSummary("default", visibility),
+        useMovementSummary("default", "2026-09", visibility),
       { initialProps: { visibility: "all" } },
     );
 
     await waitFor(() => expect(result.current.status).toBe("success"));
-    expect(fetchMovementSummaryMock).toHaveBeenCalledWith("default", "all");
+    expect(fetchMovementSummaryMock).toHaveBeenCalledWith("default", "2026-09", "all");
 
     rerender({ visibility: "shared" });
 
     await waitFor(() =>
       expect(fetchMovementSummaryMock).toHaveBeenCalledWith(
         "default",
+        "2026-09",
         "shared",
       ),
     );
@@ -92,7 +87,7 @@ describe("useMovementSummary", () => {
   it("reports the ApiError when the request fails", async () => {
     fetchMovementSummaryMock.mockRejectedValue(new ApiError("network"));
 
-    const { result } = renderHook(() => useMovementSummary("default"));
+    const { result } = renderHook(() => useMovementSummary("default", "2026-09"));
 
     await waitFor(() => expect(result.current.status).toBe("error"));
 
@@ -108,7 +103,7 @@ describe("useMovementSummary", () => {
       .mockRejectedValueOnce(new ApiError("network"))
       .mockResolvedValueOnce(summary);
 
-    const { result } = renderHook(() => useMovementSummary("default"));
+    const { result } = renderHook(() => useMovementSummary("default", "2026-09"));
 
     await waitFor(() => expect(result.current.status).toBe("error"));
     expect(fetchMovementSummaryMock).toHaveBeenCalledTimes(1);
@@ -125,7 +120,7 @@ describe("useMovementSummary", () => {
     fetchMovementSummaryMock.mockResolvedValue(summary);
 
     const { result, rerender } = renderHook(
-      ({ token }) => useMovementSummary("default", "all", token),
+      ({ token }) => useMovementSummary("default", "2026-09", "all", token),
       { initialProps: { token: 0 } },
     );
 

@@ -287,14 +287,13 @@ describe("movement visibility model", () => {
       expect(own?.registrantId).toBe("rita");
     });
 
-    it("scopes every summary feed (kpis/months/daily/categories/top) by the viewer predicate", async () => {
+    it("scopes every summary feed (kpis/daily/categories/top) by the viewer predicate", async () => {
       await seedHousehold();
 
-      const [kpisMine, kpisAll, monthsAll, dailyAll, categoriesAll, topAll] = await Promise.all([
+      const [kpisMine, kpisAll, dailyAll, categoriesAll, topAll] = await Promise.all([
         repository.summaryKpis(rita, { from: undefined, to: undefined }),
         repository.summaryKpis(ritaAll, { from: undefined, to: undefined }),
-        repository.summaryMonths(ritaAll),
-        repository.summaryDaily(ritaAll),
+        repository.summaryDaily(ritaAll, { from: undefined, to: undefined }),
         repository.summaryCategories(ritaAll, { from: undefined, to: undefined }),
         repository.topByType(ritaAll, "EXPENSE", 10, { from: undefined, to: undefined }),
       ]);
@@ -307,9 +306,7 @@ describe("movement visibility model", () => {
       expect(kpisAll.count).toBe(3);
       expect(kpisAll.expenses).not.toBe(RITA_MINE + RITA_SHARED + EDGARDO_MINE + EDGARDO_SHARED);
 
-      // months and daily buckets: same scoped totals
-      const monthBucket = monthsAll.find((bucket) => bucket.expenses > 0);
-      expect(monthBucket?.expenses).toBe(RITA_MINE + RITA_SHARED + EDGARDO_SHARED);
+      // daily buckets: same scoped totals
       const dayBucket = dailyAll.find((bucket) => bucket.expenses > 0);
       expect(dayBucket?.expenses).toBe(RITA_MINE + RITA_SHARED + EDGARDO_SHARED);
 
@@ -325,6 +322,29 @@ describe("movement visibility model", () => {
       // top: same scoped set, ordered by amount desc
       const topNotes = topAll.map((movement) => movement.note).sort();
       expect(topNotes).toEqual(["edgardo shared", "rita individual", "rita shared"]);
+    });
+
+    // manual-savings (D2/AD3): summaryManualSavings composes the same viewer
+    // predicate — the partner's INDIVIDUAL MANUAL rows never count, AUTO_SPLIT
+    // and legacy NULL-origin rows never count, and each viewer only sees their
+    // own rows plus the partner's SHARED ones.
+    it("scopes summaryManualSavings by the viewer predicate (partner INDIVIDUAL MANUAL excluded)", async () => {
+      await prisma.expense.createMany({
+        data: [
+          { ownerId: "rita", amount: 50, currency: "ARS", note: "rita ind manual", occurredAt: now, type: "SAVINGS", visibility: "INDIVIDUAL", savingsOrigin: "MANUAL" },
+          { ownerId: "rita", amount: 10, currency: "ARS", note: "rita shared manual", occurredAt: now, type: "SAVINGS", visibility: "SHARED", savingsOrigin: "MANUAL" },
+          { ownerId: "edgardo", amount: 20, currency: "ARS", note: "edgardo shared manual", occurredAt: now, type: "SAVINGS", visibility: "SHARED", savingsOrigin: "MANUAL" },
+          { ownerId: "edgardo", amount: 30, currency: "ARS", note: "edgardo ind manual", occurredAt: now, type: "SAVINGS", visibility: "INDIVIDUAL", savingsOrigin: "MANUAL" },
+          { ownerId: "rita", amount: 999, currency: "ARS", note: "auto split", occurredAt: now, type: "SAVINGS", visibility: "INDIVIDUAL", savingsOrigin: "AUTO_SPLIT" },
+          { ownerId: "rita", amount: 888, currency: "ARS", note: "legacy null", occurredAt: now, type: "SAVINGS", visibility: "INDIVIDUAL" },
+        ],
+      });
+
+      await expect(repository.summaryManualSavings(ritaAll, { from: undefined, to: undefined })).resolves.toBe(80);
+      await expect(repository.summaryManualSavings(rita, { from: undefined, to: undefined })).resolves.toBe(60);
+      await expect(repository.summaryManualSavings(edgardo, { from: undefined, to: undefined })).resolves.toBe(50);
+      await expect(repository.summaryManualSavings(ritaShared, { from: undefined, to: undefined })).resolves.toBe(30);
+      await expect(repository.summaryManualSavings(edgardoAll, { from: undefined, to: undefined })).resolves.toBe(60);
     });
   });
 });

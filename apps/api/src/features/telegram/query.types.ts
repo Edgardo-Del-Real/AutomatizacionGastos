@@ -41,10 +41,9 @@ export type SavingsQueryResult = {
   savings: number;
 };
 
-/** D6/D7 — next-month planned total from `summary.planned` (PENDING EXPENSE only). */
+/** monthly-dashboard — previstos carry no date, so the result has no month. */
 export type PlannedQueryResult = {
   query_type: "planned";
-  month: string;
   total: number;
 };
 

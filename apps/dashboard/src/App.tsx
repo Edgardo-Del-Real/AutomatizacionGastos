@@ -2,16 +2,19 @@ import { useCallback, useState } from "react";
 
 import type { VisibilityFilter } from "@rita/contracts";
 
+import { LoginForm } from "./features/auth/LoginForm";
+import { useSession } from "./features/auth/useSession";
 import { ViewerProvider, useViewer } from "./features/household/ViewerContext";
-import { ViewerSelector } from "./features/household/ViewerSelector";
 import { BalanceTrendChart } from "./features/movements/BalanceTrendChart";
 import { CategoryCards } from "./features/movements/CategoryCards";
 import { CategoryPieChart } from "./features/movements/CategoryPieChart";
 import { KpiCards } from "./features/movements/KpiCards";
+import { MonthSelector } from "./features/movements/MonthSelector";
 import { MovementList } from "./features/movements/MovementList";
 import { PlannedSection } from "./features/movements/PlannedSection";
 import { SummarySection } from "./features/movements/SummarySection";
 import { useMovementSummary } from "./features/movements/useMovementSummary";
+import { useSelectedMonth } from "./features/movements/useSelectedMonth";
 
 type DashboardSection = "kpis" | "charts" | "movements";
 
@@ -26,7 +29,7 @@ const NAV_BUTTON_CLASS =
 const NAV_ACTIVE_CLASS = "border-accent/20 bg-accent-soft text-accent";
 const NAV_IDLE_CLASS = "text-ink-soft hover:bg-surface-raised hover:text-ink";
 
-function Dashboard() {
+function Dashboard({ onLogout }: { onLogout: () => void }) {
   const { viewerId } = useViewer();
   // Single App-level refresh token (D11): bumping it re-fetches both the
   // movement list and the summary in place after any successful mutation.
@@ -39,7 +42,10 @@ function Dashboard() {
 
   const [activeSection, setActiveSection] =
     useState<DashboardSection>("kpis");
-  const summaryState = useMovementSummary(viewerId, visibility, refreshKey);
+  // monthly-dashboard: ONE month for the whole dashboard, backed by the URL so
+  // it survives a reload and a shared link. Every section reads it from here.
+  const { month, setMonth } = useSelectedMonth();
+  const summaryState = useMovementSummary(viewerId, month, visibility, refreshKey);
 
   const changeSection = useCallback((next: DashboardSection) => {
     setActiveSection(next);
@@ -79,7 +85,14 @@ function Dashboard() {
                 </p>
               </div>
             </div>
-            <ViewerSelector />
+            <MonthSelector month={month} onChange={setMonth} />
+            <button
+              type="button"
+              onClick={onLogout}
+              className="rounded-control border border-border bg-surface px-3 py-1.5 text-sm font-semibold text-ink-soft transition-colors hover:bg-surface-raised hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-soft"
+            >
+              Salir
+            </button>
             <nav
               aria-label="Secciones del dashboard"
               className="flex flex-wrap items-center gap-1.5"
@@ -119,7 +132,7 @@ function Dashboard() {
                 Una vista simple de lo que entra, lo que sale y lo que estás construyendo.
               </p>
             </div>
-            <SummarySection state={summaryState}>
+            <SummarySection state={summaryState} month={month}>
               {(data) => (
                 <>
                   <KpiCards kpis={data.kpis} />
@@ -144,7 +157,7 @@ function Dashboard() {
           </div>
         )}
         {activeSection === "charts" && (
-          <SummarySection state={summaryState}>
+          <SummarySection state={summaryState} month={month}>
             {(data) => (
               <div className="space-y-6">
                 <CategoryPieChart kpis={data.kpis} categories={data.categories} />
@@ -155,6 +168,7 @@ function Dashboard() {
         )}
         {activeSection === "movements" && (
           <MovementList
+            month={month}
             refreshToken={refreshKey}
             onMutated={bumpRefresh}
             visibility={visibility}
@@ -167,9 +181,50 @@ function Dashboard() {
 }
 
 export default function App() {
+  const session = useSession();
+
+  if (session.state.status === "loading") {
+    return (
+      <main className="flex min-h-screen items-center justify-center bg-canvas px-4 text-ink antialiased">
+        <p role="status" className="text-sm text-ink-soft">
+          Cargando…
+        </p>
+      </main>
+    );
+  }
+
+  if (session.state.status === "error") {
+    return (
+      <main className="flex min-h-screen items-center justify-center bg-canvas px-4 text-ink antialiased">
+        <div className="w-full max-w-sm rounded-card border border-border bg-surface p-6 text-center shadow-card">
+          <p role="alert" className="text-sm font-medium text-danger">
+            No se pudo conectar con el servidor.
+          </p>
+          <button
+            type="button"
+            onClick={session.retry}
+            className="mt-4 inline-flex items-center rounded-control bg-accent px-4 py-2 text-sm font-semibold text-on-accent transition-colors hover:bg-accent-strong focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-soft"
+          >
+            Reintentar
+          </button>
+        </div>
+      </main>
+    );
+  }
+
+  if (session.state.status === "anonymous") {
+    return (
+      <LoginForm
+        onLogin={session.login}
+        error={session.error}
+        busy={session.busy}
+      />
+    );
+  }
+
   return (
-    <ViewerProvider>
-      <Dashboard />
+    <ViewerProvider ownerId={session.state.ownerId}>
+      <Dashboard onLogout={session.logout} />
     </ViewerProvider>
   );
 }

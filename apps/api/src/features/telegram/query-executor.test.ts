@@ -1,11 +1,38 @@
 import { describe, expect, it, vi } from "vitest";
 import type { CategoryService } from "../categories/categories.service";
+import { currentBaMonth } from "../movements/ba-month";
 import type { MovementService } from "../movements/movements.service";
 import type { ViewerScope } from "../movements/movements.types";
 import { deriveQueryType, QueryExecutor } from "./query-executor";
 
 const ownerId = "default";
 const scope: ViewerScope = { viewerId: ownerId, partnerId: "edgardo", visibility: "all" };
+
+function summaryFixture(
+  overrides: {
+    kpis?: Partial<Awaited<ReturnType<MovementService["getSummary"]>>["kpis"]>;
+    planned?: Awaited<ReturnType<MovementService["getSummary"]>>["planned"];
+  } = {},
+): Awaited<ReturnType<MovementService["getSummary"]>> {
+  return {
+    kpis: {
+      income: 0,
+      expenses: 0,
+      balance: 0,
+      savings: 0,
+      manualSavings: 0,
+      avgPerMonth: 0,
+      avgPerMovement: 0,
+      maxAmount: 0,
+      count: 0,
+      ...overrides.kpis,
+    },
+    daily: [],
+    categories: [],
+    top: { expenses: [], income: [] },
+    planned: overrides.planned ?? { total: 0, movements: [] },
+  };
+}
 
 function makeHarness() {
   const movementService = {
@@ -107,29 +134,17 @@ describe("QueryExecutor.execute", () => {
     });
   });
 
-  it("returns the all-time balance from the summary kpis", async () => {
+  it("returns the lifetime balance without a month argument", async () => {
     const { executor, mockGetSummary } = makeHarness();
-    mockGetSummary.mockResolvedValue({
-      kpis: {
-        income: 5000,
-        expenses: 2000,
-        balance: 3000,
-        savings: 0,
-        avgPerMonth: 1500,
-        avgPerMovement: 500,
-        maxAmount: 2000,
-        count: 7,
-        countThisMonth: 2,
-      },
-      mom: { months: [{ month: "2026-09", income: 1000, expenses: 500, balance: 500, savings: 0 }] },
-      daily: [],
-      categories: [],
-      top: { expenses: [], income: [] },
-      planned: { month: "2026-09", total: 0 },
-    });
+    mockGetSummary.mockResolvedValue(
+      summaryFixture({
+        kpis: { income: 5000, expenses: 2000, balance: 3000, count: 7 },
+      }),
+    );
 
     const result = await executor.execute(scope, "balance");
 
+    // "cuánto tengo" is a lifetime question: no month is passed.
     expect(mockGetSummary).toHaveBeenCalledWith(scope);
     expect(result).toEqual({
       query_type: "balance",
@@ -139,167 +154,73 @@ describe("QueryExecutor.execute", () => {
     });
   });
 
-  it("returns the current-month totals and movement count from the summary", async () => {
+  it("asks for the current Buenos Aires month and reports its totals", async () => {
     const { executor, mockGetSummary } = makeHarness();
-    mockGetSummary.mockResolvedValue({
-      kpis: {
-        income: 5000,
-        expenses: 2000,
-        balance: 3000,
-        savings: 0,
-        avgPerMonth: 1500,
-        avgPerMovement: 500,
-        maxAmount: 2000,
-        count: 7,
-        countThisMonth: 3,
-      },
-      mom: {
-        months: [
-          { month: "2026-08", income: 1500, expenses: 800, balance: 700, savings: 0 },
-          { month: "2026-09", income: 2500, expenses: 1200, balance: 1300, savings: 0 },
-        ],
-      },
-      daily: [],
-      categories: [],
-      top: { expenses: [], income: [] },
-      planned: { month: "2026-09", total: 0 },
-    });
+    mockGetSummary.mockResolvedValue(
+      summaryFixture({
+        // With a month-scoped summary the kpis ARE that month's numbers; the
+        // old mom-bucket lookup is gone.
+        kpis: { income: 2500, expenses: 1200, count: 3 },
+      }),
+    );
 
     const result = await executor.execute(scope, "month");
 
-    expect(mockGetSummary).toHaveBeenCalledWith(scope);
+    expect(mockGetSummary).toHaveBeenCalledWith(scope, currentBaMonth());
     expect(result).toEqual({
       query_type: "month",
-      month: "2026-09",
+      month: currentBaMonth(),
       monthIncome: 2500,
       monthExpenses: 1200,
       monthCount: 3,
     });
   });
 
-  it("defaults the month bucket to zeros when the summary has no current-month bucket", async () => {
+  it("reports zeros for a month without movements", async () => {
     const { executor, mockGetSummary } = makeHarness();
-    mockGetSummary.mockResolvedValue({
-      kpis: {
-        income: 0,
-        expenses: 0,
-        balance: 0,
-        savings: 0,
-        avgPerMonth: 0,
-        avgPerMovement: 0,
-        maxAmount: 0,
-        count: 0,
-        countThisMonth: 0,
-      },
-      mom: { months: [] },
-      daily: [],
-      categories: [],
-      top: { expenses: [], income: [] },
-      planned: { month: "2026-09", total: 0 },
-    });
+    mockGetSummary.mockResolvedValue(summaryFixture());
 
     const result = await executor.execute(scope, "month");
 
     expect(result).toEqual({
       query_type: "month",
-      month: "",
+      month: currentBaMonth(),
       monthIncome: 0,
       monthExpenses: 0,
       monthCount: 0,
     });
   });
 
-  it("answers the month-savings query from the current-month kpis.savings and the last month bucket", async () => {
+  it("answers the savings query from the current-month kpis.savings", async () => {
     const { executor, mockGetSummary } = makeHarness();
-    mockGetSummary.mockResolvedValue({
-      kpis: {
-        income: 0,
-        expenses: 0,
-        balance: 0,
-        savings: 150,
-        avgPerMonth: 0,
-        avgPerMovement: 0,
-        maxAmount: 0,
-        count: 0,
-        countThisMonth: 0,
-      },
-      mom: {
-        months: [
-          { month: "2026-08", income: 0, expenses: 0, balance: 0, savings: 200 },
-          { month: "2026-09", income: 0, expenses: 0, balance: 0, savings: 150 },
-        ],
-      },
-      daily: [],
-      categories: [],
-      top: { expenses: [], income: [] },
-      planned: { month: "2026-09", total: 0 },
-    });
+    mockGetSummary.mockResolvedValue(summaryFixture({ kpis: { savings: 150 } }));
 
     const result = await executor.execute(scope, "savings");
 
-    expect(mockGetSummary).toHaveBeenCalledWith(scope);
+    expect(mockGetSummary).toHaveBeenCalledWith(scope, currentBaMonth());
     expect(result).toEqual({
       query_type: "savings",
-      month: "2026-09",
+      month: currentBaMonth(),
       savings: 150,
     });
   });
 
-  it("answers the planned query from the summary planned block (real data)", async () => {
+  it("answers the planned query with the outstanding total and no month", async () => {
     const { executor, mockGetSummary } = makeHarness();
-    mockGetSummary.mockResolvedValue({
-      kpis: {
-        income: 0,
-        expenses: 0,
-        balance: 0,
-        savings: 0,
-        avgPerMonth: 0,
-        avgPerMovement: 0,
-        maxAmount: 0,
-        count: 0,
-        countThisMonth: 0,
-      },
-      mom: { months: [] },
-      daily: [],
-      categories: [],
-      top: { expenses: [], income: [] },
-      planned: { month: "2026-10", total: 4000 },
-    });
+    mockGetSummary.mockResolvedValue(summaryFixture({ planned: { total: 4000, movements: [] } }));
 
     const result = await executor.execute(scope, "planned");
 
-    expect(mockGetSummary).toHaveBeenCalledWith(scope);
-    expect(result).toEqual({
-      query_type: "planned",
-      month: "2026-10",
-      total: 4000,
-    });
+    expect(result).toEqual({ query_type: "planned", total: 4000 });
   });
 
-  it("answers zero for the planned query when no PENDING expense targets next month", async () => {
+  it("answers zero for the planned query when nothing is pending", async () => {
     const { executor, mockGetSummary } = makeHarness();
-    mockGetSummary.mockResolvedValue({
-      kpis: {
-        income: 0,
-        expenses: 0,
-        balance: 0,
-        savings: 0,
-        avgPerMonth: 0,
-        avgPerMovement: 0,
-        maxAmount: 0,
-        count: 0,
-        countThisMonth: 0,
-      },
-      mom: { months: [] },
-      daily: [],
-      categories: [],
-      top: { expenses: [], income: [] },
-      planned: { month: "2026-10", total: 0 },
-    });
+    mockGetSummary.mockResolvedValue(summaryFixture({ planned: { total: 0, movements: [] } }));
 
     const result = await executor.execute(scope, "planned");
 
-    expect(result).toEqual({ query_type: "planned", month: "2026-10", total: 0 });
+    expect(result).toEqual({ query_type: "planned", total: 0 });
   });
 
   it("omits PENDING movements from the recent list", async () => {

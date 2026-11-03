@@ -3,8 +3,10 @@ import {
   expenseSchema,
   householdMembersSchema,
   listMovementsSchema,
+  loginSchema,
   movementSchema,
   movementSummarySchema,
+  sessionSchema,
 } from "@rita/contracts";
 import type {
   Expense,
@@ -12,6 +14,7 @@ import type {
   Movement,
   MovementSummary,
   OwnerCategory,
+  Session,
   VisibilityFilter,
 } from "@rita/contracts";
 import { z } from "zod";
@@ -50,9 +53,8 @@ export class ApiError extends Error {
 /** Client-side movement list filters, mapped onto `/movements` query params. */
 export type MovementListFilters = {
   type?: "EXPENSE" | "INCOME" | "SAVINGS";
-  status?: "PAID" | "PENDING";
-  from?: string;
-  to?: string;
+  /** monthly-dashboard: the selected month; the API owns the day range. */
+  month?: string;
   category?: string;
   q?: string;
   /** Visibility select state; `undefined` means the default `all`. */
@@ -166,11 +168,14 @@ export function fetchHouseholdMembers(): Promise<HouseholdMember[]> {
 
 export function fetchMovementSummary(
   ownerId: string,
+  month?: string,
   visibility: VisibilityFilter = "mine",
 ): Promise<MovementSummary> {
+  const params: Record<string, string> = { ownerId, visibility };
+  if (month !== undefined) params.month = month;
   return request(
     "GET",
-    `/api/movements/summary?${new URLSearchParams({ ownerId, visibility })}`,
+    `/api/movements/summary?${new URLSearchParams(params)}`,
     undefined,
     {},
     movementSummarySchema,
@@ -184,11 +189,9 @@ export function fetchMovements(
 ): Promise<Movement[]> {
   const params: Record<string, string> = {};
   if (filters.type) params.type = filters.type;
-  if (filters.from) params.from = filters.from;
-  if (filters.to) params.to = filters.to;
+  if (filters.month) params.month = filters.month;
   if (filters.category) params.category = filters.category;
   if (filters.q) params.q = filters.q;
-  if (filters.status) params.status = filters.status;
   return request(
     "GET",
     `/api/movements?${new URLSearchParams({ ownerId, ...params, visibility })}`,
@@ -268,4 +271,28 @@ export function markMovementPaid(
     { "x-owner-id": ownerId },
     movementSchema,
   );
+}
+// --------------------------------------------------------------- online-access
+
+/**
+ * The session is an httpOnly cookie, so the client never sees a token: it just
+ * asks who it is. `null` means "no session" and is not an error.
+ */
+export async function fetchSession(): Promise<Session | null> {
+  const response = await fetch("/api/auth/session", { credentials: "include" });
+  if (response.status === 401) return null;
+  if (!response.ok) throw new ApiError("http", { status: response.status });
+  const json = await response.json();
+  const parsed = sessionSchema.safeParse(json);
+  if (!parsed.success) throw new ApiError("validation", { issues: parsed.error.issues });
+  return parsed.data;
+}
+
+/** Throws ApiError("http", { status: 401 }) on bad credentials. */
+export async function login(ownerId: string, password: string): Promise<Session> {
+  return request("POST", "/api/auth/login", loginSchema.parse({ ownerId, password }), {}, sessionSchema);
+}
+
+export async function logout(): Promise<void> {
+  return request("POST", "/api/auth/logout", undefined, {});
 }

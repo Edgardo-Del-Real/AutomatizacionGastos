@@ -92,6 +92,10 @@ export class PrismaExpenseRepository implements ExpenseRepository {
         // shared-expense-split: absent sharedTotal persists the NULL legacy
         // shape (the split rows carry it via createSharedSplit).
         ...(data.sharedTotal === undefined ? {} : { sharedTotal: new Prisma.Decimal(data.sharedTotal) }),
+        // manual-savings: absent savingsOrigin persists the NULL legacy shape
+        // (AUTO_SPLIT rows are stamped by createIncomeWithSavings; MANUAL
+        // rows by the SAVINGS create branch in the service, slice PR2).
+        ...(data.savingsOrigin === undefined ? {} : { savingsOrigin: data.savingsOrigin }),
       },
     });
     return mapExpenseRow(row);
@@ -189,6 +193,10 @@ export class PrismaExpenseRepository implements ExpenseRepository {
               occurredAt: data.occurredAt,
               type: "SAVINGS",
               visibility: data.visibility,
+              // manual-savings (D1): the split transaction is the ONLY producer
+              // of AUTO_SPLIT rows; the net INCOME above stays origin-less and
+              // legacy savings rows keep NULL (inert).
+              savingsOrigin: "AUTO_SPLIT",
             },
           }),
         );

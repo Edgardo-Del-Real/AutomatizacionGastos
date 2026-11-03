@@ -10,11 +10,11 @@ const kpis: MovementSummary["kpis"] = {
   expenses: 1500,
   balance: 1500,
   savings: 150,
+  manualSavings: 0,
   avgPerMonth: 750,
   avgPerMovement: 500,
   maxAmount: 1200,
   count: 6,
-  countThisMonth: 2,
 };
 
 describe("KpiCards", () => {
@@ -28,7 +28,7 @@ describe("KpiCards", () => {
     expect(screen.getByText("Gastos")).toBeInTheDocument();
     expect(screen.getByText("Disponible")).toBeInTheDocument();
     expect(screen.getByText("Ahorro")).toBeInTheDocument();
-    expect(screen.getByText("Movimientos del mes")).toBeInTheDocument();
+    expect(screen.getByText("Movimientos")).toBeInTheDocument();
 
     await waitFor(() =>
       expect(screen.getByText("$ 3.000,00")).toBeInTheDocument(),

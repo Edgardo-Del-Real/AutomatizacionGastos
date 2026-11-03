@@ -4,6 +4,7 @@ import type { ReactElement } from "react";
 import type { Movement, MovementType, VisibilityFilter } from "@rita/contracts";
 
 import { formatARS } from "../../infra/currency";
+import { monthLabel } from "../../infra/month";
 import type { MovementListFilters } from "../../infra/api";
 import { useViewer } from "../household/ViewerContext";
 import { ConfirmDialog } from "./ConfirmDialog";
@@ -29,10 +30,6 @@ const ACTION_CLASS =
 
 const BADGE_CLASS =
   "inline-flex items-center rounded-full bg-accent-soft px-2 py-0.5 text-xs font-medium text-accent";
-
-/** "Previsto" badge: a PENDING expense that does not count in the KPIs yet. */
-const PENDING_BADGE_CLASS =
-  "inline-flex items-center rounded-full bg-expense-soft px-2 py-0.5 text-xs font-medium text-expense";
 
 function currencyIcon(currency: string): { icon: string; label: string } {
   if (currency === "ARS") return { icon: "🇦🇷", label: "Pesos argentinos (ARS)" };
@@ -85,6 +82,8 @@ export function MovementAmount({
 }
 
 type MovementListProps = {
+  /** Selected month (`YYYY-MM`); the list is always month-scoped. */
+  month: string;
   refreshToken?: number;
   onMutated?: () => void;
   /** Hoisted visibility filter (drives list AND summary); default mine. */
@@ -94,6 +93,7 @@ type MovementListProps = {
 };
 
 export function MovementList({
+  month,
   refreshToken,
   onMutated,
   visibility,
@@ -101,6 +101,13 @@ export function MovementList({
 }: MovementListProps) {
   const { viewerId, members } = useViewer();
   const [filters, setFilters] = useState<MovementListFilters>({});
+  // The month is not a user filter: it always comes from the selector, so the
+  // empty state can tell "this month is empty" from "your filters matched
+  // nothing this month".
+  const hasActiveFilters =
+    filters.type !== undefined ||
+    filters.category !== undefined ||
+    filters.q !== undefined;
   // Uncontrolled fallback: when the App does not hoist the filter (standalone
   // usage) the list manages its own visibility, defaulting to mine.
   const [internalVisibility, setInternalVisibility] =
@@ -108,11 +115,13 @@ export function MovementList({
   const effectiveVisibility = visibility ?? internalVisibility;
   const state = useMovements(
     viewerId,
-    filters,
+    // monthly-dashboard: the selected month is not a user filter — it always
+    // wins over the local filter state.
+    { ...filters, month },
     effectiveVisibility,
     refreshToken,
   );
-  const { removeMovement, markPaid, deleteError, markPaidError, busy } =
+  const { removeMovement, deleteError, busy } =
     useMovementMutations(onMutated);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [confirmingId, setConfirmingId] = useState<string | null>(null);
@@ -174,19 +183,6 @@ export function MovementList({
               aria-label="Acciones del movimiento"
               className="absolute right-0 top-full z-20 mt-2 flex min-w-44 flex-col gap-1 rounded-control border border-border bg-surface p-1.5 shadow-card"
             >
-              {movement.status === "PENDING" ? (
-                <button
-                  type="button"
-                  onClick={() => {
-                    closeActions();
-                    void markPaid(movement.id);
-                  }}
-                  disabled={busy === "markPaid"}
-                  className="flex items-center gap-2 rounded-control px-3 py-2 text-left text-sm text-ink hover:bg-surface-raised"
-                >
-                  <span aria-hidden="true">✅</span> Marcar pagado
-                </button>
-              ) : null}
               <button
                 type="button"
                 onClick={() => {
@@ -248,7 +244,9 @@ export function MovementList({
           <div className="border-t border-dashed border-border p-10 text-center">
             <h2 className="text-base font-semibold text-ink">Movimientos</h2>
             <p className="mt-2 text-sm text-ink-soft">
-              No hay movimientos que coincidan con los filtros.
+              {hasActiveFilters
+                ? `No hay movimientos que coincidan con los filtros en ${monthLabel(month)}.`
+                : `No hay movimientos en ${monthLabel(month)}.`}
             </p>
           </div>
         </section>
@@ -275,16 +273,6 @@ export function MovementList({
           </p>
         </div>
         <MovementFilters value={{ ...filters, visibility: effectiveVisibility }} onChange={handleFiltersChange} />
-        {markPaidError ? (
-          <p
-            role="alert"
-            className="border-t border-border px-4 py-3 text-sm font-medium text-danger sm:px-6"
-          >
-            {markPaidError.status === 409
-              ? "El movimiento ya no está pendiente."
-              : "No se pudo marcar como pagado."}
-          </p>
-        ) : null}
         {false && (
         <div className="space-y-3 p-4">
           {visible.map((movement) =>
@@ -314,9 +302,6 @@ export function MovementList({
                       <span className={TYPE_BADGE_CLASS[movement.type]}>
                         {TYPE_LABELS[movement.type]}
                       </span>
-                      {movement.status === "PENDING" ? (
-                        <span className={PENDING_BADGE_CLASS}>Previsto</span>
-                      ) : null}
                     </div>
                   </div>
                   <p
@@ -409,17 +394,12 @@ export function MovementList({
                       className="transition-colors even:bg-white/[0.02] hover:bg-white/5"
                     >
                       <td className="px-2 py-3 whitespace-nowrap tabular-nums sm:px-3">
-                        {movement.status === "PENDING" ? "—" : formatMovementDate(movement.occurredAt)}
+                        {formatMovementDate(movement.occurredAt)}
                       </td>
                       <td className="px-2 py-3 whitespace-nowrap sm:px-3">
                         <span className={TYPE_BADGE_CLASS[movement.type]}>
                           {TYPE_LABELS[movement.type]}
                         </span>
-                        {movement.status === "PENDING" ? (
-                          <span className={`${PENDING_BADGE_CLASS} ml-2`}>
-                            Previsto
-                          </span>
-                        ) : null}
                       </td>
                       <td
                         className={`px-2 py-3 text-right whitespace-nowrap sm:px-3 ${

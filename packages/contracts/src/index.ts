@@ -49,6 +49,10 @@ export const movementStatusSchema = z.enum(["PAID", "PENDING"]);
 
 export type MovementStatus = z.infer<typeof movementStatusSchema>;
 
+export const movementSavingsOriginSchema = z.enum(["AUTO_SPLIT", "MANUAL"]);
+
+export type MovementSavingsOrigin = z.infer<typeof movementSavingsOriginSchema>;
+
 export const movementVisibilitySchema = z.enum(["INDIVIDUAL", "SHARED"]);
 
 export type MovementVisibility = z.infer<typeof movementVisibilitySchema>;
@@ -56,6 +60,15 @@ export type MovementVisibility = z.infer<typeof movementVisibilitySchema>;
 export const visibilityFilterSchema = z.enum(["mine", "shared", "all"]);
 
 export type VisibilityFilter = z.infer<typeof visibilityFilterSchema>;
+
+/**
+ * monthly-dashboard: the single period key on the wire (`YYYY-MM`). Every
+ * period-scoped read expresses its window this way so calendar math never
+ * leaves the API.
+ */
+export const monthKeySchema = z.string().regex(/^\d{4}-(0[1-9]|1[0-2])$/);
+
+export type MonthKey = z.infer<typeof monthKeySchema>;
 
 export const movementSchema = expenseSchema.extend({
   type: movementTypeSchema,
@@ -70,6 +83,10 @@ export const movementSchema = expenseSchema.extend({
   // present on a split SHARED row; legacy rows keep parsing without it and a
   // NULL sharedTotal behaves exactly as before.
   sharedTotal: z.number().nullable().optional(),
+  // manual-savings (D1): savingsOrigin is carried when present on a SAVINGS
+  // row; legacy rows keep parsing without it and a NULL origin behaves exactly
+  // as before. Present values are restricted to the MovementSavingsOrigin enum.
+  savingsOrigin: movementSavingsOriginSchema.nullable().optional(),
 });
 
 export type Movement = z.infer<typeof movementSchema>;
@@ -78,16 +95,19 @@ export const listMovementsSchema = z.array(movementSchema);
 
 export type ListMovements = z.infer<typeof listMovementsSchema>;
 
-export const movementFiltersSchema = z.object({
-  ownerId: z.string().min(1),
-  type: movementTypeSchema.optional(),
-  status: movementStatusSchema.optional(),
-  from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
-  to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
-  category: z.string().min(1).optional(),
-  q: z.string().min(1).optional(),
-  visibility: visibilityFilterSchema.optional(),
-});
+export const movementFiltersSchema = z
+  .object({
+    ownerId: z.string().min(1),
+    type: movementTypeSchema.optional(),
+    // monthly-dashboard: the ONE period concept on the wire. A free from/to
+    // pair used to live here; it silently meant "all time" when omitted, which
+    // is exactly the bug this replaces. Strict, so a stale client fails loudly.
+    month: monthKeySchema.optional(),
+    category: z.string().min(1).optional(),
+    q: z.string().min(1).optional(),
+    visibility: visibilityFilterSchema.optional(),
+  })
+  .strict();
 
 export type MovementFilters = z.infer<typeof movementFiltersSchema>;
 
@@ -109,12 +129,22 @@ export const createMovementSchema = createExpenseSchema
   .extend({
     type: movementTypeSchema.optional(),
     status: movementStatusSchema.optional(),
+    savingsOrigin: movementSavingsOriginSchema.optional(),
   })
   // Planned-expense guard: PENDING is meaningful only for EXPENSE (absent type
   // counts as EXPENSE, matching the persisted default); INCOME/SAVINGS are always PAID.
   .refine(
     (data) => data.status !== "PENDING" || (data.type ?? "EXPENSE") === "EXPENSE",
     { message: "PENDING status is only valid for EXPENSE movements", path: ["status"] },
+  )
+  // manual-savings (D8): savingsOrigin present ⇒ type SAVINGS ∧ value MANUAL.
+  // AUTO_SPLIT rows are internal-only (createIncomeWithSavings); a server-side
+  // SAVINGS create never sends the origin (the server stamps MANUAL or rejects).
+  .refine(
+    (data) =>
+      data.savingsOrigin === undefined ||
+      (data.type === "SAVINGS" && data.savingsOrigin === "MANUAL"),
+    { message: "savingsOrigin is only valid as MANUAL on SAVINGS movements", path: ["savingsOrigin"] },
   );
 
 export type CreateMovementInput = z.infer<typeof createMovementSchema>;
@@ -158,22 +188,15 @@ export const movementSummarySchema = z.object({
     expenses: z.number(),
     balance: z.number(),
     savings: z.number(),
+    // manual-savings (D4): REQUIRED — the summary endpoint ships the
+    // summaryManualSavings producer in the same work unit as this contract, so
+    // consumers can validate `balance = income − expenses − manualSavings`
+    // at runtime without an optional-absence fallback.
+    manualSavings: z.number(),
     avgPerMonth: z.number(),
     avgPerMovement: z.number(),
     maxAmount: z.number(),
     count: z.number(),
-    countThisMonth: z.number(),
-  }),
-  mom: z.object({
-    months: z.array(
-      z.object({
-        month: z.string(),
-        income: z.number(),
-        expenses: z.number(),
-        balance: z.number(),
-        savings: z.number(),
-      }),
-    ),
   }),
   daily: z.array(
     z.object({
@@ -196,13 +219,37 @@ export const movementSummarySchema = z.object({
     expenses: z.array(movementSchema),
     income: z.array(movementSchema),
   }),
-  // Planned-fixed-expenses block: next-month PENDING EXPENSE total. Required
-  // since PR 2 — getSummary always emits the summaryPlanned producer; the
-  // dashboard's runtime safeParse depends on the API carrying it.
-  planned: z.object({
-    month: z.string(),
-    total: z.number(),
-  }),
-});
+  // monthly-dashboard: previstos carry no date, so the block is the outstanding
+  // total plus the pending rows themselves (the monthly table can no longer
+  // show them, and the "Marcar pagado" action has to live somewhere).
+  planned: z
+    .object({
+      total: z.number(),
+      movements: z.array(movementSchema),
+    })
+    .strict(),
+}).strict();
 
 export type MovementSummary = z.infer<typeof movementSummarySchema>;
+
+/**
+ * online-access: the two wire shapes of the login flow. The session itself
+ * travels in an httpOnly cookie, so `sessionSchema` is only the identity the
+ * dashboard needs to render.
+ */
+export const loginSchema = z
+  .object({
+    ownerId: z.string().min(1),
+    password: z.string().min(1),
+  })
+  .strict();
+
+export type LoginInput = z.infer<typeof loginSchema>;
+
+export const sessionSchema = z
+  .object({
+    ownerId: z.string().min(1),
+  })
+  .strict();
+
+export type Session = z.infer<typeof sessionSchema>;

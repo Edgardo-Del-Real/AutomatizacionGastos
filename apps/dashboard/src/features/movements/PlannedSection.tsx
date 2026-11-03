@@ -30,6 +30,10 @@ const ERROR_CLASS = "text-sm font-medium text-danger";
  * hosts the inline "Agregar previsto" form: amount, note, and category, with a
  * positive-amount guard that never reaches the API on invalid input.
  * Planned expenses are INDIVIDUAL by design: there is no shared toggle.
+ *
+ * monthly-dashboard: previstos have no date, so they left the monthly table —
+ * which means this section is now their ONLY surface, including the
+ * "Marcar pagado" action that used to live on the list row.
  */
 export function PlannedSection({
   planned,
@@ -38,7 +42,7 @@ export function PlannedSection({
 }: PlannedSectionProps) {
   const { viewerId } = useViewer();
   const categories = useCategories(viewerId, refreshToken);
-  const { createPlanned, plannedCreateError, busy } =
+  const { createPlanned, markPaid, plannedCreateError, markPaidError, busy } =
     useMovementMutations(onMutated);
   const [amount, setAmount] = useState("");
   const [note, setNote] = useState("");
@@ -169,6 +173,47 @@ export function PlannedSection({
           No se pudo crear el gasto previsto.
         </p>
       ) : null}
+
+      <div className="border-t border-border p-6 sm:p-8">
+        <h3 className="text-xs font-semibold tracking-wide text-ink-faint uppercase">
+          Pendientes
+        </h3>
+        {planned.movements.length === 0 ? (
+          <p className="mt-3 text-sm text-ink-soft">No hay previstos pendientes.</p>
+        ) : (
+          <ul aria-label="Previstos pendientes" className="mt-3 divide-y divide-border">
+            {planned.movements.map((movement) => (
+              <li
+                key={movement.id}
+                className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 py-2.5"
+              >
+                <div className="min-w-0">
+                  <p className="font-mono text-sm font-semibold tabular-nums text-ink">
+                    {formatARS(movement.amount)}
+                  </p>
+                  <p className="truncate text-xs text-ink-soft">
+                    {[movement.note, movement.category].filter(Boolean).join(" · ") ||
+                      "Sin nota"}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  disabled={busy === "markPaid"}
+                  onClick={() => void markPaid(movement.id)}
+                  className="rounded-control border border-border bg-surface px-3 py-1 text-xs font-semibold text-ink transition-colors hover:bg-surface-raised focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-soft disabled:opacity-60"
+                >
+                  Marcar pagado
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+        {markPaidError ? (
+          <p role="alert" className={`${ERROR_CLASS} mt-3`}>
+            No se pudo marcar el previsto como pagado.
+          </p>
+        ) : null}
+      </div>
     </section>
   );
 }

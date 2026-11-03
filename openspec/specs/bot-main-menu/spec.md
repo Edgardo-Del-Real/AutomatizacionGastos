@@ -37,8 +37,8 @@ The system MUST expose a main menu with exactly eight buttons — `➕ Nuevo gas
 
 ### Requirement: setMyCommands Registration
 
-The system MUST register the owner-visible command list through Telegram `setMyCommands` when the bot starts, covering `menu`, `ayuda`, `configurar categorias`, `listar categorias`, `registrar_ahorro`, `listar_ahorros`, and `borrar_ahorro`. The text category CRUD commands (`registrar categoria:`, `renombrar categoria:`, `asociar palabra:`) MUST NOT be registered — category admin is button-driven. A registration failure MUST be logged and MUST NOT crash the polling loop. Unknown commands MUST still fall through to idle free-text routing (see bot-free-text-routing).
-(Previously: the registered list covered only `menu`, `ayuda`, `configurar categorias`, and `listar categorias`.)
+The system MUST register the owner-visible command list through Telegram `setMyCommands` when the bot starts, covering `menu`, `ayuda`, `configurar categorias`, `listar categorias`, `registrar_ahorro`, `registrar_ahorro_manual`, `listar_ahorros`, and `borrar_ahorro`. The text category CRUD commands (`registrar categoria:`, `renombrar categoria:`, `asociar palabra:`) MUST NOT be registered — category admin is button-driven. A registration failure MUST be logged and MUST NOT crash the polling loop. Unknown commands MUST still fall through to idle free-text routing (see bot-free-text-routing).
+(Previously: the registered list covered `menu`, `ayuda`, `configurar categorias`, `listar categorias`, `registrar_ahorro`, `listar_ahorros`, and `borrar_ahorro`.)
 
 #### Scenario: Commands registered on start
 
@@ -56,7 +56,7 @@ The system MUST register the owner-visible command list through Telegram `setMyC
 
 - GIVEN the command list
 - WHEN the bot boots
-- THEN `registrar_ahorro`, `listar_ahorros`, and `borrar_ahorro` are present
+- THEN `registrar_ahorro`, `registrar_ahorro_manual`, `listar_ahorros`, and `borrar_ahorro` are present
 
 #### Scenario: Text CRUD commands not registered
 
@@ -66,8 +66,8 @@ The system MUST register the owner-visible command list through Telegram `setMyC
 
 ### Requirement: Static Help
 
-The system MUST provide a static help reply (no LLM) that explains the eight-button menu and gives real examples — "Nuevo gasto: mandá 30000 gym", "Previsto: tocá Gasto previsto" — and states that amounts typed directly in chat are not captured (they redirect to ➕ Nuevo gasto). The help MUST mention the savings rule (`registrar ahorro: <palabra> al <X>%`) and MUST include a 💰 Ahorro keyboard button that opens the savings-rule sub-menu (see bot-manage-savings). The help MUST be reachable from the `❓ Ayuda` button and the `ayuda` command, and MUST work with `GROQ_API_KEY` unset.
-(Previously: the help taught capture examples, the `previsto:` prefix, the category commands, and the delete confirmation, and never mentioned savings.)
+The system MUST provide a static help reply (no LLM) that explains the eight-button menu and gives real examples — "Nuevo gasto: mandá 30000 gym", "Previsto: tocá Gasto previsto" — and states that amounts typed directly in chat are not captured (they redirect to ➕ Nuevo gasto). The help MUST mention the savings rule (`registrar ahorro: <palabra> al <X>%`) and the manual savings command (`registrar ahorro manual: <monto> [nota]`), and MUST include a 💰 Ahorro keyboard button that opens the savings sub-menu (see bot-manage-savings). The help MUST be reachable from the `❓ Ayuda` button and the `ayuda` command, and MUST work with `GROQ_API_KEY` unset.
+(Previously: the help taught capture examples, the `previsto:` prefix, the category commands, and the delete confirmation, and mentioned only the savings rule.)
 
 #### Scenario: Ayuda replies offline
 
@@ -85,7 +85,7 @@ The system MUST provide a static help reply (no LLM) that explains the eight-but
 
 - GIVEN the static help text
 - WHEN it is rendered
-- THEN it mentions `registrar ahorro:` and the 💰 Ahorro button opens the savings-rule sub-menu
+- THEN it mentions `registrar ahorro:` and `registrar ahorro manual:`, and the 💰 Ahorro button opens the savings sub-menu
 
 ### Requirement: Post-Action Menu Return
 

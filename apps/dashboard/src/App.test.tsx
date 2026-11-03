@@ -1,4 +1,4 @@
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -11,8 +11,12 @@ import {
   fetchHouseholdMembers,
   fetchMovementSummary,
   fetchMovements,
+  fetchSession,
+  login,
+  logout,
   patchMovement,
 } from "./infra/api";
+import { currentBaMonth, monthLabel } from "./infra/month";
 import App from "./App";
 
 vi.mock("./infra/api", async (importOriginal) => ({
@@ -21,6 +25,9 @@ vi.mock("./infra/api", async (importOriginal) => ({
   fetchMovements: vi.fn(),
   fetchCategories: vi.fn(),
   fetchHouseholdMembers: vi.fn(),
+  fetchSession: vi.fn(),
+  login: vi.fn(),
+  logout: vi.fn(),
   patchMovement: vi.fn(),
   deleteMovement: vi.fn(),
 }));
@@ -31,17 +38,11 @@ const summary: MovementSummary = {
     expenses: 1500,
     balance: 1500,
     savings: 0,
+    manualSavings: 0,
     avgPerMonth: 750,
     avgPerMovement: 500,
     maxAmount: 1200,
     count: 6,
-    countThisMonth: 2,
-  },
-  mom: {
-    months: [
-      { month: "2026-06", income: 2000, expenses: 1000, balance: 1000, savings: 0 },
-      { month: "2026-07", income: 1000, expenses: 500, balance: 1500, savings: 0 },
-    ],
   },
   daily: [
     { day: "2026-07-01", income: 100, expenses: 50, balance: 50 },
@@ -72,7 +73,7 @@ const summary: MovementSummary = {
     ],
     income: [],
   },
-  planned: { month: "2026-08", total: 0 },
+  planned: { total: 0, movements: [] },
 };
 
 const emptySummary: MovementSummary = {
@@ -81,17 +82,16 @@ const emptySummary: MovementSummary = {
     expenses: 0,
     balance: 0,
     savings: 0,
+    manualSavings: 0,
     avgPerMonth: 0,
     avgPerMovement: 0,
     maxAmount: 0,
     count: 0,
-    countThisMonth: 0,
   },
-  mom: { months: [] },
   daily: [],
   categories: [],
   top: { expenses: [], income: [] },
-  planned: { month: "2026-08", total: 0 },
+  planned: { total: 0, movements: [] },
 };
 
 const movements: Movement[] = [
@@ -123,14 +123,32 @@ const fetchMovementSummaryMock = vi.mocked(fetchMovementSummary);
 const fetchMovementsMock = vi.mocked(fetchMovements);
 const fetchCategoriesMock = vi.mocked(fetchCategories);
 const fetchHouseholdMembersMock = vi.mocked(fetchHouseholdMembers);
+const fetchSessionMock = vi.mocked(fetchSession);
+const loginMock = vi.mocked(login);
+const logoutMock = vi.mocked(logout);
 const patchMovementMock = vi.mocked(patchMovement);
 const deleteMovementMock = vi.mocked(deleteMovement);
+
+
+/**
+ * online-access: the dashboard mounts only after the session fetch resolves, so
+ * every test that expects the app shell must wait for the nav to appear.
+ */
+async function renderApp() {
+  render(<App />);
+  await screen.findByRole("button", { name: "Movimientos" });
+}
 
 beforeEach(() => {
   // Single-member household: existing tests keep the fixed "default" viewer.
   fetchHouseholdMembersMock.mockResolvedValue([
     { ownerId: "default", name: "Rita" },
   ]);
+  // monthly-dashboard: the selected month lives in the URL, so every test must
+  // start from a clean one or the previous test's ?mes= would leak.
+  window.history.replaceState({}, "", "/");
+  // online-access: a logged-in session by default; the gate has its own tests.
+  fetchSessionMock.mockResolvedValue({ ownerId: "default" });
 });
 
 afterEach(() => {
@@ -142,7 +160,7 @@ describe("App", () => {
     fetchMovementSummaryMock.mockResolvedValue(summary);
     fetchCategoriesMock.mockResolvedValue([]);
 
-    render(<App />);
+    await renderApp();
 
     // Spanish header.
     expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent("Rita");
@@ -168,12 +186,117 @@ describe("App", () => {
     expect(screen.queryByRole("table")).toBeNull();
   });
 
+  // monthly-dashboard: one month drives the whole dashboard, and it lives in
+  // the URL so a reload or a shared link keeps the period.
+  it("opens on the current Buenos Aires month when the URL has no mes", async () => {
+    fetchMovementSummaryMock.mockResolvedValue(summary);
+    fetchCategoriesMock.mockResolvedValue([]);
+
+    await renderApp();
+
+    await waitFor(() =>
+      expect(fetchMovementSummaryMock).toHaveBeenLastCalledWith(
+        "default",
+        currentBaMonth(),
+        "mine",
+      ),
+    );
+    expect(
+      (screen.getByLabelText(/Mes seleccionado/) as HTMLInputElement).value,
+    ).toBe(currentBaMonth());
+  });
+
+  it("opens on the month in the URL", async () => {
+    window.history.replaceState({}, "", "/?mes=2026-09");
+    fetchMovementSummaryMock.mockResolvedValue(summary);
+    fetchCategoriesMock.mockResolvedValue([]);
+
+    await renderApp();
+
+    await waitFor(() =>
+      expect(fetchMovementSummaryMock).toHaveBeenLastCalledWith(
+        "default",
+        "2026-09",
+        "mine",
+      ),
+    );
+  });
+
+  it("falls back to the current month when the URL key is malformed", async () => {
+    window.history.replaceState({}, "", "/?mes=2026-13");
+    fetchMovementSummaryMock.mockResolvedValue(summary);
+    fetchCategoriesMock.mockResolvedValue([]);
+
+    await renderApp();
+
+    await waitFor(() =>
+      expect(fetchMovementSummaryMock).toHaveBeenLastCalledWith(
+        "default",
+        currentBaMonth(),
+        "mine",
+      ),
+    );
+  });
+
+  it("moves the KPIs and the list together when the month changes, and stores it in the URL", async () => {
+    const user = userEvent.setup();
+    fetchMovementSummaryMock.mockResolvedValue(summary);
+    fetchMovementsMock.mockResolvedValue(movements);
+    fetchCategoriesMock.mockResolvedValue([]);
+
+    await renderApp();
+    await waitFor(() =>
+      expect(screen.getByRole("heading", { name: "Ingresos" })).toBeInTheDocument(),
+    );
+
+    await user.click(screen.getByRole("button", { name: "Movimientos" }));
+    await waitFor(() => expect(screen.getByRole("table")).toBeInTheDocument());
+
+    fireEvent.change(screen.getByLabelText(/Mes seleccionado/), {
+      target: { value: "2026-10" },
+    });
+
+    await waitFor(() =>
+      expect(fetchMovementSummaryMock).toHaveBeenLastCalledWith(
+        "default",
+        "2026-10",
+        "mine",
+      ),
+    );
+    await waitFor(() =>
+      expect(fetchMovementsMock).toHaveBeenLastCalledWith(
+        "default",
+        { month: "2026-10" },
+        "mine",
+      ),
+    );
+    expect(window.location.search).toBe("?mes=2026-10");
+  });
+
+  it("steps to the previous month with the arrow", async () => {
+    const user = userEvent.setup();
+    fetchMovementSummaryMock.mockResolvedValue(summary);
+    fetchCategoriesMock.mockResolvedValue([]);
+
+    await renderApp();
+    await waitFor(() =>
+      expect(screen.getByRole("heading", { name: "Ingresos" })).toBeInTheDocument(),
+    );
+
+    await user.click(screen.getByRole("button", { name: "Mes anterior" }));
+
+    await waitFor(() =>
+      expect(window.location.search).toMatch(/^\?mes=\d{4}-\d{2}$/),
+    );
+    expect(window.location.search).not.toBe(`?mes=${currentBaMonth()}`);
+  });
+
   it("shows only the charts section when Análisis is selected", async () => {
     const user = userEvent.setup();
     fetchMovementSummaryMock.mockResolvedValue(summary);
     fetchCategoriesMock.mockResolvedValue([]);
 
-    render(<App />);
+    await renderApp();
     await waitFor(() =>
       expect(screen.getByRole("heading", { name: "Ingresos" })).toBeInTheDocument(),
     );
@@ -202,7 +325,7 @@ describe("App", () => {
     fetchMovementsMock.mockResolvedValue(movements);
     fetchCategoriesMock.mockResolvedValue([]);
 
-    render(<App />);
+    await renderApp();
     expect(fetchMovementSummaryMock).toHaveBeenCalledTimes(1);
     expect(fetchMovementsMock).not.toHaveBeenCalled();
 
@@ -222,10 +345,12 @@ describe("App", () => {
     fetchMovementSummaryMock.mockResolvedValue(emptySummary);
     fetchMovementsMock.mockResolvedValue(movements);
 
-    render(<App />);
+    await renderApp();
 
     await waitFor(() =>
-      expect(screen.getByText("No hay movimientos aún.")).toBeInTheDocument(),
+      expect(
+        screen.getByText(`No hay movimientos en ${monthLabel(currentBaMonth())}.`),
+      ).toBeInTheDocument(),
     );
     // No partial charts and the list section is not mounted.
     expect(screen.queryByText("¿Dónde está tu dinero?")).toBeNull();
@@ -240,7 +365,7 @@ describe("App", () => {
     fetchMovementsMock.mockResolvedValue(movements);
     fetchCategoriesMock.mockResolvedValue([]);
 
-    render(<App />);
+    await renderApp();
 
     const alert = await screen.findByRole("alert");
     expect(alert).toHaveTextContent(/no se pudieron cargar los indicadores/i);
@@ -261,7 +386,7 @@ describe("App", () => {
     );
     fetchMovementsMock.mockResolvedValue(movements);
 
-    render(<App />);
+    await renderApp();
 
     const alert = await screen.findByRole("alert");
     expect(alert).toHaveTextContent(/no se pudieron cargar los indicadores/i);
@@ -284,7 +409,7 @@ describe("App", () => {
     fetchCategoriesMock.mockResolvedValue([]);
     deleteMovementMock.mockResolvedValue(undefined);
 
-    render(<App />);
+    await renderApp();
     await user.click(screen.getByRole("button", { name: "Movimientos" }));
     await waitFor(() => expect(screen.getByRole("table")).toBeInTheDocument());
     expect(fetchMovementsMock).toHaveBeenCalledTimes(1);
@@ -323,7 +448,7 @@ describe("App", () => {
     fetchCategoriesMock.mockResolvedValue([{ name: "sueldo", keywords: [] }]);
     patchMovementMock.mockResolvedValue(movements[0]!);
 
-    render(<App />);
+    await renderApp();
     await user.click(screen.getByRole("button", { name: "Movimientos" }));
     await waitFor(() => expect(screen.getByRole("table")).toBeInTheDocument());
 
@@ -353,72 +478,17 @@ describe("App", () => {
     );
   });
 
-  it("renders no viewer selector for a single-member household", async () => {
-    fetchMovementSummaryMock.mockResolvedValue(summary);
-    fetchCategoriesMock.mockResolvedValue([]);
-
-    render(<App />);
-
-    await waitFor(() =>
-      expect(fetchMovementSummaryMock).toHaveBeenLastCalledWith(
-        "default",
-        "mine",
-      ),
-    );
-    expect(screen.queryByLabelText("Ver como")).toBeNull();
-  });
-
-  it("switching the viewer re-queries the list and the summary with the new owner", async () => {
-    const user = userEvent.setup();
-    fetchHouseholdMembersMock.mockResolvedValue([
-      { ownerId: "rita", name: "Rita" },
-      { ownerId: "edgardo", name: "Edgardo" },
-    ]);
-    fetchMovementSummaryMock.mockResolvedValue(summary);
-    fetchMovementsMock.mockResolvedValue(movements);
-    fetchCategoriesMock.mockResolvedValue([]);
-
-    render(<App />);
-
-    // No persisted viewer and VITE_OWNER_ID ("default") is not a member, so the
-    // viewer falls back to the first member.
-    await waitFor(() =>
-      expect(fetchMovementSummaryMock).toHaveBeenLastCalledWith("rita", "mine"),
-    );
-
-    await user.click(screen.getByRole("button", { name: "Movimientos" }));
-    await waitFor(() =>
-      expect(fetchMovementsMock).toHaveBeenLastCalledWith("rita", {}, "mine"),
-    );
-
-    await user.selectOptions(screen.getByLabelText("Ver como"), "edgardo");
-
-    await waitFor(() =>
-      expect(fetchMovementSummaryMock).toHaveBeenLastCalledWith(
-        "edgardo",
-        "mine",
-      ),
-    );
-    await waitFor(() =>
-      expect(fetchMovementsMock).toHaveBeenLastCalledWith(
-        "edgardo",
-        {},
-        "mine",
-      ),
-    );
-    expect(window.localStorage.getItem("rita.viewer")).toBe("edgardo");
-  });
-
   it("the hoisted visibility filter re-queries the list and the summary together", async () => {
     const user = userEvent.setup();
     fetchMovementSummaryMock.mockResolvedValue(summary);
     fetchMovementsMock.mockResolvedValue(movements);
     fetchCategoriesMock.mockResolvedValue([]);
 
-    render(<App />);
+    await renderApp();
     await waitFor(() =>
       expect(fetchMovementSummaryMock).toHaveBeenLastCalledWith(
         "default",
+        expect.any(String),
         "mine",
       ),
     );
@@ -431,13 +501,15 @@ describe("App", () => {
     await waitFor(() =>
       expect(fetchMovementSummaryMock).toHaveBeenLastCalledWith(
         "default",
+        expect.any(String),
         "shared",
       ),
     );
     await waitFor(() =>
       expect(fetchMovementsMock).toHaveBeenLastCalledWith(
         "default",
-        {},
+        { month: expect.any(String) },
+
         "shared",
       ),
     );
@@ -447,22 +519,23 @@ describe("App", () => {
     await waitFor(() =>
       expect(fetchMovementSummaryMock).toHaveBeenLastCalledWith(
         "default",
+        expect.any(String),
         "mine",
       ),
     );
     await waitFor(() =>
-      expect(fetchMovementsMock).toHaveBeenLastCalledWith("default", {}, "mine"),
+      expect(fetchMovementsMock).toHaveBeenLastCalledWith("default", { month: expect.any(String) }, "mine"),
     );
   });
 
   it("renders the planned section after the KPI cards in the kpis tab", async () => {
     fetchMovementSummaryMock.mockResolvedValue({
       ...summary,
-      planned: { month: "2026-09", total: 4000 },
+      planned: { total: 4000, movements: [] },
     });
     fetchCategoriesMock.mockResolvedValue([]);
 
-    render(<App />);
+    await renderApp();
 
     const kpisHeading = await screen.findByRole("heading", {
       name: "Ingresos",
@@ -489,12 +562,12 @@ describe("App", () => {
     // section is present below it.
     fetchMovementSummaryMock.mockResolvedValue({
       ...emptySummary,
-      planned: { month: "2026-09", total: 4000 },
+      planned: { total: 4000, movements: [] },
     });
     fetchMovementsMock.mockResolvedValue(movements);
     fetchCategoriesMock.mockResolvedValue([]);
 
-    render(<App />);
+    await renderApp();
 
     expect(
       await screen.findByRole("heading", { name: "Gastos fijos previstos" }),
@@ -504,5 +577,63 @@ describe("App", () => {
     expect(
       screen.getByRole("form", { name: "Agregar previsto" }),
     ).toBeInTheDocument();
+  });
+});
+
+describe("App login gate", () => {
+  it("shows the login form without a session and enters after login", async () => {
+    const user = userEvent.setup();
+    fetchSessionMock.mockResolvedValueOnce(null);
+    loginMock.mockResolvedValue({ ownerId: "rita" });
+    fetchMovementSummaryMock.mockResolvedValue(summary);
+    fetchCategoriesMock.mockResolvedValue([]);
+
+    render(<App />);
+
+    const form = await screen.findByRole("form", { name: "Ingresar" });
+    expect(screen.queryByRole("button", { name: "Movimientos" })).toBeNull();
+
+    await user.type(within(form).getByLabelText("Contraseña"), "clave-rita");
+    await user.click(within(form).getByRole("button", { name: "Entrar" }));
+
+    await waitFor(() => expect(loginMock).toHaveBeenCalledWith("default", "clave-rita"));
+    await screen.findByRole("button", { name: "Movimientos" });
+    await waitFor(() =>
+      expect(fetchMovementSummaryMock).toHaveBeenLastCalledWith(
+        "rita",
+        expect.any(String),
+        "mine",
+      ),
+    );
+  });
+
+  it("keeps the form open with a Spanish error on bad credentials", async () => {
+    const user = userEvent.setup();
+    fetchSessionMock.mockResolvedValueOnce(null);
+    loginMock.mockRejectedValue(new ApiError("http", { status: 401 }));
+
+    render(<App />);
+
+    const form = await screen.findByRole("form", { name: "Ingresar" });
+    await user.type(within(form).getByLabelText("Contraseña"), "mal");
+    await user.click(within(form).getByRole("button", { name: "Entrar" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      /usuario o contraseña incorrectos/i,
+    );
+    expect(screen.queryByRole("button", { name: "Movimientos" })).toBeNull();
+  });
+
+  it("returns to the form after logging out", async () => {
+    const user = userEvent.setup();
+    fetchMovementSummaryMock.mockResolvedValue(summary);
+    fetchCategoriesMock.mockResolvedValue([]);
+    logoutMock.mockResolvedValue(undefined);
+
+    await renderApp();
+    await user.click(screen.getByRole("button", { name: "Salir" }));
+
+    expect(await screen.findByRole("form", { name: "Ingresar" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Movimientos" })).toBeNull();
   });
 });

@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
@@ -15,17 +15,11 @@ const summary: MovementSummary = {
     expenses: 1500,
     balance: 1500,
     savings: 0,
+    manualSavings: 0,
     avgPerMonth: 750,
     avgPerMovement: 500,
     maxAmount: 1200,
     count: 6,
-    countThisMonth: 2,
-  },
-  mom: {
-    months: [
-      { month: "2026-06", income: 2000, expenses: 1000, balance: 1000, savings: 0 },
-      { month: "2026-07", income: 1000, expenses: 500, balance: 1500, savings: 0 },
-    ],
   },
   daily: [
     { day: "2026-07-01", income: 100, expenses: 50, balance: 50 },
@@ -56,7 +50,7 @@ const summary: MovementSummary = {
     ],
     income: [],
   },
-  planned: { month: "2026-08", total: 0 },
+  planned: { total: 0, movements: [] },
 };
 
 const emptySummary: MovementSummary = {
@@ -65,17 +59,16 @@ const emptySummary: MovementSummary = {
     expenses: 0,
     balance: 0,
     savings: 0,
+    manualSavings: 0,
     avgPerMonth: 0,
     avgPerMovement: 0,
     maxAmount: 0,
     count: 0,
-    countThisMonth: 0,
   },
-  mom: { months: [] },
   daily: [],
   categories: [],
   top: { expenses: [], income: [] },
-  planned: { month: "2026-08", total: 0 },
+  planned: { total: 0, movements: [] },
 };
 
 // PENDING-only owner: PENDING is excluded from the mom/daily aggregates by
@@ -87,22 +80,21 @@ const plannedOnlySummary: MovementSummary = {
     expenses: 0,
     balance: 0,
     savings: 0,
+    manualSavings: 0,
     avgPerMonth: 0,
     avgPerMovement: 0,
     maxAmount: 0,
     count: 0,
-    countThisMonth: 0,
   },
-  mom: { months: [] },
   daily: [],
   categories: [],
   top: { expenses: [], income: [] },
-  planned: { month: "2026-08", total: 2500 },
+  planned: { total: 2500, movements: [] },
 };
 
 function renderSection(state: AsyncState<MovementSummary>) {
   return render(
-    <SummarySection state={{ ...state, retry: vi.fn() }}>
+    <SummarySection state={{ ...state, retry: vi.fn() }} month="2026-07">
       {(data) => <KpiCards kpis={data.kpis} />}
     </SummarySection>,
   );
@@ -115,11 +107,12 @@ describe("SummarySection", () => {
     expect(screen.getByRole("status")).toHaveTextContent(/cargando/i);
   });
 
-  it("renders the section content with the loaded summary", () => {
+  it("renders the section content with the loaded summary", async () => {
     renderSection({ status: "success", data: summary });
 
     expect(screen.getByRole("heading", { name: "Ingresos" })).toBeInTheDocument();
-    expect(screen.getByText("$ 3.000,00")).toBeInTheDocument();
+    // The KPI value animates from 0, so the final figure lands on a later frame.
+    await waitFor(() => expect(screen.getByText("$ 3.000,00")).toBeInTheDocument());
   });
 
   it("shows a Spanish empty state instead of content when the summary is empty", () => {
@@ -144,6 +137,7 @@ describe("SummarySection", () => {
     render(
       <SummarySection
         state={{ status: "error", error: new ApiError("network"), retry }}
+        month="2026-07"
       >
         {(data) => <KpiCards kpis={data.kpis} />}
       </SummarySection>,

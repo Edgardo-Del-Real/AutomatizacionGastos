@@ -11,11 +11,11 @@ const kpis: MovementSummary["kpis"] = {
   expenses: 1500,
   balance: 1500,
   savings: 0,
+  manualSavings: 0,
   avgPerMonth: 750,
   avgPerMovement: 500,
   maxAmount: 1200,
   count: 6,
-  countThisMonth: 2,
 };
 
 const categories: MovementSummary["categories"] = [

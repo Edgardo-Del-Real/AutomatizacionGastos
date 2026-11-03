@@ -292,6 +292,30 @@ export function savingsPercentInvalidReply(): string {
 }
 
 /**
+ * manual-savings (D9/D10): the sa:manual capture prompt — asks for the amount
+ * and an optional note; doubles as the re-prompt for an unparseable or
+ * non-positive sub-menu reply (state stays open, mirror of the capture-chain
+ * re-prompt discipline).
+ */
+export function manualSavingsPromptReply(): string {
+  return "¿Cuánto querés ahorrar? Mandame el monto y, si querés, una nota (ej: 500 fondo vacaciones).";
+}
+
+/** Confirms a registered manual savings with the formatted ARS amount and note (spec manual-savings). */
+export function manualSavingsSavedReply(amount: number, note: string | null): string {
+  const notePart = note === null ? "" : ` (${truncateNote(note)})`;
+  return `✅ Ahorro guardado: ${formatARS(amount)}${notePart}.`;
+}
+
+/**
+ * Validation reply for a recognized-invalid manual-savings text command
+ * ("registrar ahorro manual: 0 | abc | (empty)"): nothing was stored.
+ */
+export function manualSavingsInvalidReply(): string {
+  return "El monto tiene que ser un número mayor a 0 (ej: 500). No guardé nada.";
+}
+
+/**
  * Shared-expense-split replies (OQ2 wording locked): percent prompt after
  * `[Otro]` in the COMPARTIDO confirmation, the invalid re-prompt, the
  * Guardar-without-percent gate, and the split confirmation reporting the
@@ -536,10 +560,10 @@ export function ayudaReply(): string {
     "- 🗂 Administrar categorías — creá, renombrá y borrá categorías.\n" +
     "- 🧾 Administrar gastos — borrá gastos, corregí categorías y marcá previstos como pagados.\n" +
     "- 📊 Reportes — consultá movimientos, saldo y resúmenes.\n" +
-    "- 💰 Ahorro — configurá tus reglas de ahorro automático (también con \"registrar ahorro: <palabra> al <X>%\", \"listar ahorros\" y \"borrar ahorro: <palabra>\").\n" +
+    "- 💰 Ahorro — configurá tus reglas de ahorro automático y registrá un Ahorro manual (también con \"registrar ahorro: <palabra> al <X>%\", \"registrar ahorro manual: <monto> [nota]\", \"listar ahorros\" y \"borrar ahorro: <palabra>\").\n" +
     "- ❓ Ayuda — mostrá esta ayuda.\n" +
     "Los montos escritos directo en el chat no se cargan: usá ➕ Nuevo gasto.\n" +
-    "Comandos: menu, ayuda, listar categorias, configurar categorias, registrar_ahorro, listar_ahorros, borrar_ahorro."
+    "Comandos: menu, ayuda, listar categorias, configurar categorias, registrar_ahorro, registrar_ahorro_manual, listar_ahorros, borrar_ahorro."
   );
 }
 

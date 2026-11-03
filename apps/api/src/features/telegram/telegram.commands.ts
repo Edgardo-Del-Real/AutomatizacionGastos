@@ -9,7 +9,9 @@ export type TelegramCommand =
   | { type: "savings-rule"; keyword: string; percent: number }
   | { type: "savings-rule-invalid" }
   | { type: "savings-rule-list" }
-  | { type: "savings-rule-delete"; keyword: string };
+  | { type: "savings-rule-delete"; keyword: string }
+  | { type: "manual-savings"; amount: number; note: string | null }
+  | { type: "manual-savings-invalid" };
 
 const REGISTER_RE = /^\s*registrar\s+categoria\s*:\s*(.+?)\s*$/;
 const RENAME_RE = /^\s*renombrar\s+categoria\s*:\s*(.+?)\s+a\s*:\s*(.+?)\s*$/;
@@ -25,6 +27,14 @@ const SAVINGS_RULE_RE = /^\s*registrar\s+ahorro\s*:\s*(.+?)\s+al\s+(-?\d+(?:[.,]
 // "ahorro" (never "categoria"), so it cannot collide with `borrar categoria:`.
 const SAVINGS_RULE_LIST_RE = /^\s*listar\s+ahorros\s*$/;
 const SAVINGS_RULE_DELETE_RE = /^\s*borrar\s+ahorro\s*:\s*(.+?)\s*$/;
+// D9 — manual savings (spec manual-savings "Bot Text Command"): the prefix
+// regex is checked BEFORE SAVINGS_RULE_RE. The two are disjoint by
+// construction: manual requires "manual" BETWEEN "ahorro" and ":", the rule
+// requires ":" DIRECTLY after "ahorro" — so "registrar ahorro: manual al 10%"
+// still defines a rule with keyword "manual". The payload validity is decided
+// by parseManualSavingsPayload (a recognized-invalid payload NEVER falls
+// through to free-text routing).
+const MANUAL_SAVINGS_RE = /^\s*registrar\s+ahorro\s+manual\s*:\s*(.*?)\s*$/;
 
 /**
  * v2 — detection-only classifier for the legacy text category-CRUD commands
@@ -99,6 +109,21 @@ export function parseCommand(text: string): TelegramCommand | null {
     return { type: "ayuda" };
   }
 
+  // D9 — manual savings is checked BEFORE the savings-rule regex (order pin):
+  // the prefix matches whenever "registrar ahorro manual:" is present; the
+  // payload parser decides valid/invalid, so a bad amount is a recognized
+  // invalid command and never falls through to free text.
+  const manualSavings = MANUAL_SAVINGS_RE.exec(normalized);
+  if (manualSavings !== null) {
+    const payload = parseManualSavingsPayload(
+      sliceFromOriginal(syntaxNormalized, normalized, manualSavings[1]!),
+    );
+    if (payload === null) {
+      return { type: "manual-savings-invalid" };
+    }
+    return { type: "manual-savings", amount: payload.amount, note: payload.note };
+  }
+
   const savingsRule = SAVINGS_RULE_RE.exec(normalized);
   if (savingsRule !== null) {
     const percent = Number(savingsRule[2]!.replace(",", "."));
@@ -134,6 +159,45 @@ export function parseCommand(text: string): TelegramCommand | null {
 function sliceFromOriginal(original: string, normalized: string, value: string): string {
   const index = normalized.indexOf(value);
   return original.slice(index, index + value.length);
+}
+
+/**
+ * D9 — manual-savings amount rules: the FIRST payload token must be a positive
+ * es-AR amount following the parseNumberToken rules (message.parser.ts):
+ * dotted/comma thousands (`1.500`, `1,500`) or plain digits — decimals are
+ * INVALID, uniform with captureParse (the sub-menu path shares these rules, so
+ * both surfaces accept exactly the same amounts). The remainder of the payload
+ * is the note (whitespace-collapsed like `extractNote`; null when empty).
+ * Returns null for non-numeric / non-positive / empty / non-first-token
+ * payloads — the recognized-invalid command (nothing stored).
+ */
+export function parseManualSavingsPayload(payload: string): { amount: number; note: string | null } | null {
+  const trimmed = payload.trim();
+  if (trimmed.length === 0) {
+    return null;
+  }
+  const firstGap = trimmed.search(/\s/);
+  const amountToken = firstGap === -1 ? trimmed : trimmed.slice(0, firstGap);
+  const amount = parseManualSavingsAmountToken(amountToken);
+  if (amount === null || amount <= 0) {
+    return null;
+  }
+  if (firstGap === -1) {
+    return { amount, note: null };
+  }
+  const note = trimmed
+    .slice(firstGap)
+    .replace(/\s{2,}/g, " ")
+    .trim();
+  return { amount, note: note.length > 0 ? note : null };
+}
+
+/** Mirrors parseNumberToken (message.parser.ts) — the capture-parse amount grammar. */
+function parseManualSavingsAmountToken(token: string): number | null {
+  if (/^\d{1,3}(?:\.\d{3})+$/.test(token)) return Number(token.replaceAll(".", ""));
+  if (/^\d{1,3}(?:,\d{3})+$/.test(token)) return Number(token.replaceAll(",", ""));
+  if (/^\d+$/.test(token)) return Number(token);
+  return null;
 }
 
 /**

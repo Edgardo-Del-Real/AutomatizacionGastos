@@ -91,7 +91,8 @@ async function main(): Promise<number> {
   console.log(`[cleanup] owner: ${ownerId} · mode: ${apply ? "WRITE" : "DRY-RUN"}`);
   const prisma: PrismaClient = prismaClient;
   const categoryService = new CategoryService(new PrismaCategoryRepository(prisma));
-  const expenseService = new ExpenseService(new PrismaExpenseRepository(prisma));
+  // manual-savings (D6): ExpenseService now requires CategoryService.
+  const expenseService = new ExpenseService(new PrismaExpenseRepository(prisma), categoryService);
 
   const [categories, expenses] = await Promise.all([
     prisma.category.findMany({ where: { ownerId } }) as Promise<CategoryRow[]>,

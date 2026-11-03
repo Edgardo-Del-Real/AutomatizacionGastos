@@ -93,7 +93,8 @@ describe("TelegramService household multi-chat (spec: Owner Filtering / Dedup / 
       { ownerId: "edgardo", name: "Edgardo", chatId: EDGARDO_CHAT },
     ]);
     const messageRepository = new PrismaProcessedMessageRepository(prisma);
-    const expenseService = new ExpenseService(new PrismaExpenseRepository(prisma));
+    // manual-savings (D6): ExpenseService now requires CategoryService.
+    const expenseService = new ExpenseService(new PrismaExpenseRepository(prisma), categoryService);
     const movementService = new MovementService(new PrismaMovementRepository(prisma), categoryService);
     const savingsService = new SavingsRuleService(new PrismaSavingsRuleRepository(prisma));
     const botStateRepository = new PrismaBotStateRepository(prisma);

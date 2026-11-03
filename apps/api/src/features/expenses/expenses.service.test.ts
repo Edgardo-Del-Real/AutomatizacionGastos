@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { NotFoundError, ValidationFailedError } from "../../infra/errors";
+import type { CategoryService } from "../categories/categories.service";
 import type { ExpenseRepository } from "./expenses.repository";
 import { ExpenseService } from "./expenses.service";
 import type { Expense } from "./expenses.types";
@@ -22,6 +23,7 @@ function makeExpense(overrides: Partial<Expense> = {}): Expense {
 
 describe("ExpenseService", () => {
   let repository: ExpenseRepository;
+  let categoryService: CategoryService;
   let service: ExpenseService;
   let mockCreate: ReturnType<typeof vi.fn>;
   let mockFindById: ReturnType<typeof vi.fn>;
@@ -37,12 +39,15 @@ describe("ExpenseService", () => {
       deleteById: vi.fn(),
       summarizeByMonth: vi.fn(),
     } as unknown as ExpenseRepository;
+    categoryService = {
+      ensureAhorro: vi.fn(async () => ({ id: "cat_ahorro" })),
+    } as unknown as CategoryService;
     mockCreate = vi.mocked(repository.create);
     mockFindById = vi.mocked(repository.findById);
     mockListByOwner = vi.mocked(repository.listByOwner);
     mockDeleteById = vi.mocked(repository.deleteById);
     mockSummarizeByMonth = vi.mocked(repository.summarizeByMonth);
-    service = new ExpenseService(repository);
+    service = new ExpenseService(repository, categoryService);
   });
 
   it("creates an expense via the repository", async () => {
@@ -180,5 +185,133 @@ describe("ExpenseService", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe("ExpenseService manual-savings create guard (D5/D7)", () => {
+  let repository: ExpenseRepository;
+  let categoryService: CategoryService;
+  let service: ExpenseService;
+  let mockCreate: ReturnType<typeof vi.fn>;
+  let mockEnsureAhorro: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    repository = { create: vi.fn() } as unknown as ExpenseRepository;
+    categoryService = { ensureAhorro: vi.fn(async () => ({ id: "cat_ahorro" })) } as unknown as CategoryService;
+    mockCreate = vi.mocked(repository.create);
+    mockEnsureAhorro = vi.mocked(categoryService.ensureAhorro);
+    service = new ExpenseService(repository, categoryService);
+  });
+
+  const savingsInput = {
+    type: "SAVINGS",
+    amount: 50,
+    note: "fondo vacaciones",
+    occurredAt: new Date("2026-10-05T12:00:00.000Z"),
+  };
+
+  it("ensures the ahorro category before a SAVINGS create", async () => {
+    await service.createExpense(savingsInput, ownerId);
+
+    expect(mockEnsureAhorro).toHaveBeenCalledWith(ownerId);
+  });
+
+  it("stamps MANUAL·ahorro·PAID·INDIVIDUAL·ARS on a SAVINGS create (input origin ignored)", async () => {
+    await service.createExpense({ ...savingsInput, savingsOrigin: "MANUAL" }, ownerId);
+
+    expect(mockCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        ownerId,
+        type: "SAVINGS",
+        category: "ahorro",
+        savingsOrigin: "MANUAL",
+        status: "PAID",
+        visibility: "INDIVIDUAL",
+        currency: "ARS",
+        amount: 50,
+      }),
+    );
+  });
+
+  it("defaults an absent category to ahorro on a SAVINGS create", async () => {
+    await service.createExpense(
+      { type: "SAVINGS", amount: 50, occurredAt: new Date("2026-10-05T12:00:00.000Z") },
+      ownerId,
+    );
+
+    expect(mockCreate).toHaveBeenCalledWith(
+      expect.objectContaining({ type: "SAVINGS", category: "ahorro", savingsOrigin: "MANUAL" }),
+    );
+  });
+
+  it("rejects a SAVINGS create with a non-ahorro category with 422 and does not create", async () => {
+    await expect(
+      service.createExpense(
+        { ...savingsInput, category: "bolsillo" },
+        ownerId,
+      ),
+    ).rejects.toBeInstanceOf(ValidationFailedError);
+
+    expect(mockCreate).not.toHaveBeenCalled();
+  });
+
+  it("rejects a SAVINGS create with a null category with 422 and does not create", async () => {
+    await expect(
+      service.createExpense(
+        { ...savingsInput, category: null },
+        ownerId,
+      ),
+    ).rejects.toBeInstanceOf(ValidationFailedError);
+
+    expect(mockCreate).not.toHaveBeenCalled();
+  });
+
+  it("keeps the EXPENSE/INCOME create path untouched (no origin stamp, no ahorro forcing)", async () => {
+    const input = { amount: 250, occurredAt: new Date("2026-10-05T12:00:00.000Z") };
+    await service.createExpense(input, ownerId);
+
+    expect(mockEnsureAhorro).not.toHaveBeenCalled();
+    expect(mockCreate).toHaveBeenCalledWith(
+      expect.objectContaining({ ownerId, amount: 250, visibility: "INDIVIDUAL" }),
+    );
+    // sanity: the EXPENSE path carries no savingsOrigin and no forced category.
+    const args = mockCreate.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(args.savingsOrigin).toBeUndefined();
+    expect(args.category).toBeUndefined();
+  });
+
+  it("createManualSavings creates the MANUAL·ahorro·PAID·INDIVIDUAL·ARS row with pre-validated args", async () => {
+    await service.createManualSavings({
+      ownerId,
+      amount: 500,
+      note: "fondo vacaciones",
+      occurredAt: new Date("2026-10-05T12:00:00.000Z"),
+    });
+
+    expect(mockEnsureAhorro).toHaveBeenCalledWith(ownerId);
+    expect(mockCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        ownerId,
+        amount: 500,
+        note: "fondo vacaciones",
+        type: "SAVINGS",
+        category: "ahorro",
+        savingsOrigin: "MANUAL",
+        status: "PAID",
+        visibility: "INDIVIDUAL",
+        currency: "ARS",
+      }),
+    );
+  });
+
+  it("createManualSavings keeps a null note as null", async () => {
+    await service.createManualSavings({
+      ownerId,
+      amount: 500,
+      note: null,
+      occurredAt: new Date("2026-10-05T12:00:00.000Z"),
+    });
+
+    expect(mockCreate).toHaveBeenCalledWith(expect.objectContaining({ note: null }));
   });
 });

@@ -1,0 +1,20 @@
+# Never bake local state or secrets into the deploy image.
+.git
+.github
+node_modules
+**/node_modules
+dist
+**/dist
+*.tsbuildinfo
+.env
+.env.*
+!.env.example
+claude.md
+NEXT-SESSION.md
+DEPLOY.md
+*.log
+.codegraph
+.atl
+scripts
+demo.cmd
+rita.cmd

@@ -249,7 +249,18 @@ export type LoginInput = z.infer<typeof loginSchema>;
 export const sessionSchema = z
   .object({
     ownerId: z.string().min(1),
+    name: z.string().min(1),
   })
   .strict();
 
 export type Session = z.infer<typeof sessionSchema>;
+
+/** household-isolation: profile password change (the form mirrors the minimum). */
+export const changePasswordSchema = z
+  .object({
+    currentPassword: z.string().min(1),
+    newPassword: z.string().min(8),
+  })
+  .strict();
+
+export type ChangePasswordInput = z.infer<typeof changePasswordSchema>;

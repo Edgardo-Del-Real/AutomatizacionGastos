@@ -1,7 +1,12 @@
 import { buildApp } from "./app";
 import { env } from "./config/env";
+import { prismaClient } from "./infra/db/prisma";
+import { parseHouseholdMembers } from "./features/household/household.config";
 import { parseAuthEnv } from "./features/auth/auth.env";
 import { AuthService } from "./features/auth/auth.service";
+import { PrismaUserRepository } from "./features/auth/user.repository";
+import { UserService } from "./features/auth/user.service";
+import { loadHousehold, seedUsers } from "./features/auth/user.seed";
 import {
   createTelegramBot,
   redactToken,
@@ -12,10 +17,25 @@ import {
 // online-access: parsing here throws when the auth env is missing or malformed,
 // so the process refuses to start wide open.
 const authEnv = parseAuthEnv(process.env);
-const auth = new AuthService({ credentials: authEnv.users, secret: authEnv.secret });
+const auth = new AuthService({ secret: authEnv.secret });
 
-const app = buildApp({ logger: true, auth });
-const bot = createTelegramBot(env.TELEGRAM_BOT_TOKEN, app.telegramService);
+// household-isolation: the env is only a bootstrap seed. The table is the
+// source of truth, so a password changed from the profile survives deploys.
+const userRepository = new PrismaUserRepository(prismaClient);
+const fallbackMembers = parseHouseholdMembers(env.HOUSEHOLD_MEMBERS, {
+  ownerId: env.OWNER_ID,
+  chatId: env.TELEGRAM_OWNER_CHAT_ID!,
+});
+await seedUsers(userRepository, { members: fallbackMembers, credentials: authEnv.users });
+const members = await loadHousehold(userRepository, fallbackMembers);
+console.log(`users ready: ${members.map((member) => member.ownerId).join(", ")}`);
+
+const app = buildApp({
+  logger: true,
+  auth,
+  users: new UserService(userRepository),
+  members,
+});const bot = createTelegramBot(env.TELEGRAM_BOT_TOKEN, app.telegramService);
 
 registerGracefulStop(app, bot);
 

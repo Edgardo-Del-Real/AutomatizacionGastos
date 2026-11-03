@@ -18,11 +18,13 @@ import { GroqBotBrain } from "./features/telegram/bot-brain";
 import { TelegramService } from "./features/telegram/telegram.service";
 import { PrismaSavingsRuleRepository } from "./features/savings/savings.repository";
 import { SavingsRuleService } from "./features/savings/savings.service";
-import { parseHouseholdMembers } from "./features/household/household.config";
+import { parseHouseholdMembers, type HouseholdMember } from "./features/household/household.config";
 import { HouseholdService } from "./features/household/household.service";
 import { householdRoute } from "./features/household/household.route";
 import { registerAuthGuard, authRoute } from "./features/auth/auth.route";
 import type { AuthService } from "./features/auth/auth.service";
+import { PrismaUserRepository } from "./features/auth/user.repository";
+import { UserService } from "./features/auth/user.service";
 
 export type AppOptions = {
   prisma?: PrismaClient;
@@ -33,6 +35,10 @@ export type AppOptions = {
    * it, so production can never run unauthenticated.
    */
   auth?: AuthService | null;
+  /** Credential service; defaults to the Prisma-backed one. */
+  users?: UserService;
+  /** Household members; defaults to HOUSEHOLD_MEMBERS (tests / degraded mode). */
+  members?: HouseholdMember[];
 };
 
 export function buildApp(options: AppOptions = {}): FastifyInstance {
@@ -49,12 +55,18 @@ export function buildApp(options: AppOptions = {}): FastifyInstance {
   const movementService = new MovementService(movementRepository, categoryService);
   const messageRepository = new PrismaProcessedMessageRepository(prisma);
   const botStateRepository = new PrismaBotStateRepository(prisma);
-  const householdMembers = parseHouseholdMembers(env.HOUSEHOLD_MEMBERS, {
-    ownerId: env.OWNER_ID,
-    // Env validation guarantees TELEGRAM_OWNER_CHAT_ID is present whenever
-    // HOUSEHOLD_MEMBERS is unset (degraded single-user mode).
-    chatId: env.TELEGRAM_OWNER_CHAT_ID!,
-  });
+  const userRepository = new PrismaUserRepository(prisma);
+  const userService = options.users ?? new UserService(userRepository);
+  // household-isolation: the members come from the DB (seeded at boot). Tests
+  // and the degraded single-user mode fall back to the env.
+  const householdMembers =
+    options.members ??
+    parseHouseholdMembers(env.HOUSEHOLD_MEMBERS, {
+      ownerId: env.OWNER_ID,
+      // Env validation guarantees TELEGRAM_OWNER_CHAT_ID is present whenever
+      // HOUSEHOLD_MEMBERS is unset (degraded single-user mode).
+      chatId: env.TELEGRAM_OWNER_CHAT_ID!,
+    });
   const householdService = new HouseholdService(householdMembers);
   const telegramService = new TelegramService({
     messageRepository,
@@ -90,7 +102,7 @@ export function buildApp(options: AppOptions = {}): FastifyInstance {
   // the owner id comes from the cookie — `?ownerId=` stops meaning anything.
   if (options.auth !== undefined && options.auth !== null) {
     registerAuthGuard(app, options.auth);
-    void app.register(authRoute, { auth: options.auth });
+    void app.register(authRoute, { auth: options.auth, users: userService });
   }
 
   // Render pings this; it must not require a session.

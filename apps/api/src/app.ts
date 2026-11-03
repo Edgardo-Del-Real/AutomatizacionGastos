@@ -22,6 +22,8 @@ import { parseHouseholdMembers, type HouseholdMember } from "./features/househol
 import { HouseholdService } from "./features/household/household.service";
 import { householdRoute } from "./features/household/household.route";
 import { registerAuthGuard, authRoute } from "./features/auth/auth.route";
+import { accessRoute } from "./features/access/access.route";
+import type { AccessService } from "./features/access/access.service";
 import type { AuthService } from "./features/auth/auth.service";
 import { PrismaUserRepository } from "./features/auth/user.repository";
 import { UserService } from "./features/auth/user.service";
@@ -39,6 +41,8 @@ export type AppOptions = {
   users?: UserService;
   /** Household members; defaults to HOUSEHOLD_MEMBERS (tests / degraded mode). */
   members?: HouseholdMember[];
+  /** household-isolation: enables the granted-view reads and the /access routes. */
+  access?: AccessService;
 };
 
 export function buildApp(options: AppOptions = {}): FastifyInstance {
@@ -101,8 +105,12 @@ export function buildApp(options: AppOptions = {}): FastifyInstance {
   // online-access: with an AuthService every data route requires a session, and
   // the owner id comes from the cookie — `?ownerId=` stops meaning anything.
   if (options.auth !== undefined && options.auth !== null) {
-    registerAuthGuard(app, options.auth);
+    registerAuthGuard(app, options.auth, options.access);
     void app.register(authRoute, { auth: options.auth, users: userService });
+  }
+
+  if (options.access !== undefined) {
+    void app.register(accessRoute, { access: options.access });
   }
 
   // Render pings this; it must not require a session.

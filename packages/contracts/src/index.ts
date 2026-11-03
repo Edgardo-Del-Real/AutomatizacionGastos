@@ -264,3 +264,35 @@ export const changePasswordSchema = z
   .strict();
 
 export type ChangePasswordInput = z.infer<typeof changePasswordSchema>;
+/** household-isolation: the requester's view of the temporary permission. */
+export const accessStatusSchema = z
+  .object({
+    grant: z
+      .object({ targetOwnerId: z.string().min(1), expiresAt: z.string().min(1) })
+      .strict()
+      .nullable(),
+    pending: z
+      .object({
+        requestId: z.string().min(1),
+        targetOwnerId: z.string().min(1),
+        expiresAt: z.string().min(1),
+      })
+      .strict()
+      .nullable(),
+  })
+  .strict();
+
+export type AccessStatusPayload = z.infer<typeof accessStatusSchema>;
+
+export const accessHistorySchema = z.array(
+  z
+    .object({
+      requesterId: z.string().min(1),
+      createdAt: z.string().min(1),
+      expiresAt: z.string().min(1),
+      revokedAt: z.string().min(1).nullable(),
+    })
+    .strict(),
+);
+
+export type AccessHistory = z.infer<typeof accessHistorySchema>;

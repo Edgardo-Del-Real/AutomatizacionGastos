@@ -7,6 +7,9 @@ import type { UserService } from "./user.service";
 
 export type AuthRouteOptions = { auth: AuthService; users: UserService };
 
+/** Whatever the guard needs from the access feature to decorate `viewAs`. */
+export type AccessLookup = { activeTarget(requesterId: string): Promise<string | null> };
+
 /** Reads the session cookie without pulling a cookie plugin for 1 value. */
 export function readSessionCookie(request: FastifyRequest): string | undefined {
   const header = request.headers.cookie;
@@ -104,10 +107,16 @@ export const authRoute: FastifyPluginAsync<AuthRouteOptions> = async (app, optio
 
 /**
  * Guard for every data route. `/health` and the auth routes stay open.
- * On success the owner id is decorated on the request, and the legacy
- * `?ownerId=` / `x-owner-id` inputs stop meaning anything.
+ *
+ * household-isolation: on reads, a live access grant replaces the viewer with
+ * the partner, which is how a granted view sees their whole dashboard. Writes
+ * never get `viewAs`, so the permission is read-only by construction.
  */
-export function registerAuthGuard(app: FastifyInstance, auth: AuthService): void {
+export function registerAuthGuard(
+  app: FastifyInstance,
+  auth: AuthService,
+  access?: AccessLookup,
+): void {
   app.decorateRequest("viewer", null);
   app.addHook("onRequest", async (request: FastifyRequest, reply: FastifyReply) => {
     const path = request.url.split("?")[0] ?? "";
@@ -117,6 +126,13 @@ export function registerAuthGuard(app: FastifyInstance, auth: AuthService): void
       await reply.status(401).send({ code: "Unauthorized", message: "Sesión requerida" });
       return;
     }
-    (request as FastifyRequest & { viewer: { ownerId: string } }).viewer = { ownerId: payload.ownerId };
+    const viewAs =
+      request.method === "GET" && access !== undefined
+        ? await access.activeTarget(payload.ownerId)
+        : null;
+    (request as FastifyRequest & { viewer: { ownerId: string; viewAs: string | null } }).viewer = {
+      ownerId: payload.ownerId,
+      viewAs,
+    };
   });
 }

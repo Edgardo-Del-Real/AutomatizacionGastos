@@ -365,6 +365,15 @@ export class TelegramService {
    * only from a menu tap (`awaiting_capture`), and idle text routes through
    * `routeIdleMessage` (bot-free-text-routing).
    */
+  /**
+   * household-isolation: resolves a chat to its owner without going through a
+   * capture flow. Used by the access buttons, which live outside the state
+   * machine.
+   */
+  ownerOfChat(chatId: number): string | null {
+    return this.deps.household.resolveOwnerByChatId(chatId);
+  }
+
   async handleUpdate(update: unknown, reply?: ReplyPort): Promise<void> {
     const message = normalizeTelegramMessage(update);
     if (message === null) {

@@ -569,7 +569,7 @@ describe("TelegramService menu taps (v2 capture type memory)", () => {
   it("supersedes an open preview when a type tap arrives", async () => {
     await seedAwaitingCapture(h, "REAL");
     await h.service.handleUpdate(textUpdate({ text: "30000 gym", messageId: 2 }), h.reply);
-    expect(h.replies.at(-1)).toContain("¿Guardamos?");
+    expect(h.replies.at(-1)).toContain("¿A qué categoría va?");
 
     await h.service.handleCallback(callbackUpdate({ data: "m:inc", messageId: 88 }), h.reply);
 
@@ -597,7 +597,7 @@ describe("TelegramService menu taps (v2 capture type memory)", () => {
 
     await h.service.handleUpdate(textUpdate({ text: "salir a cenar 5000", messageId: 2 }), h.reply);
 
-    expect(h.replies.at(-1)).toContain("¿Guardamos?");
+    expect(h.replies.at(-1)).toContain("¿A qué categoría va?");
   });
 
   it("sends the setup question when the owner has zero categories", async () => {
@@ -614,7 +614,7 @@ describe("TelegramService menu taps (v2 capture type memory)", () => {
     await h.service.handleCallback(callbackUpdate({ data: "m:home", messageId: 88 }), h.reply);
 
     expect(h.replies.at(-1)).toBe(menuReply());
-    expect((h.keyboards.at(-1) as InlineKeyboard)).toHaveLength(8);
+    expect((h.keyboards.at(-1) as InlineKeyboard)).toHaveLength(4);
   });
 
   it("opens the expense-admin sub-menu and supersedes any pending flow", async () => {
@@ -1398,7 +1398,7 @@ describe("TelegramService commands (v2 surface)", () => {
     seedHarnessCategories(h, ["Cafe", "Transporte"]);
   });
 
-  it("the menu command abandons any pending flow and renders the eight-button menu", async () => {
+  it("the menu command abandons any pending flow and renders the two-column menu", async () => {
     await seedAwaitingCapture(h, "REAL");
     h.mockSetState.mockClear();
 
@@ -1408,23 +1408,19 @@ describe("TelegramService commands (v2 surface)", () => {
     expect(lastCall.state).toBe("idle");
     expect(h.replies.at(-1)).toBe(menuReply());
     const kb = h.keyboards.at(-1) as InlineKeyboard;
-    expect(kb.map((row) => row[0]?.text)).toEqual([
-      "➕ Nuevo gasto",
-      "📅 Gasto previsto",
-      "➕ Ingreso",
-      "👥 Compartido",
-      "🗂 Administrar categorías",
-      "🧾 Administrar gastos",
-      "📊 Reportes",
-      "❓ Ayuda",
+    expect(kb.map((row) => row.map((button) => button.text))).toEqual([
+      ["➕ Gasto individual", "👥 Gasto compartido"],
+      ["📅 Gasto previsto", "➕ Ingreso"],
+      ["📊 Reportes", "❓ Ayuda"],
+      ["🗂 Categorías", "🧾 Gastos"],
     ]);
   });
 
-  it("/start renders the same eight-button menu", async () => {
+  it("/start renders the same two-column menu", async () => {
     await h.service.handleUpdate(textUpdate({ text: "/start", messageId: 1 }), h.reply);
 
     const kb = h.keyboards.at(-1) as InlineKeyboard;
-    expect(kb).toHaveLength(8);
+    expect(kb).toHaveLength(4);
   });
 
   it("ayuda replies with the static help", async () => {
@@ -1440,7 +1436,7 @@ describe("TelegramService commands (v2 surface)", () => {
     await hNoBrain.service.handleUpdate(textUpdate({ text: "/ayuda", messageId: 1 }), hNoBrain.reply);
 
     expect(hNoBrain.replies.at(-1)).toBe(ayudaReply());
-    expect(hNoBrain.replies.at(-1)).toContain("Nuevo gasto");
+    expect(hNoBrain.replies.at(-1)).toContain("Gasto individual");
     expect(hNoBrain.replies.at(-1)).not.toContain("previsto:");
   });
 
@@ -2152,7 +2148,7 @@ describe("TelegramService command supersession (menu/start abandon ANY flow)", (
     expect(lastCall.pendingNote).toBeNull();
     expect(h.replies.at(-1)).toBe(menuReply());
     const kb = h.keyboards.at(-1) as InlineKeyboard;
-    expect(kb).toHaveLength(8);
+    expect(kb).toHaveLength(4);
   });
 
   it("the start command supersedes the delete gate without deleting anything", async () => {
@@ -2165,7 +2161,7 @@ describe("TelegramService command supersession (menu/start abandon ANY flow)", (
     const state = await h.botStateRepository.get(ownerId);
     expect(state?.state).toBe("idle");
     const kb = h.keyboards.at(-1) as InlineKeyboard;
-    expect(kb).toHaveLength(8);
+    expect(kb).toHaveLength(4);
   });
 });
 

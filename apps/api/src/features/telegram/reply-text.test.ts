@@ -151,7 +151,7 @@ describe("reply builders", () => {
   it("redirects legacy text category CRUD to the 🗂 button flow", () => {
     const text = categoryCrudRedirectReply();
 
-    expect(text).toContain("Administrar categorías");
+    expect(text).toContain("🗂 Categorías");
     expect(text).toContain("🗂");
   });
 
@@ -444,10 +444,10 @@ describe("v2 redirect and flow templates (bot-free-text-routing / quick-capture)
     expect(text).toContain("Guardar");
   });
 
-  it("redirects capture-shaped text to the ➕ Nuevo gasto button", () => {
+  it("redirects capture-shaped text to the ➕ Gasto individual button", () => {
     const text = captureShapedRedirectReply();
 
-    expect(text).toContain("➕ Nuevo gasto");
+    expect(text).toContain("➕ Gasto individual");
     expect(text).toContain("mandalo");
   });
 
@@ -458,10 +458,10 @@ describe("v2 redirect and flow templates (bot-free-text-routing / quick-capture)
     expect(text).toContain("previsto");
   });
 
-  it("redirects the compartido: prefix to the 👥 Compartido button", () => {
+  it("redirects the compartido: prefix to the 👥 Gasto compartido button", () => {
     const text = compartidoPrefixRedirectReply();
 
-    expect(text).toContain("👥 Compartido");
+    expect(text).toContain("👥 Gasto compartido");
   });
 
   it("redirects savings-override text to the automatic rule", () => {
@@ -548,16 +548,16 @@ describe("main menu and help templates", () => {
   it("builds the menu text inviting the owner to choose", () => {
     const text = menuReply();
 
-    expect(text).toContain("menú");
+    expect(text).toContain("¿Qué querés hacer?");
     expect(text.length).toBeGreaterThan(0);
   });
 
   it("builds the static help explaining the eight buttons with examples and never teaching prefixes (spec: Static Help)", () => {
     const text = ayudaReply();
 
-    expect(text).toContain("Nuevo gasto");
+    expect(text).toContain("Gasto individual");
     expect(text).toContain("30000 gym");
-    expect(text).toContain("Administrar categorías");
+    expect(text).toContain("🗂 Categorías");
     expect(text).toContain("no se cargan");
     expect(text).toContain("listar categorias");
     expect(text).not.toContain("previsto:");
@@ -586,7 +586,7 @@ describe("main menu and help templates", () => {
 
     expect(text).toContain("¡Hola!");
     expect(text).toContain("gastos");
-    expect(text).toContain("menú");
+    expect(text).toContain("¿Qué querés hacer?");
   });
 
   it("builds the already-processed reply for a retried callback", () => {
@@ -673,16 +673,16 @@ describe("quick-capture preview templates (v2)", () => {
   it("builds the v2 preview asking Guardamos with amount, note and the real type label", () => {
     const text = previewReply(30000, "gym", "REAL");
 
-    expect(text).toContain("¿Guardamos?");
+    expect(text).toContain("¿A qué categoría va?");
     expect(text).toContain(formatARS(30000));
     expect(text).toContain("gym");
-    expect(text).toContain("real");
+    expect(text).toContain("gasto individual");
   });
 
   it("marks a PENDING preview as previsto", () => {
     const text = previewReply(2500, "alquiler", "PENDING");
 
-    expect(text).toContain("¿Guardamos?");
+    expect(text).toContain("¿A qué categoría va?");
     expect(text).toContain(formatARS(2500));
     expect(text).toContain("alquiler");
     expect(text).toContain("previsto");
@@ -691,7 +691,7 @@ describe("quick-capture preview templates (v2)", () => {
   it("labels an INGRESO preview as ingreso", () => {
     const text = previewReply(1000, null, "INGRESO");
 
-    expect(text).toContain("¿Guardamos?");
+    expect(text).toContain("¿A qué categoría va?");
     expect(text).toContain(formatARS(1000));
     expect(text).toContain("ingreso");
   });
@@ -711,17 +711,17 @@ describe("quick-capture preview templates (v2)", () => {
   it("builds the two-step confirmation with amount, note, type and category", () => {
     const text = previewConfirmReply(30000, "gym", "REAL", "Cafe");
 
-    expect(text).toContain("Confirmá:");
+    expect(text).toContain("Confirmá el movimiento:");
     expect(text).toContain(formatARS(30000));
     expect(text).toContain("gym");
-    expect(text).toContain("real");
+    expect(text).toContain("gasto individual");
     expect(text).toContain("Categoría: Cafe");
   });
 
   it("labels a PENDING confirmation as previsto", () => {
     const text = previewConfirmReply(2500, "alquiler", "PENDING", "Alquiler");
 
-    expect(text).toContain("Confirmá:");
+    expect(text).toContain("Confirmá el movimiento:");
     expect(text).toContain(formatARS(2500));
     expect(text).toContain("alquiler");
     expect(text).toContain("previsto");

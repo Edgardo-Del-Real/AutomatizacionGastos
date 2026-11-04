@@ -233,35 +233,29 @@ describe("createTelegramBot (offline reply recording)", () => {
     expect(h.mockCreateExpense).not.toHaveBeenCalled();
     const sendMessage = h.recorded.find((call) => call.method === "sendMessage");
     expect(sendMessage).toBeDefined();
-    expect(String(sendMessage?.payload?.text)).toContain("➕ Nuevo gasto");
+    expect(String(sendMessage?.payload?.text)).toContain("➕ Gasto individual");
   });
 
-  it("attaches the eight-button inline keyboard to /start (D2 message reply port)", async () => {
+  it("attaches the two-column inline keyboard to /start (D2 message reply port)", async () => {
     await expect(h.bot.handleUpdate(textUpdate({ text: "/start" }))).resolves.toBeUndefined();
 
     const sendMessage = h.recorded.find((call) => call.method === "sendMessage");
     expect(sendMessage).toBeDefined();
     const markup = sendMessage?.payload?.reply_markup as { inline_keyboard: { text: string; callback_data: string }[][] };
-    expect(markup?.inline_keyboard).toHaveLength(8);
-    expect(markup?.inline_keyboard.map((row) => row[0]?.text)).toEqual([
-      "➕ Nuevo gasto",
-      "📅 Gasto previsto",
-      "➕ Ingreso",
-      "👥 Compartido",
-      "🗂 Administrar categorías",
-      "🧾 Administrar gastos",
-      "📊 Reportes",
-      "❓ Ayuda",
+    // Four rows of two: expenses sit together (individual next to shared) and
+    // every label says "gasto" where it is one.
+    expect(markup?.inline_keyboard).toHaveLength(4);
+    expect(markup?.inline_keyboard.map((row) => row.map((button) => button.text))).toEqual([
+      ["➕ Gasto individual", "👥 Gasto compartido"],
+      ["📅 Gasto previsto", "➕ Ingreso"],
+      ["📊 Reportes", "❓ Ayuda"],
+      ["🗂 Categorías", "🧾 Gastos"],
     ]);
-    expect(markup?.inline_keyboard.map((row) => row[0]?.callback_data)).toEqual([
-      "m:new",
-      "m:prev",
-      "m:inc",
-      "m:shr",
-      "m:cats",
-      "m:adm",
-      "m:rep",
-      "m:help",
+    expect(markup?.inline_keyboard.map((row) => row.map((button) => button.callback_data))).toEqual([
+      ["m:new", "m:shr"],
+      ["m:prev", "m:inc"],
+      ["m:rep", "m:help"],
+      ["m:cats", "m:adm"],
     ]);
   });
 

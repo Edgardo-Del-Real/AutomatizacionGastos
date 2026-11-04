@@ -34,9 +34,19 @@ function formatPercent(percent: number): string {
   return `${String(percent).replace(".", ",")}%`;
 }
 
-/** v2 capture-type label for the preview/confirmation texts (menu-chosen type). */
+/**
+ * v2 capture-type label for the preview/confirmation texts (menu-chosen type).
+ * Every expense type says "gasto": "real"/"compartido" alone never told the
+ * owner that a shared capture is still an expense.
+ */
 function captureTypeLabel(type: "REAL" | "PENDING" | "INGRESO" | "COMPARTIDO"): string {
-  return type === "PENDING" ? "previsto" : type === "INGRESO" ? "ingreso" : type === "COMPARTIDO" ? "compartido" : "real";
+  return type === "PENDING"
+    ? "gasto previsto"
+    : type === "INGRESO"
+      ? "ingreso"
+      : type === "COMPARTIDO"
+        ? "gasto compartido"
+        : "gasto individual";
 }
 
 export function successReply(amount: number, note: string | null, category: string): string {
@@ -63,20 +73,17 @@ export function plannedReply(amount: number, note: string | null, category: stri
 }
 
 /**
- * v2 quick-capture preview (spec quick-capture "Capture Preview with
- * Save/Correct"): shows "¿Guardamos? $ {amount} ({note})" with the type label
- * chosen at the menu tap. The category is NOT in the text anymore — it is
- * chosen by the preview buttons (a pre-resolved category is never shown).
- * The type comes ONLY from the menu tap (REAL/PENDING/INGRESO/COMPARTIDO);
- * there is no type toggle in the preview.
+ * Capture preview: it is the CATEGORY step, so it asks for the category and
+ * never for a save the message cannot offer. The type comes ONLY from the menu
+ * tap (REAL/PENDING/INGRESO/COMPARTIDO); there is no type toggle here.
  */
 export function previewReply(
   amount: number,
   note: string | null,
   type: "REAL" | "PENDING" | "INGRESO" | "COMPARTIDO",
 ): string {
-  const notePart = note === null ? "" : ` (${truncateNote(note)})`;
-  return `¿Guardamos? ${formatARS(amount)}${notePart} — Tipo: ${captureTypeLabel(type)}`;
+  const noteLine = note === null ? "" : `\n${truncateNote(note)}`;
+  return `¿A qué categoría va?\n\n${formatARS(amount)} · ${captureTypeLabel(type)}${noteLine}`;
 }
 
 /**
@@ -97,10 +104,18 @@ export function previewConfirmReply(
   savingsChoice?: SavingsChoice,
   sharedPercent?: number,
 ): string {
-  const notePart = note === null ? "" : ` (${truncateNote(note)})`;
-  const savingsLine = savingsChoice === undefined ? "" : ` — ${savingsLineLabel(savingsChoice)}`;
-  const shareLine = sharedPercent === undefined ? "" : ` — ${sharedLineLabel(sharedPercent)}`;
-  return `Confirmá: ${formatARS(amount)}${notePart} — Tipo: ${captureTypeLabel(type)} — Categoría: ${category}${savingsLine}${shareLine}`;
+  const lines = [`${formatARS(amount)} · ${captureTypeLabel(type)}`];
+  if (note !== null) {
+    lines.push(truncateNote(note));
+  }
+  lines.push(`Categoría: ${category}`);
+  if (savingsChoice !== undefined) {
+    lines.push(savingsLineLabel(savingsChoice));
+  }
+  if (sharedPercent !== undefined) {
+    lines.push(sharedLineLabel(sharedPercent));
+  }
+  return `Confirmá el movimiento:\n\n${lines.join("\n")}`;
 }
 
 /**
@@ -119,7 +134,7 @@ export function previewAskCategoryReply(): string {
  * taught to tap ➕ Nuevo gasto.
  */
 export function captureShapedRedirectReply(): string {
-  return "Los montos no se cargan desde el chat: mandalo desde ➕ Nuevo gasto del menú.";
+  return "Los montos no se cargan desde el chat: mandalo desde ➕ Gasto individual del menú.";
 }
 
 /**
@@ -137,7 +152,7 @@ export function previstoPrefixRedirectReply(): string {
  * 👥 Compartido menu button with type COMPARTIDO.
  */
 export function compartidoPrefixRedirectReply(): string {
-  return "Para registrar un gasto compartido tocá 👥 Compartido en el menú y mandá el monto con la nota.";
+  return "Para registrar un gasto compartido tocá 👥 Gasto compartido en el menú y mandá el monto con la nota.";
 }
 
 /**
@@ -565,7 +580,7 @@ export function queryReplyTemplate(result: QueryExecutionResult): string {
  * or renames anything.
  */
 export function categoryCrudRedirectReply(): string {
-  return "Para crear, renombrar o asociar categorías usá el botón 🗂 Administrar categorías del menú.";
+  return "Para crear, renombrar o asociar categorías usá el botón 🗂 Categorías del menú.";
 }
 
 /**
@@ -574,28 +589,35 @@ export function categoryCrudRedirectReply(): string {
  * "Main Menu Actions".
  */
 export function menuReply(): string {
-  return "Elegí una opción del menú:";
+  return "¿Qué querés hacer?";
 }
 
 /**
- * v2 static help (spec bot-main-menu "Static Help"): explains the eight-button
- * menu with real capture examples, works with GROQ_API_KEY unset, and states
- * that amounts typed directly in chat are not captured (they redirect to ➕
- * Nuevo gasto). Never teaches prefixes or text category commands.
+ * v2 static help (spec bot-main-menu "Static Help"): explains the menu with
+ * real capture examples, works with GROQ_API_KEY unset, and states that amounts
+ * typed directly in chat are not captured. Never teaches prefixes or text
+ * category commands.
  */
 export function ayudaReply(): string {
   return (
     "Bot de gastos e ingresos.\n" +
-    "- ➕ Nuevo gasto — tocá el botón y mandá el monto con la nota (ej: 30000 gym).\n" +
-    "- 📅 Gasto previsto — tocá el botón y mandá monto + nota (ej: 2500 alquiler).\n" +
-    "- ➕ Ingreso — tocá el botón y mandá monto + nota (ej: 1000 entrenuts).\n" +
-    "- 👥 Compartido — tocá el botón y mandá monto + nota.\n" +
-    "- 🗂 Administrar categorías — creá, renombrá y borrá categorías.\n" +
-    "- 🧾 Administrar gastos — borrá gastos, corregí categorías y marcá previstos como pagados.\n" +
-    "- 📊 Reportes — consultá movimientos, saldo y resúmenes.\n" +
-    "- 💰 Ahorro — configurá tus reglas de ahorro automático y registrá un Ahorro manual (también con \"registrar ahorro: <palabra> al <X>%\", \"registrar ahorro manual: <monto> [nota]\", \"listar ahorros\" y \"borrar ahorro: <palabra>\").\n" +
-    "- ❓ Ayuda — mostrá esta ayuda.\n" +
-    "Los montos escritos directo en el chat no se cargan: usá ➕ Nuevo gasto.\n" +
+    "\n" +
+    "Para cargar, tocá el botón y mandá monto + nota:\n" +
+    "- ➕ Gasto individual — 30000 gym\n" +
+    "- 👥 Gasto compartido — 12000 cena (se divide con la otra persona)\n" +
+    "- 📅 Gasto previsto — 2500 alquiler (todavía no pagado)\n" +
+    "- ➕ Ingreso — 1000 entrenuts\n" +
+    "\n" +
+    "Para consultar:\n" +
+    "- 📊 Reportes — movimientos, saldo y resúmenes del mes.\n" +
+    "- ❓ Ayuda — esta ayuda.\n" +
+    "\n" +
+    "Para ordenar:\n" +
+    "- 🗂 Categorías — crear, renombrar y borrar.\n" +
+    "- 🧾 Gastos — borrar, corregir categoría y marcar previstos como pagados.\n" +
+    "- 💰 Ahorro — reglas automáticas y Ahorro manual (también por texto: \"registrar ahorro: <palabra> al <X>%\", \"registrar ahorro manual: <monto>\", \"listar ahorros\", \"borrar ahorro: <palabra>\").\n" +
+    "\n" +
+    "Los montos escritos directo en el chat no se cargan: usá ➕ Gasto individual.\n" +
     "Comandos: menu, ayuda, listar categorias, configurar categorias, registrar_ahorro, registrar_ahorro_manual, listar_ahorros, borrar_ahorro."
   );
 }
@@ -615,7 +637,7 @@ export function callbackUnavailableReply(): string {
  * menu; it never teaches free-text capture and never starts a flow.
  */
 export function greetingReply(): string {
-  return "¡Hola! Estoy listo para tus gastos e ingresos. Elegí una opción del menú o preguntame por tus números.";
+  return "¡Hola! Estoy listo para tus gastos e ingresos. ¿Qué querés hacer? Elegí del menú o preguntame por tus números.";
 }
 
 export function categoryCreatedReply(name: string): string {

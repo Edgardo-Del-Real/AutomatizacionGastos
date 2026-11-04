@@ -17,6 +17,7 @@ export type RecentMovementResult = {
 
 export type RecentQueryResult = {
   query_type: "recent";
+  month: string;
   movements: RecentMovementResult[];
 };
 

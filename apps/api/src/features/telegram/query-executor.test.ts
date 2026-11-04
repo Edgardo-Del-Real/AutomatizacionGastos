@@ -114,7 +114,7 @@ describe("QueryExecutor.execute", () => {
 
     const result = await executor.execute(scope, "recent");
 
-    expect(mockListMovements).toHaveBeenCalledWith(scope, {});
+    expect(mockListMovements).toHaveBeenCalledWith(scope, { month: currentBaMonth() });
     expect(result.query_type).toBe("recent");
     if (result.query_type !== "recent") return;
     expect(result.movements).toHaveLength(5);
@@ -291,9 +291,11 @@ describe("QueryExecutor.execute", () => {
 
     const result = await executor.execute(scope, "recent");
 
-    expect(mockListMovements).toHaveBeenCalledWith(scope, {});
+    // RULE: current month only, and the whole history is no longer loaded.
+    expect(mockListMovements).toHaveBeenCalledWith(scope, { month: currentBaMonth() });
     expect(result.query_type).toBe("recent");
     if (result.query_type !== "recent") return;
+    expect(result.month).toBe(currentBaMonth());
     expect(result.movements.map((movement) => movement.amount)).toEqual([2500, 900]);
     // The PENDING row (occurredAt 2026-09-17) is filtered out; the PAID 2500 (2026-09-18) stays.
     expect(result.movements.some((movement) => movement.date === "2026-09-17")).toBe(false);

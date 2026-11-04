@@ -49,6 +49,22 @@
   },
   {
     "role": "user",
+    "content": "cuánto gasté el mes pasado?"
+  },
+  {
+    "role": "assistant",
+    "content": "{\"intent\":\"query_past\",\"amount\":null,\"note\":null}"
+  },
+  {
+    "role": "user",
+    "content": "y en septiembre cuánto gasté"
+  },
+  {
+    "role": "assistant",
+    "content": "{\"intent\":\"query_past\",\"amount\":null,\"note\":null}"
+  },
+  {
+    "role": "user",
     "content": "hola, cómo andás?"
   },
   {

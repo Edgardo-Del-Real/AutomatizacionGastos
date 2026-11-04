@@ -481,9 +481,13 @@ export function categoriesQueryReply(categories: { name: string; keywords: strin
   return `Tus categorías:\n${lines.join("\n")}`;
 }
 
-export function recentQueryReply(movements: RecentMovementResult[]): string {
+export function recentQueryReply(
+  movements: RecentMovementResult[],
+  month: string,
+): string {
+  const label = formatMonthLabel(month);
   if (movements.length === 0) {
-    return "Todavía no tenés movimientos registrados.";
+    return `Todavía no registraste movimientos en ${label}.`;
   }
   const lines = movements.map((movement) => {
     const kind = movement.type === "INCOME" ? "ingreso" : movement.type === "SAVINGS" ? "ahorro" : "gasto";
@@ -491,7 +495,7 @@ export function recentQueryReply(movements: RecentMovementResult[]): string {
     const note = movement.note !== null ? ` (${truncateNote(movement.note)})` : "";
     return `- ${formatDateShort(movement.date)} · ${kind} ${formatARS(movement.amount)} · ${category}${note}`;
   });
-  return `Tus últimos movimientos:\n${lines.join("\n")}`;
+  return `Tus últimos movimientos de ${label}:\n${lines.join("\n")}`;
 }
 
 export function balanceQueryReply(
@@ -536,7 +540,7 @@ export function queryReplyTemplate(result: QueryExecutionResult): string {
     case "categories":
       return categoriesQueryReply(result.categories);
     case "recent":
-      return recentQueryReply(result.movements);
+      return recentQueryReply(result.movements, result.month);
     case "balance":
       return balanceQueryReply(
         result.balance,

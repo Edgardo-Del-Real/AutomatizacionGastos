@@ -671,14 +671,24 @@ export class TelegramService {
       reply,
       menuReply(),
       [
-        [{ text: "➕ Nuevo gasto", callback_data: buildCallbackData(["m", "new"]) }],
-        [{ text: "📅 Gasto previsto", callback_data: buildCallbackData(["m", "prev"]) }],
-        [{ text: "➕ Ingreso", callback_data: buildCallbackData(["m", "inc"]) }],
-        [{ text: "👥 Compartido", callback_data: buildCallbackData(["m", "shr"]) }],
-        [{ text: "🗂 Administrar categorías", callback_data: buildCallbackData(["m", "cats"]) }],
-        [{ text: "🧾 Administrar gastos", callback_data: buildCallbackData(["m", "adm"]) }],
-        [{ text: "📊 Reportes", callback_data: buildCallbackData(["m", "rep"]) }],
-        [{ text: "❓ Ayuda", callback_data: buildCallbackData(["m", "help"]) }],
+        // Expenses together: individual next to shared (they were at opposite
+        // ends), then previsto, then ingreso. Consultar before administrar.
+        [
+          { text: "➕ Gasto individual", callback_data: buildCallbackData(["m", "new"]) },
+          { text: "👥 Gasto compartido", callback_data: buildCallbackData(["m", "shr"]) },
+        ],
+        [
+          { text: "📅 Gasto previsto", callback_data: buildCallbackData(["m", "prev"]) },
+          { text: "➕ Ingreso", callback_data: buildCallbackData(["m", "inc"]) },
+        ],
+        [
+          { text: "📊 Reportes", callback_data: buildCallbackData(["m", "rep"]) },
+          { text: "❓ Ayuda", callback_data: buildCallbackData(["m", "help"]) },
+        ],
+        [
+          { text: "🗂 Categorías", callback_data: buildCallbackData(["m", "cats"]) },
+          { text: "🧾 Gastos", callback_data: buildCallbackData(["m", "adm"]) },
+        ],
       ],
       undefined,
     );

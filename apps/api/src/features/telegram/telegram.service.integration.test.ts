@@ -462,7 +462,7 @@ describe("TelegramService (integration v2)", () => {
     await stubbed.handleCallback(callbackUpdate("m:new"), reply);
     await stubbed.handleUpdate(textUpdate({ messageId: 4, text: "30000 gym" }), reply);
     expect(interpret).not.toHaveBeenCalled();
-    expect(replies.at(-1)).toContain("¿Guardamos?");
+    expect(replies.at(-1)).toContain("¿A qué categoría va?");
 
     expect(await prisma.expense.count()).toBe(0);
   });

@@ -50,13 +50,17 @@ export class QueryExecutor {
   }
 
   private async recent(scope: ViewerScope): Promise<QueryExecutionResult> {
-    const movements = await this.movementService.listMovements(scope, {});
+    // RULE: current month only, like every other query — and it stops the bot
+    // from loading the whole history in memory just to show five rows.
+    const month = currentBaMonth();
+    const movements = await this.movementService.listMovements(scope, { month });
     // Planned expenses are visible ONLY through the planned query (spec
     // telegram-bot "Recent Movements Exclude Planned"): the PENDING rows are
     // filtered here, at the telegram layer, never at the repository (the
     // dashboard reads PENDING from the movement list).
     return {
       query_type: "recent",
+      month,
       movements: movements
         .filter((movement) => movement.status !== "PENDING")
         .slice(0, RECENT_LIMIT)

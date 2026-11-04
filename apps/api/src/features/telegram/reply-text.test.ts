@@ -385,12 +385,22 @@ describe("query reply templates", () => {
   });
 
   it("renders the recent movements with kind, category and note", () => {
-    const text = recentQueryReply([
-      { amount: 2500, category: "Cafe", note: "capuchino", date: "2026-09-19", type: "EXPENSE" },
-    ]);
+    const text = recentQueryReply(
+      [
+        { amount: 2500, category: "Cafe", note: "capuchino", date: "2026-09-19", type: "EXPENSE" },
+      ],
+      "2026-09",
+    );
     expect(text).toContain("19/09");
     expect(text).toContain("gasto");
     expect(text).toContain("Cafe");
+    expect(text).toContain("septiembre");
+  });
+
+  it("names the month when the recent list is empty", () => {
+    const text = recentQueryReply([], "2026-11");
+    expect(text).toContain("noviembre");
+    expect(text).toContain("Todavía no registraste movimientos");
   });
 
   it("renders the balance with income minus expenses", () => {
@@ -417,8 +427,12 @@ describe("query reply templates", () => {
   });
 
   it("dispatches the template by the executed query type", () => {
-    const recent = queryReplyTemplate({ query_type: "recent", movements: [] });
-    expect(recent).toContain("Todavía no tenés movimientos");
+    const recent = queryReplyTemplate({
+      query_type: "recent",
+      month: "2026-11",
+      movements: [],
+    });
+    expect(recent).toContain("Todavía no registraste movimientos");
   });
 });
 

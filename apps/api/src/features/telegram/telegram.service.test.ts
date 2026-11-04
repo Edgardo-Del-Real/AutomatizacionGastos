@@ -2047,7 +2047,7 @@ describe("TelegramService reports sub-menu (rep:*)", () => {
   });
 
   it.each([
-    ["rep:recent", "recent", "Todavía no tenés movimientos"],
+    ["rep:recent", "recent", "Todavía no registraste movimientos"],
     ["rep:balance", "balance", "balance"],
     ["rep:month", "month", "En "],
     ["rep:savings", "savings", "ahorraste"],

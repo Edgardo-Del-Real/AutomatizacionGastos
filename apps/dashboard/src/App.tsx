@@ -65,6 +65,13 @@ function Dashboard({ session, access, onLogout }: DashboardProps) {
   const [visibility, setVisibility] = useState<VisibilityFilter>("mine");
 
   const [activeSection, setActiveSection] = useState<DashboardSection>("kpis");
+  // Tab switching used to unmount the hidden sections, so every visit to
+  // "Movimientos" refetched the whole list. A section mounts the first time it
+  // is opened and stays alive (hidden) afterwards: coming back is instant and
+  // the list keeps its filters.
+  const [mountedSections, setMountedSections] = useState<ReadonlySet<DashboardSection>>(
+    () => new Set<DashboardSection>(["kpis"]),
+  );
   const [profileOpen, setProfileOpen] = useState(false);
   // monthly-dashboard: ONE month for the whole dashboard, backed by the URL so
   // it survives a reload and a shared link. Every section reads it from here.
@@ -73,6 +80,12 @@ function Dashboard({ session, access, onLogout }: DashboardProps) {
 
   const changeSection = useCallback((next: DashboardSection) => {
     setActiveSection(next);
+    setMountedSections((current) => {
+      if (current.has(next)) return current;
+      const grown = new Set(current);
+      grown.add(next);
+      return grown;
+    });
     window.scrollTo({ top: 0 });
   }, []);
 
@@ -171,8 +184,8 @@ function Dashboard({ session, access, onLogout }: DashboardProps) {
             Esperando que {partner?.name ?? "la otra persona"} responda en Telegram…
           </p>
         ) : null}
-        {activeSection === "kpis" && (
-          <div className="space-y-6">
+        {mountedSections.has("kpis") && (
+          <div hidden={activeSection !== "kpis"} className="space-y-6">
             <div className="max-w-2xl">
               <p className="text-xs font-semibold tracking-[0.18em] text-accent uppercase">
                 Resumen financiero
@@ -212,24 +225,28 @@ function Dashboard({ session, access, onLogout }: DashboardProps) {
             </SummarySection>
           </div>
         )}
-        {activeSection === "charts" && (
-          <SummarySection state={summaryState} month={month}>
-            {(data) => (
-              <div className="space-y-6">
-                <CategoryPieChart kpis={data.kpis} categories={data.categories} />
-                <BalanceTrendChart daily={data.daily} />
-              </div>
-            )}
-          </SummarySection>
+        {mountedSections.has("charts") && (
+          <div hidden={activeSection !== "charts"}>
+            <SummarySection state={summaryState} month={month}>
+              {(data) => (
+                <div className="space-y-6">
+                  <CategoryPieChart kpis={data.kpis} categories={data.categories} />
+                  <BalanceTrendChart daily={data.daily} />
+                </div>
+              )}
+            </SummarySection>
+          </div>
         )}
-        {activeSection === "movements" && (
-          <MovementList
-            month={month}
-            refreshToken={refreshKey}
-            onMutated={bumpRefresh}
-            visibility={visibility}
-            onVisibilityChange={setVisibility}
-          />
+        {mountedSections.has("movements") && (
+          <div hidden={activeSection !== "movements"}>
+            <MovementList
+              month={month}
+              refreshToken={refreshKey}
+              onMutated={bumpRefresh}
+              visibility={visibility}
+              onVisibilityChange={setVisibility}
+            />
+          </div>
         )}
       </div>
       {profileOpen ? (

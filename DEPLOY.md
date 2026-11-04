@@ -17,11 +17,24 @@
 El rol de Prisma es `rita_app` (no `postgres`: Supabase no permite cambiarle la clave por SQL).
 
 ```
-DATABASE_URL=postgresql://rita_app.dndqmodcpffazbcdkskx:ritacc64dd848288e6a95f4507baea350653@aws-1-sa-east-1.pooler.supabase.com:6543/postgres?pgbouncer=true&connection_limit=1
+DATABASE_URL=postgresql://rita_app.dndqmodcpffazbcdkskx:ritacc64dd848288e6a95f4507baea350653@aws-1-sa-east-1.pooler.supabase.com:5432/postgres?sslmode=require&connection_limit=10&pool_timeout=20
 DIRECT_URL=postgresql://rita_app.dndqmodcpffazbcdkskx:ritacc64dd848288e6a95f4507baea350653@aws-1-sa-east-1.pooler.supabase.com:5432/postgres?sslmode=require
 ```
 
 Trampa encontrada: el pooler del proyecto vive en **`aws-1`**, no `aws-0` (el de la región no siempre es el mismo; si da `tenant/user not found`, probar el otro). La conexión "directa" (`db.<ref>.supabase.co`) es solo IPv6, por eso `DIRECT_URL` usa el **session pooler** en 5432.
+
+### Por qué session pooler y no transaction pooler
+
+Medido contra esta misma base:
+
+| Configuración | Por query | 8 queries en paralelo |
+|---|---|---|
+| transaction pooler `:6543` + `pgbouncer=true`, `connection_limit=1` | ~205 ms | 1654 ms |
+| transaction pooler `:6543`, `connection_limit=10` | ~202 ms | 873 ms |
+| **session pooler `:5432`, `connection_limit=10`** | **~42 ms** | **460 ms** |
+
+`pgbouncer=true` obliga a Prisma a renunciar a los prepared statements, y cada query paga varios round trips extra. Con Render en Ohio y Supabase en São Paulo esa diferencia se amplifica: en producción cada query costaba ~1,1 s y el resumen 10 s. El transaction pooler es para serverless; esto es un contenedor de larga vida, así que corresponde el de sesión.
+
 
 ## Render (hecho)
 
@@ -30,7 +43,7 @@ Trampa encontrada: el pooler del proyecto vive en **`aws-1`**, no `aws-0` (el de
 
 | Variable | Valor |
 |---|---|
-| `DATABASE_URL` | el de arriba (6543) |
+| `DATABASE_URL` | el de arriba (5432, session pooler) |
 | `DIRECT_URL` | el de arriba (5432) |
 | `AUTH_SECRET` | `8f3c1c2e4d5b6a798877665544332211ffeeddccbbaa99887766554433221100` |
 | `AUTH_USERS` | ver abajo |

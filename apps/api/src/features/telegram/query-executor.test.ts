@@ -134,7 +134,7 @@ describe("QueryExecutor.execute", () => {
     });
   });
 
-  it("returns the lifetime balance without a month argument", async () => {
+  it("scopes the balance to the current Buenos Aires month", async () => {
     const { executor, mockGetSummary } = makeHarness();
     mockGetSummary.mockResolvedValue(
       summaryFixture({
@@ -144,10 +144,12 @@ describe("QueryExecutor.execute", () => {
 
     const result = await executor.execute(scope, "balance");
 
-    // "cuánto tengo" is a lifetime question: no month is passed.
-    expect(mockGetSummary).toHaveBeenCalledWith(scope);
+    // RULE: the bot answers about the current month only; past periods belong
+    // to the dashboard. A lifetime scope used to disagree with it.
+    expect(mockGetSummary).toHaveBeenCalledWith(scope, currentBaMonth());
     expect(result).toEqual({
       query_type: "balance",
+      month: currentBaMonth(),
       balance: 3000,
       income: 5000,
       expenses: 2000,
@@ -206,17 +208,40 @@ describe("QueryExecutor.execute", () => {
   });
 
   it("answers the planned query with the outstanding total and no month", async () => {
-    const { executor, mockGetSummary } = makeHarness();
-    mockGetSummary.mockResolvedValue(summaryFixture({ planned: { total: 4000, movements: [] } }));
+    const { executor, mockListMovements, mockGetSummary } = makeHarness();
+    const pending = (id: string, amount: number, currency: string) => ({
+      id,
+      ownerId,
+      amount,
+      currency,
+      category: "servicios",
+      note: id,
+      occurredAt: new Date("2026-09-18T12:00:00.000Z"),
+      createdAt: new Date(),
+      type: "EXPENSE" as const,
+      status: "PENDING" as const,
+    });
+    mockListMovements.mockResolvedValue([
+      pending("p1", 3000, "ARS"),
+      pending("p2", 1000, "ARS"),
+      pending("p3", 500, "USD"),
+    ]);
 
     const result = await executor.execute(scope, "planned");
 
+    // One query for the PENDING rows instead of the whole 8-query summary, and
+    // the ARS-only total mirrors the dashboard rule.
+    expect(mockGetSummary).not.toHaveBeenCalled();
+    expect(mockListMovements).toHaveBeenCalledWith(scope, {
+      type: "EXPENSE",
+      status: "PENDING",
+    });
     expect(result).toEqual({ query_type: "planned", total: 4000 });
   });
 
   it("answers zero for the planned query when nothing is pending", async () => {
-    const { executor, mockGetSummary } = makeHarness();
-    mockGetSummary.mockResolvedValue(summaryFixture({ planned: { total: 0, movements: [] } }));
+    const { executor, mockListMovements } = makeHarness();
+    mockListMovements.mockResolvedValue([]);
 
     const result = await executor.execute(scope, "planned");
 

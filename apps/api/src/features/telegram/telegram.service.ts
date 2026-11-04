@@ -20,6 +20,7 @@ import {
   normalizeTelegramMessage,
   normalizeTelegramCallback,
   captureParse,
+  isCancelText,
   legacyPrefixKind,
   buildCallbackData,
   type InlineButton,
@@ -30,6 +31,7 @@ import {
   alreadyProcessedReply,
   ayudaReply,
   callbackUnavailableReply,
+  cancelledReply,
   capturePromptReply,
   captureShapedRedirectReply,
   categoryAdminReply,
@@ -68,6 +70,7 @@ import {
   previewReply,
   previstoPrefixRedirectReply,
   queryRedirectReply,
+  pastPeriodReply,
   queryReplyTemplate,
   questionDroppedReply,
   reassignCategoryReply,
@@ -420,6 +423,16 @@ export class TelegramService {
     if (this.normalizeState(stateName) !== stateName) {
       await this.deps.botStateRepository.set({ ownerId, state: IDLE, pendingMovementId: null, pendingNote: null });
       await this.safeReply(reply, questionDroppedReply());
+      return;
+    }
+
+    // Escape hatch: every text-input state used to re-prompt on anything it
+    // could not parse, so a mistyped amount or percent trapped the owner in a
+    // loop only a menu tap could break. "cancelar" now always works.
+    if (stateName !== IDLE && isCancelText(body)) {
+      await this.deps.botStateRepository.set({ ownerId, state: IDLE, pendingMovementId: null, pendingNote: null });
+      await this.safeReply(reply, cancelledReply());
+      await this.sendMenu(reply);
       return;
     }
 
@@ -1801,6 +1814,12 @@ export class TelegramService {
       case "query_month":
       case "query_planned":
         await this.executeQuery(envelope, ownerId, reply);
+        await this.sendMenu(reply);
+        return;
+      case "query_past":
+        // RULE: the bot is current-month only; past and future periods live in
+        // the dashboard. Static reply, no data fetch, no LLM.
+        await this.safeReply(reply, pastPeriodReply());
         await this.sendMenu(reply);
         return;
       case "greeting":

@@ -1,4 +1,4 @@
-import { Bot, BotError } from "grammy";
+import { Bot } from "grammy";
 import type { Update } from "grammy/types";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { buildApp } from "../../app";
@@ -325,15 +325,14 @@ describe("createTelegramBot (offline reply recording)", () => {
     expect(h.bot.isRunning()).toBe(false);
   });
 
-  it("logs a redacted error from the error handler without leaking the token", async () => {
+  it("logs a redacted error and apologizes instead of failing silently", async () => {
     const boom = new Error(`Telegram API 401: https://api.telegram.org/bot${TOKEN}/getUpdates`);
     h.mockRecord.mockRejectedValue(boom);
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
 
-    const botError = await h.bot.handleUpdate(textUpdate()).catch((err: unknown) => err);
-    expect(botError).toBeInstanceOf(BotError);
-
-    await h.bot.errorHandler(botError as BotError);
+    // The message handler swallows the failure (a dead chat is worse than an
+    // apology), so grammy never sees a rejected update.
+    await expect(h.bot.handleUpdate(textUpdate())).resolves.toBeUndefined();
 
     const logged = errorSpy.mock.calls.map((call) => String(call[0])).join("\n");
     expect(logged).toContain("[REDACTED]");

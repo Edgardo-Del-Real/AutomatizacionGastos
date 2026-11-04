@@ -22,6 +22,7 @@ export type RecentQueryResult = {
 
 export type BalanceQueryResult = {
   query_type: "balance";
+  month: string;
   balance: number;
   income: number;
   expenses: number;

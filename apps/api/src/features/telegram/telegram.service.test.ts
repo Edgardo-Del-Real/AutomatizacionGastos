@@ -14,6 +14,7 @@ import {
   alreadyProcessedReply,
   ayudaReply,
   callbackUnavailableReply,
+  cancelledReply,
   capturePromptReply,
   captureShapedRedirectReply,
   categoryAdminReply,
@@ -47,6 +48,7 @@ import {
   previewReply,
   previstoPrefixRedirectReply,
   queryRedirectReply,
+  pastPeriodReply,
   questionDroppedReply,
   reportsMenuReply,
   reservedCategoryReply,
@@ -577,6 +579,27 @@ describe("TelegramService menu taps (v2 capture type memory)", () => {
     expect(h.replies.at(-1)).toBe(capturePromptReply());
   });
 
+  it("abandons an open capture when the owner types a cancel word", async () => {
+    await seedAwaitingCapture(h, "REAL");
+    h.mockCreateExpense.mockClear();
+
+    await h.service.handleUpdate(textUpdate({ text: "cancelar", messageId: 2 }), h.reply);
+
+    const lastCall = h.mockSetState.mock.calls.at(-1)?.[0] as BotStateRecord;
+    expect(lastCall.state).toBe("idle");
+    expect(h.mockCreateExpense).not.toHaveBeenCalled();
+    expect(h.replies.at(-2)).toBe(cancelledReply());
+    expect(h.replies.at(-1)).toBe(menuReply());
+  });
+
+  it("still reads a cancel word as part of a real note", async () => {
+    await seedAwaitingCapture(h, "REAL");
+
+    await h.service.handleUpdate(textUpdate({ text: "salir a cenar 5000", messageId: 2 }), h.reply);
+
+    expect(h.replies.at(-1)).toContain("¿Guardamos?");
+  });
+
   it("sends the setup question when the owner has zero categories", async () => {
     h.mockListCategories.mockResolvedValue([]);
 
@@ -742,10 +765,15 @@ describe("TelegramService preview callbacks (v2)", () => {
     expect(h.replies.at(-1)).toBe(previewConfirmReply(30000, "gym", "REAL", "Cafe"));
     expect(h.edits.at(-1)).toBeUndefined();
     const kb = h.keyboards.at(-1) as InlineKeyboard;
-    // D7: category rows first, then ➕ Crear categoría, then Guardar/Corregir.
-    expect(kb[0]?.[0]?.text).toBe("Cafe");
-    expect(kb.at(-1)?.[0]?.text).toBe("✅ Guardar");
-    expect(kb.at(-1)?.[1]?.text).toBe("✏️ Corregir");
+    // D7: the confirmation carries ONLY [Guardar] [Corregir]. The category
+    // choices stay on the preview message (previewKeyboard); the picked
+    // category is reflected in the confirmation TEXT, asserted above.
+    expect(kb).toEqual([
+      [
+        { text: "✅ Guardar", callback_data: expect.stringContaining("pv:save") },
+        { text: "✏️ Corregir", callback_data: expect.stringContaining("pv:edit") },
+      ],
+    ]);
   });
 
   it("a different category tap edits the CONFIRMATION message with the new category", async () => {
@@ -1069,6 +1097,19 @@ describe("TelegramService idle routing (v2 pre-checks and brain classification)"
     expect(h.mockCreateExpense).not.toHaveBeenCalled();
     expect(h.replies.at(-1)).toBe(menuReply());
     expect(h.replies.at(-2)).toContain("1.500");
+  });
+
+  it("redirects past-period questions to the dashboard without touching the data", async () => {
+    h.mockBrainInterpret.mockResolvedValue({ intent: "query_past", amount: null, note: null } satisfies ConversationEnvelope);
+
+    await h.service.handleUpdate(
+      textUpdate({ text: "cuánto gasté el mes pasado?", messageId: 1 }),
+      h.reply,
+    );
+
+    expect(h.mockGetSummary).not.toHaveBeenCalled();
+    expect(h.replies.at(-2)).toBe(pastPeriodReply());
+    expect(h.replies.at(-1)).toBe(menuReply());
   });
 
   it("greets warmly and shows the menu for a greeting-classified message", async () => {

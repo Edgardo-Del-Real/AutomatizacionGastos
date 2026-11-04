@@ -394,10 +394,11 @@ describe("query reply templates", () => {
   });
 
   it("renders the balance with income minus expenses", () => {
-    const text = balanceQueryReply(600, 900, 300);
+    const text = balanceQueryReply(600, 900, 300, "2026-11");
     expect(text).toContain("600");
     expect(text).toContain("900");
     expect(text).toContain("300");
+    expect(text).toContain("noviembre");
   });
 
   it("renders the month summary", () => {

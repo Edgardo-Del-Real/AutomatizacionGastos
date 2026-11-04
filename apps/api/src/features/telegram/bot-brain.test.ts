@@ -51,7 +51,7 @@ const SAMPLE_RESULT: ExecutionResult = {
   amount: null,
   note: null,
   query_type: "balance",
-  query: { query_type: "balance", balance: 1500, income: 2000, expenses: 500 },
+  query: { query_type: "balance", month: "2026-11", balance: 1500, income: 2000, expenses: 500 },
 };
 
 describe("normalizeAmountString", () => {
@@ -289,6 +289,7 @@ describe("v2 envelope contract (spec bot-brain Interpret Envelope Contract)", ()
       "query_balance",
       "query_month",
       "query_planned",
+      "query_past",
       "greeting",
       "off_topic",
       "help",

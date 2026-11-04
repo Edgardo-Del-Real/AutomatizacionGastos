@@ -71,11 +71,15 @@ export class QueryExecutor {
   }
 
   private async balance(scope: ViewerScope): Promise<QueryExecutionResult> {
-    // Lifetime scope on purpose: "cuánto tengo" asks about the accumulated
-    // balance, not about this month's net.
-    const summary = await this.movementService.getSummary(scope);
+    // RULE: the bot ALWAYS answers about the current Buenos Aires month. Past
+    // periods belong to the dashboard. The lifetime scope this used to have
+    // disagreed with the dashboard and answered "octubre + noviembre" when the
+    // owner asked for "saldo".
+    const month = currentBaMonth();
+    const summary = await this.movementService.getSummary(scope, month);
     return {
       query_type: "balance",
+      month,
       balance: summary.kpis.balance,
       income: summary.kpis.income,
       expenses: summary.kpis.expenses,
@@ -109,10 +113,18 @@ export class QueryExecutor {
 
   /** D6/D7: "cuánto tengo previsto" — the outstanding PENDING EXPENSE total. */
   private async planned(scope: ViewerScope): Promise<QueryExecutionResult> {
-    const summary = await this.movementService.getSummary(scope);
+    // Only the outstanding rows are needed: asking getSummary() for its
+    // `planned` block ran the whole 8-query dashboard aggregate for one number.
+    const pending = await this.movementService.listMovements(scope, {
+      type: "EXPENSE",
+      status: "PENDING",
+    });
+    const total = pending
+      .filter((movement) => movement.currency === "ARS")
+      .reduce((sum, movement) => sum + movement.amount, 0);
     return {
       query_type: "planned",
-      total: summary.planned.total,
+      total,
     };
   }
 }

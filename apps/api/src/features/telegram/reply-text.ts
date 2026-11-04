@@ -452,6 +452,24 @@ export function queryRedirectReply(): string {
   return "No pude consultar los datos ahora. Probá de nuevo en un ratito, o mandá el monto con una nota para registrar un gasto.";
 }
 
+/**
+ * RULE: the bot only ever answers about the current month. Anything older (or
+ * future) is the dashboard's job, so this redirect never invents a number.
+ */
+export function pastPeriodReply(): string {
+  return "Yo te hablo siempre del mes en curso, así no te mezclo los números. Para ver otros meses, abrí el dashboard: ahí podés elegir el mes que quieras.";
+}
+
+/** Escape hatch: a cancel word abandons the open flow instead of re-prompting. */
+export function cancelledReply(): string {
+  return "Listo, lo dejé sin registrar. Cuando quieras arrancamos de nuevo desde el menú.";
+}
+
+/** Last-resort reply when a handler throws: silence is the worst outcome. */
+export function unexpectedErrorReply(): string {
+  return "Uy, algo se me trabó y no pude terminar eso. Probá de nuevo en un ratito.";
+}
+
 export function categoriesQueryReply(categories: { name: string; keywords: string[] }[]): string {
   if (categories.length === 0) {
     return "No tenés categorías todavía.";
@@ -476,8 +494,14 @@ export function recentQueryReply(movements: RecentMovementResult[]): string {
   return `Tus últimos movimientos:\n${lines.join("\n")}`;
 }
 
-export function balanceQueryReply(balance: number, income: number, expenses: number): string {
-  return `Tu balance es ${formatARS(balance)} (ingresos ${formatARS(income)} − gastos ${formatARS(expenses)}).`;
+export function balanceQueryReply(
+  balance: number,
+  income: number,
+  expenses: number,
+  month: string,
+): string {
+  const label = formatMonthLabel(month);
+  return `Tu balance de ${label} es ${formatARS(balance)} (ingresos ${formatARS(income)} − gastos ${formatARS(expenses)}).`;
 }
 
 export function monthQueryReply(month: string, income: number, expenses: number, count: number): string {
@@ -514,7 +538,12 @@ export function queryReplyTemplate(result: QueryExecutionResult): string {
     case "recent":
       return recentQueryReply(result.movements);
     case "balance":
-      return balanceQueryReply(result.balance, result.income, result.expenses);
+      return balanceQueryReply(
+        result.balance,
+        result.income,
+        result.expenses,
+        result.month,
+      );
     case "month":
       return monthQueryReply(result.month, result.monthIncome, result.monthExpenses, result.monthCount);
     case "savings":

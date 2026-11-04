@@ -103,6 +103,35 @@ const PREVISTO_PREFIX_RE = /^(?:gasto\s+fijo\s+|gasto\s+)?previsto\s*:?\s+/i;
 const SIN_AHORRO_RE = /^sin ahorro\s*:?\s*/i;
 const CON_PERCENT_RE = /^con\s+(-?\d+(?:[.,]\d+)?)\s*%/i;
 
+/**
+ * Escape hatch for every text-input state (capture, category name, percent,
+ * savings rule, setup): typing one of these abandons the flow and returns to
+ * idle instead of re-prompting forever. Only a WHOLE message matches, so
+ * "salir a cenar 5000" is still a capture and "nada" while idle is not special.
+ */
+const CANCEL_WORDS = new Set([
+  "cancelar",
+  "cancela",
+  "cancelá",
+  "cancel",
+  "abortar",
+  "salir",
+  "volver",
+  "atras",
+  "atrás",
+  "nada",
+  "olvidalo",
+  "olvídalo",
+]);
+
+export function isCancelText(text: string): boolean {
+  const normalized = text
+    .trim()
+    .toLowerCase()
+    .replace(/[.!¡¿?]+$/u, "");
+  return CANCEL_WORDS.has(normalized);
+}
+
 export function legacyPrefixKind(text: string): LegacyPrefixKind | null {
   if (COMPARTIDO_PREFIX_RE.test(text)) {
     return "compartido";

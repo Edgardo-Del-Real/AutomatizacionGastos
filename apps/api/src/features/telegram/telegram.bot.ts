@@ -2,6 +2,7 @@ import { Bot, type Context } from "grammy";
 import type { Transformer } from "grammy";
 import type { FastifyInstance } from "fastify";
 import type { TelegramService } from "./telegram.service";
+import { unexpectedErrorReply } from "./reply-text";
 import { ACCESS_CALLBACK_PREFIX, type AccessService } from "../access/access.service";
 import type { InlineKeyboard } from "./telegram.parser";
 
@@ -83,9 +84,22 @@ export function createTelegramBot(
 ): Bot {
   const bot = new Bot(token);
 
-  bot.on("message", (ctx) =>
-    service.handleUpdate(ctx.update, buildReplyPort(ctx)),
-  );
+  bot.on("message", async (ctx) => {
+    // An unexpected throw used to leave the owner in silence: grammy logged it
+    // and nobody answered. Now the failure is logged with its stack and the
+    // owner gets an honest apology instead of a dead chat.
+    try {
+      await service.handleUpdate(ctx.update, buildReplyPort(ctx));
+    } catch (error) {
+      console.error(
+        redactToken(
+          error instanceof Error ? (error.stack ?? error.message) : String(error),
+          token,
+        ),
+      );
+      await ctx.reply(unexpectedErrorReply()).catch(() => undefined);
+    }
+  });
 
   // D4 - the callback channel: parse the callback through the service's
   // handleCallback; every processed callback is answered so the spinner stops.
@@ -114,7 +128,13 @@ export function createTelegramBot(
   });
 
   bot.catch((err) => {
-    console.error(redactToken(err.message, token));
+    const cause = err.error;
+    console.error(
+      redactToken(
+        cause instanceof Error ? (cause.stack ?? cause.message) : String(cause),
+        token,
+      ),
+    );
   });
 
   return bot;

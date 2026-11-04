@@ -496,8 +496,7 @@ describe("TelegramService (integration v2)", () => {
 
     await stubbed.handleUpdate(textUpdate({ messageId: 2, text: "cuánto gasté" }), reply);
 
-    expect(replies.at(-1)).toBe(menuReply());
-    expect(replies.at(-2)).toContain("2.500");
+    expect(replies.at(-1)).toContain("2.500");
   });
 
   it("recovery e2e: a removed-state payload recovers to idle with the dropped reply and registers nothing", async () => {
@@ -632,8 +631,7 @@ describe("TelegramService (integration v2)", () => {
 
     await service.handleCallback(callbackUpdate("rep:balance"), reply);
 
-    expect(replies.at(-2)).toContain("2.500");
-    expect(replies.at(-1)).toBe(menuReply());
+    expect(replies.at(-1)).toContain("2.500");
   });
 
   describe("manual savings e2e (PR3)", () => {

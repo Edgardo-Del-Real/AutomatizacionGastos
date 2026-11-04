@@ -610,6 +610,13 @@ describe("TelegramService menu taps (v2 capture type memory)", () => {
     expect(h.replies.at(-1)).toBe(setupQuestionReply([]));
   });
 
+  it("reopens the main menu from the shortcut button on a query answer", async () => {
+    await h.service.handleCallback(callbackUpdate({ data: "m:home", messageId: 88 }), h.reply);
+
+    expect(h.replies.at(-1)).toBe(menuReply());
+    expect((h.keyboards.at(-1) as InlineKeyboard)).toHaveLength(8);
+  });
+
   it("opens the expense-admin sub-menu and supersedes any pending flow", async () => {
     await seedAwaitingCapture(h, "REAL");
 
@@ -1085,7 +1092,7 @@ describe("TelegramService idle routing (v2 pre-checks and brain classification)"
     },
   );
 
-  it("routes a query-classified message through the executor and returns to the menu", async () => {
+  it("routes a query-classified message through the executor without a menu block", async () => {
     h.mockGetSummary.mockResolvedValue({
       ...emptySummary(),
       kpis: { income: 2000, expenses: 500, balance: 1500, count: 2, maxAmount: 2000 },
@@ -1095,8 +1102,13 @@ describe("TelegramService idle routing (v2 pre-checks and brain classification)"
     await h.service.handleUpdate(textUpdate({ text: "cuánto gasté", messageId: 1 }), h.reply);
 
     expect(h.mockCreateExpense).not.toHaveBeenCalled();
-    expect(h.replies.at(-1)).toBe(menuReply());
-    expect(h.replies.at(-2)).toContain("1.500");
+    // One answer, with the menu shortcut on it — not a second message with the
+    // whole eight-button block.
+    expect(h.replies.at(-1)).toContain("1.500");
+    expect(h.replies.at(-1)).not.toBe(menuReply());
+    expect(h.keyboards.at(-1)).toEqual([
+      [{ text: "🏠 Menú", callback_data: "m:home" }],
+    ]);
   });
 
   it("redirects past-period questions to the dashboard without touching the data", async () => {
@@ -1143,14 +1155,13 @@ describe("TelegramService idle routing (v2 pre-checks and brain classification)"
     expect(h.replies.at(-2)).toBe(unresolvableReply());
   });
 
-  it("sends the query redirect plus the menu when the query executor fails", async () => {
+  it("sends the query redirect when the query executor fails", async () => {
     h.mockBrainInterpret.mockResolvedValue({ intent: "query_balance", amount: null, note: null } satisfies ConversationEnvelope);
     h.mockGetSummary.mockRejectedValue(new Error("db down"));
 
     await h.service.handleUpdate(textUpdate({ text: "cuánto gasté", messageId: 1 }), h.reply);
 
-    expect(h.replies.at(-2)).toBe(queryRedirectReply());
-    expect(h.replies.at(-1)).toBe(menuReply());
+    expect(h.replies.at(-1)).toBe(queryRedirectReply());
   });
 
   it("sends a query brain reply verbatim when the brain writes one (fixed template otherwise)", async () => {
@@ -1166,8 +1177,7 @@ describe("TelegramService idle routing (v2 pre-checks and brain classification)"
     expect(h.mockBrainReply).toHaveBeenCalledWith(
       expect.objectContaining({ intent: "query_balance", ok: true, action: "answered" }),
     );
-    expect(h.replies.at(-2)).toBe("Tu balance es $ 1.500,00.");
-    expect(h.replies.at(-1)).toBe(menuReply());
+    expect(h.replies.at(-1)).toBe("Tu balance es $ 1.500,00.");
   });
 
   it("sends a greeting brain reply verbatim and always closes with the menu", async () => {
@@ -2052,11 +2062,12 @@ describe("TelegramService reports sub-menu (rep:*)", () => {
     ["rep:month", "month", "En "],
     ["rep:savings", "savings", "ahorraste"],
     ["rep:planned", "planned", "pendientes"],
-  ] as const)("%s answers from the executed %s query and returns to the menu", async (data, _type, expected) => {
+  ] as const)("%s answers from the executed %s query without a menu block", async (data, _type, expected) => {
     await h.service.handleCallback(callbackUpdate({ data }), h.reply);
 
-    expect(h.replies.at(-2)).toContain(expected);
-    expect(h.replies.at(-1)).toBe(menuReply());
+    expect(h.replies.at(-1)).toContain(expected);
+    expect(h.replies.at(-1)).not.toBe(menuReply());
+    expect(h.keyboards.at(-1)).toEqual([[{ text: "🏠 Menú", callback_data: "m:home" }]]);
   });
 
   it("free text after opening the reports sub-menu is answered from real data", async () => {
@@ -2065,8 +2076,7 @@ describe("TelegramService reports sub-menu (rep:*)", () => {
 
     await h.service.handleUpdate(textUpdate({ text: "cuánto ahorré este mes", messageId: 2 }), h.reply);
 
-    expect(h.replies.at(-2)).toContain("ahorraste");
-    expect(h.replies.at(-1)).toBe(menuReply());
+    expect(h.replies.at(-1)).toContain("ahorraste");
   });
 });
 

@@ -581,6 +581,9 @@ export class TelegramService {
   private async handleMenuCallback(callback: TelegramCallback, ownerId: string, reply?: ReplyPort): Promise<void> {
     const [, sub] = callback.data.split(":");
     switch (sub) {
+      case "home":
+        await this.sendMenu(reply);
+        return;
       case "new":
         await this.startCapture("REAL", ownerId, reply);
         return;
@@ -1814,7 +1817,6 @@ export class TelegramService {
       case "query_month":
       case "query_planned":
         await this.executeQuery(envelope, ownerId, reply);
-        await this.sendMenu(reply);
         return;
       case "query_past":
         // RULE: the bot is current-month only; past and future periods live in
@@ -1846,8 +1848,13 @@ export class TelegramService {
    * reply (falling back to the fixed template). Malformed envelopes and fetch
    * failures degrade to the honest redirect — never invent data.
    */
-  private async executeQuery(envelope: ConversationEnvelope, ownerId: string, reply?: ReplyPort): Promise<void> {
-    const send = this.makeSender(true, reply);
+  private async executeQuery(
+    envelope: ConversationEnvelope,
+    ownerId: string,
+    reply?: ReplyPort,
+    brainActive = true,
+  ): Promise<void> {
+    const send = this.makeSender(brainActive, reply);
     const queryType = deriveQueryType(envelope.intent, envelope.query_type ?? null);
 
     if (queryType === null) {
@@ -1870,18 +1877,26 @@ export class TelegramService {
       return;
     }
 
-    await send(
-      {
-        intent: envelope.intent,
-        ok: true,
-        action: "answered",
-        amount: null,
-        note: null,
-        query_type: queryType,
-        query: result,
-      },
-      queryReplyTemplate(result),
-    );
+    const payload: ExecutionResult = {
+      intent: envelope.intent,
+      ok: true,
+      action: "answered",
+      amount: null,
+      note: null,
+      query_type: queryType,
+      query: result,
+    };
+    const fixed = queryReplyTemplate(result);
+    // The answer carries a single "🏠 Menú" button instead of a second message
+    // with the whole eight-button block: one tap still gets there, and asking
+    // for the balance no longer floods the chat.
+    const text = brainActive ? ((await this.tryBrainReply(payload)) ?? fixed) : fixed;
+    await this.safeReply(reply, text, this.menuShortcutKeyboard(), undefined);
+  }
+
+  /** One tap back to the menu, instead of re-sending the eight-button block. */
+  private menuShortcutKeyboard(): InlineKeyboard {
+    return [[{ text: "🏠 Menú", callback_data: buildCallbackData(["m", "home"]) }]];
   }
 
   private async tryBrainInterpret(body: string): Promise<ConversationEnvelope | null> {
@@ -2412,8 +2427,9 @@ export class TelegramService {
       return;
     }
     const envelope: ConversationEnvelope = { intent: "query", amount: null, note: null, query_type: queryType };
-    await this.executeQuery(envelope, ownerId, reply);
-    await this.sendMenu(reply);
+    // The button already names the query: no LLM round trip, no extra menu
+    // message — the answer alone, with the menu shortcut on it.
+    await this.executeQuery(envelope, ownerId, reply, false);
   }
 
   /**

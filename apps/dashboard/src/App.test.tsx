@@ -273,6 +273,31 @@ describe("App", () => {
     expect(window.location.search).toBe("?mes=2026-10");
   });
 
+  // A section mounts the first time it is opened and stays alive while hidden,
+  // so going back to the list is instant instead of refetching the whole month.
+  it("keeps the list mounted so returning to Movimientos does not refetch", async () => {
+    const user = userEvent.setup();
+    fetchMovementSummaryMock.mockResolvedValue(summary);
+    fetchMovementsMock.mockResolvedValue(movements);
+    fetchCategoriesMock.mockResolvedValue([]);
+
+    await renderApp();
+    await waitFor(() =>
+      expect(screen.getByRole("heading", { name: "Ingresos" })).toBeInTheDocument(),
+    );
+
+    await user.click(screen.getByRole("button", { name: "Movimientos" }));
+    await waitFor(() => expect(screen.getByRole("table")).toBeInTheDocument());
+    expect(fetchMovementsMock).toHaveBeenCalledTimes(1);
+
+    await user.click(screen.getByRole("button", { name: "Resumen" }));
+    expect(screen.queryByRole("table")).toBeNull();
+
+    await user.click(screen.getByRole("button", { name: "Movimientos" }));
+    expect(screen.getByRole("table")).toBeInTheDocument();
+    expect(fetchMovementsMock).toHaveBeenCalledTimes(1);
+  });
+
   it("steps to the previous month with the arrow", async () => {
     const user = userEvent.setup();
     fetchMovementSummaryMock.mockResolvedValue(summary);

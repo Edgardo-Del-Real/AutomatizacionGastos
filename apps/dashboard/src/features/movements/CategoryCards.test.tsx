@@ -78,7 +78,7 @@ describe("CategoryCards", () => {
     expect(within(cards[3]!).getByText("$ 137.700,00")).toBeInTheDocument();
   });
 
-  it("renders no cards when the owner has no created categories", () => {
+  it("still shows the money when the owner has no created categories", () => {
     mockSuccess([]);
 
     render(<CategoryCards categories={summaryCategories} />);
@@ -86,7 +86,46 @@ describe("CategoryCards", () => {
     expect(
       screen.getByRole("heading", { name: "Movimientos por categoría" }),
     ).toBeInTheDocument();
-    expect(screen.queryAllByRole("listitem")).toHaveLength(0);
+    // Hiding a category the owner never created made its money vanish from the
+    // dashboard — exactly what happened with a partner's shared rows.
+    expect(screen.queryAllByRole("listitem")).toHaveLength(3);
+    expect(screen.getByText("$ 1.200,00")).toBeInTheDocument();
+  });
+
+  it("merges the registrant's category spelling with the owner's own", () => {
+    mockSuccess([
+      { name: "Carniceria", keywords: [], type: "MIXED" },
+      { name: "Supermercado", keywords: [], type: "MIXED" },
+    ]);
+
+    render(
+      <CategoryCards
+        categories={[
+          {
+            name: "carnicería",
+            expenseAmount: 21374,
+            incomeAmount: 0,
+            expensePercent: 100,
+            incomePercent: 0,
+          },
+          {
+            name: "dietetica",
+            expenseAmount: 4400,
+            incomeAmount: 0,
+            expensePercent: 100,
+            incomePercent: 0,
+          },
+        ]}
+      />,
+    );
+
+    const cards = screen.getAllByRole("listitem");
+    expect(cards).toHaveLength(3);
+    expect(screen.getByText("$ 21.374,00")).toBeInTheDocument();
+    expect(screen.getByText("$ 4.400,00")).toBeInTheDocument();
+    expect(
+      within(cards[0]!).getByRole("heading", { name: "Carniceria" }),
+    ).toBeInTheDocument();
   });
 
   it("does not duplicate the reserved savings KPI as a category card", () => {

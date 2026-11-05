@@ -15,6 +15,7 @@ import {
   recordApiCalls,
   redactToken,
   registerGracefulStop,
+  sentenceCase,
   startTelegramBot,
   type RecordedApiCall,
 } from "./telegram.bot";
@@ -209,6 +210,30 @@ describe("redactToken", () => {
   });
 });
 
+describe("sentenceCase", () => {
+  it("capitalizes the first letter of the message and of each sentence", () => {
+    expect(sentenceCase("elegí una opción. probá de nuevo.")).toBe(
+      "Elegí una opción. Probá de nuevo.",
+    );
+    expect(sentenceCase("primera línea\nsegunda línea")).toBe(
+      "Primera línea\nSegunda línea",
+    );
+  });
+
+  it("capitalizes the first LETTER, skipping emojis and amounts", () => {
+    expect(sentenceCase("➕ gasto individual")).toBe("➕ Gasto individual");
+    expect(sentenceCase("$ 30.000,00 · gasto individual")).toBe(
+      "$ 30.000,00 · Gasto individual",
+    );
+  });
+
+  it("never lowercases anything, so it cannot shout or mangle names", () => {
+    expect(sentenceCase("confirmá: $ 30.000,00 en SUPERMERCADO")).toBe(
+      "Confirmá: $ 30.000,00 en SUPERMERCADO",
+    );
+  });
+});
+
 describe("createTelegramBot (offline reply recording)", () => {
   let h: BotHarness;
 
@@ -233,7 +258,7 @@ describe("createTelegramBot (offline reply recording)", () => {
     expect(h.mockCreateExpense).not.toHaveBeenCalled();
     const sendMessage = h.recorded.find((call) => call.method === "sendMessage");
     expect(sendMessage).toBeDefined();
-    expect(String(sendMessage?.payload?.text)).toContain("➕ GASTO INDIVIDUAL");
+    expect(String(sendMessage?.payload?.text)).toContain("➕ Gasto individual");
   });
 
   it("attaches the two-column inline keyboard to /start (D2 message reply port)", async () => {
@@ -246,11 +271,11 @@ describe("createTelegramBot (offline reply recording)", () => {
     // every label says "gasto" where it is one.
     expect(markup?.inline_keyboard).toHaveLength(5);
     expect(markup?.inline_keyboard.map((row) => row.map((button) => button.text))).toEqual([
-      ["💰 AHORRO"],
-      ["➕ GASTO INDIVIDUAL", "👥 GASTO COMPARTIDO"],
-      ["📅 GASTO PREVISTO", "➕ INGRESO"],
-      ["📊 REPORTES", "❓ AYUDA"],
-      ["🗂 CATEGORÍAS", "🧾 GASTOS"],
+      ["💰 Ahorro"],
+      ["➕ Gasto individual", "👥 Gasto compartido"],
+      ["📅 Gasto previsto", "➕ Ingreso"],
+      ["📊 Reportes", "❓ Ayuda"],
+      ["🗂 Categorías", "🧾 Gastos"],
     ]);
     expect(markup?.inline_keyboard.map((row) => row.map((button) => button.callback_data))).toEqual([
       ["sa:menu"],
@@ -351,7 +376,7 @@ describe("createTelegramBot callback wiring (D4)", () => {
     // The unknown action is answered honestly AND the callback is answered.
     const sendMessage = h.recorded.find((call) => call.method === "sendMessage");
     expect(sendMessage).toBeDefined();
-    expect(String(sendMessage?.payload?.text)).toContain("NO ESTÁ DISPONIBLE");
+    expect(String(sendMessage?.payload?.text)).toContain("ya no está disponible");
     expect(h.recorded.some((call) => call.method === "answerCallbackQuery")).toBe(true);
   });
 
@@ -379,9 +404,9 @@ describe("createTelegramBot callback wiring (D4)", () => {
 
     const sendMessage = recorded.find((call) => call.method === "sendMessage");
     expect(sendMessage).toBeDefined();
-    expect(String(sendMessage?.payload?.text)).toContain("ELEGÍ UNA OPCIÓN");
+    expect(String(sendMessage?.payload?.text)).toContain("Elegí una opción");
     const markup = sendMessage?.payload?.reply_markup as { inline_keyboard: { text: string; callback_data: string }[][] };
-    expect(markup?.inline_keyboard).toEqual([[{ text: "NUEVO", callback_data: "m:new" }]]);
+    expect(markup?.inline_keyboard).toEqual([[{ text: "Nuevo", callback_data: "m:new" }]]);
     expect(recorded.some((call) => call.method === "answerCallbackQuery")).toBe(true);
   });
 
@@ -412,7 +437,7 @@ describe("createTelegramBot callback wiring (D4)", () => {
     // The fallback sends a NEW message with the same text and keyboard.
     const sendMessage = recorded.find((call) => call.method === "sendMessage");
     expect(sendMessage).toBeDefined();
-    expect(String(sendMessage?.payload?.text)).toContain("PREVIEW ACTUALIZADO");
+    expect(String(sendMessage?.payload?.text)).toContain("Preview actualizado");
     const markup = sendMessage?.payload?.reply_markup as { inline_keyboard: unknown };
     expect(markup?.inline_keyboard).toBeDefined();
     expect(recorded.some((call) => call.method === "editMessageText")).toBe(false);

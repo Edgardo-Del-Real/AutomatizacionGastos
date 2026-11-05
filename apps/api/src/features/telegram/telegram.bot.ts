@@ -59,19 +59,28 @@ export const BOT_COMMANDS = [
  * Returns the message id of a newly sent message (undefined when editing) so
  * the service can track the two-step confirmation message.
  */
+/**
+ * Sentence case: capitalize the first letter of the message and of every new
+ * sentence (after . ! ? or a line break). Everything else keeps the case it was
+ * written in, so the bot does not shout. The first LETTER is what gets
+ * capitalized, so a line that starts with an emoji or an amount still reads
+ * properly.
+ */
+export function sentenceCase(text: string): string {
+  return text.replace(
+    /(^|[\n]|[.!?] +)(\P{L}*)(\p{L})/gu,
+    (_match, boundary: string, skipped: string, letter: string) =>
+      `${boundary}${skipped}${letter.toUpperCase()}`,
+  );
+}
+
 function buildReplyPort(ctx: Context): (text: string, keyboard?: InlineKeyboard, editMessageId?: number) => Promise<number | undefined> {
   return async (text, keyboard, editMessageId) => {
-    // RULE: everything the bot says is uppercase, including button labels. One
-    // choke point here means no message can slip through in another casing.
-    const body = text.toUpperCase();
+    // The bot speaks in sentence case, never in caps; button labels keep the
+    // casing they were authored with.
+    const body = sentenceCase(text);
     const replyMarkup =
-      keyboard === undefined
-        ? undefined
-        : {
-            inline_keyboard: keyboard.map((row) =>
-              row.map((button) => ({ ...button, text: button.text.toUpperCase() })),
-            ),
-          };
+      keyboard === undefined ? undefined : { inline_keyboard: keyboard.map((row) => row.map((button) => ({ ...button }))) };
     if (editMessageId !== undefined && ctx.chat !== undefined) {
       try {
         await ctx.api.editMessageText(ctx.chat.id, editMessageId, body, { reply_markup: replyMarkup });

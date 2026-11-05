@@ -9,6 +9,8 @@ import { UserService } from "./features/auth/user.service";
 import { loadHousehold, seedUsers } from "./features/auth/user.seed";
 import { PrismaAccessRepository } from "./features/access/access.repository";
 import { AccessService, type Notifier } from "./features/access/access.service";
+import { RecurringScheduler } from "./features/recurring/recurring.scheduler";
+import { createRecurringNotifier } from "./features/telegram/recurring.notifier";
 import {
   createTelegramBot,
   redactToken,
@@ -76,6 +78,20 @@ notifierPort = {
     await bot.api.editMessageText(chatId, messageId, text);
   },
 };
+
+// recurring-fixed-expense: the notifier needs the bot's API client, and the
+// scheduler needs the notifier. Both are wired once the bot exists.
+app.bindRecurringNotifier(
+  createRecurringNotifier(bot, async (ownerId) => {
+    const user = await userRepository.findById(ownerId);
+    return user?.chatId ?? null;
+  }),
+);
+const recurringScheduler = new RecurringScheduler(app.recurringService, (message) =>
+  app.log.info(message),
+);
+app.recurringService.setCreatedHook(() => recurringScheduler.reschedule());
+recurringScheduler.start();
 
 registerGracefulStop(app, bot);
 

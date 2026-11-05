@@ -16,6 +16,8 @@ import { CategoryService } from "./features/categories/categories.service";
 import { PrismaBotStateRepository } from "./features/telegram/bot-state.repository";
 import { GroqBotBrain } from "./features/telegram/bot-brain";
 import { TelegramService } from "./features/telegram/telegram.service";
+import { RecurringRepository } from "./features/recurring/recurring.repository";
+import { RecurringService, type RecurringNotifier } from "./features/recurring/recurring.service";
 import { PrismaSavingsRuleRepository } from "./features/savings/savings.repository";
 import { SavingsRuleService } from "./features/savings/savings.service";
 import { parseHouseholdMembers, type HouseholdMember } from "./features/household/household.config";
@@ -82,6 +84,10 @@ export function buildApp(options: AppOptions = {}): FastifyInstance {
     // AD9: the household registry gates and attributes every chat; in
     // single-user mode it holds only the `default` member with the owner chat.
     household: householdService,
+    recurring: {
+      createRule: (input) => recurringService.create(input),
+      confirm: (confirmationId, amount) => recurringService.confirm(confirmationId, amount),
+    },
     logger: (message: string) => console.log(message),
     // Deterministic-only when no key: no brain is constructed and
     // `interpret`/`reply` are never invoked (spec "Missing key means no brain").
@@ -120,6 +126,47 @@ export function buildApp(options: AppOptions = {}): FastifyInstance {
   void app.register(movementsRoute, { movementService, categoryService, householdService });
   void app.register(householdRoute, { householdService });
   app.decorate("telegramService", telegramService);
+
+  // recurring-fixed-expense: the service is created here (it needs the expense
+  // service), but its notifier needs the bot, which is built afterwards in the
+  // composition root. The holder is the same late-binding trick the access
+  // flow uses.
+  const recurringNotifier: { current: RecurringNotifier | null } = { current: null };
+  function requireNotifier(): RecurringNotifier {
+    if (recurringNotifier.current === null) {
+      throw new Error("recurring notifier is not wired yet");
+    }
+    return recurringNotifier.current;
+  }
+  const recurringService = new RecurringService(
+    new RecurringRepository(prisma),
+    {
+      create: async (input) => {
+        await expenseService.createExpense(
+          {
+            amount: input.amount,
+            category: input.category,
+            note: input.note,
+            occurredAt: input.occurredAt,
+            type: "EXPENSE",
+            status: "PAID",
+            visibility: "INDIVIDUAL",
+            currency: "ARS",
+          },
+          input.ownerId,
+        );
+      },
+    },
+    {
+      ask: (input) => requireNotifier().ask(input),
+      remind: (input) => requireNotifier().remind(input),
+      resolved: (input) => requireNotifier().resolved(input),
+    },
+  );
+  app.decorate("recurringService", recurringService);
+  app.decorate("bindRecurringNotifier", (notifier: RecurringNotifier) => {
+    recurringNotifier.current = notifier;
+  });
 
   return app;
 }

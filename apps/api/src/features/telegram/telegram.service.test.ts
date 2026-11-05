@@ -1409,7 +1409,7 @@ describe("TelegramService commands (v2 surface)", () => {
     expect(h.replies.at(-1)).toBe(menuReply());
     const kb = h.keyboards.at(-1) as InlineKeyboard;
     expect(kb.map((row) => row.map((button) => button.text))).toEqual([
-      ["💰 Ahorro"],
+      ["💰 Ahorro", "🔁 Gasto fijo"],
       ["➕ Gasto individual", "👥 Gasto compartido"],
       ["📅 Gasto previsto", "➕ Ingreso"],
       ["📊 Reportes", "❓ Ayuda"],

@@ -71,6 +71,12 @@ import {
   previstoPrefixRedirectReply,
   queryRedirectReply,
   pastPeriodReply,
+  fixedDayPickFirstReply,
+  recurringCreatedReply,
+  recurringFixedAmountInvalidReply,
+  recurringFixedAmountPromptReply,
+  recurringFixedAmountSavedReply,
+  recurringUnavailableReply,
   queryReplyTemplate,
   questionDroppedReply,
   reassignCategoryReply,
@@ -133,6 +139,18 @@ export type TelegramServiceDeps = {
   logger?: (message: string) => void;
   /** Optional LLM brain; when absent the bot runs deterministic-only. */
   brain?: BotBrain;
+  // recurring-fixed-expense: optional so every existing harness keeps building
+  // without it; the FIJO flow degrades honestly when it is absent.
+  recurring?: {
+    createRule(input: {
+      ownerId: string;
+      amount: number;
+      note: string | null;
+      category: string;
+      notifyDay: number;
+    }): Promise<unknown>;
+    confirm(confirmationId: string, amount?: number): Promise<boolean>;
+  };
 };
 
 const IDLE = "idle";
@@ -155,9 +173,11 @@ const AWAITING_MANUAL_SAVINGS = "awaiting_manual_savings";
 // state from awaiting_savings_percent on purpose (different domain: 1..99
 // percent-or-amount vs 0..100 percent-only).
 const AWAITING_SHARED_PERCENT = "awaiting_shared_percent";
+// recurring-fixed-expense: the owner tapped "Corregir monto" and is typing it.
+const AWAITING_FIXED_AMOUNT = "awaiting_fixed_amount";
 
 /** v2 capture types — chosen ONLY by the main-menu tap (spec quick-capture "Type Selection by Menu"). */
-export type CaptureType = "REAL" | "PENDING" | "INGRESO" | "COMPARTIDO";
+export type CaptureType = "REAL" | "PENDING" | "INGRESO" | "COMPARTIDO" | "FIJO";
 
 /** D4 — random 8-hex save token gating the preview Guardar callback (idempotency). */
 function newSaveToken(): string {
@@ -171,7 +191,7 @@ function newSaveToken(): string {
  * the menu tap. Lives in `BotState.pendingNote` so it survives restarts.
  */
 export const capturePayloadSchema = z.object({
-  type: z.enum(["REAL", "PENDING", "INGRESO", "COMPARTIDO"]),
+  type: z.enum(["REAL", "PENDING", "INGRESO", "COMPARTIDO", "FIJO"]),
 });
 
 export type CapturePayload = z.infer<typeof capturePayloadSchema>;
@@ -201,7 +221,7 @@ export type SavingsOverridePayload = z.infer<typeof savingsOverrideSchema>;
 export const previewPayloadSchema = z.object({
   amount: z.number().positive(),
   note: z.string().nullable(),
-  type: z.enum(["REAL", "PENDING", "INGRESO", "COMPARTIDO"]),
+  type: z.enum(["REAL", "PENDING", "INGRESO", "COMPARTIDO", "FIJO"]),
   category: z.string().min(1).nullable(),
   saveToken: z.string().regex(/^[0-9a-f]{8}$/),
   confirmMessageId: z.number().int().positive().optional(),
@@ -212,6 +232,10 @@ export const previewPayloadSchema = z.object({
   // optional (fractional 1..99, D9) so persisted previews without it keep
   // decoding and corrupt-payload recovery does not regress.
   sharedPercent: z.number().min(1).max(99).optional(),
+  // recurring-fixed-expense: the day the owner picked for this template. Absent
+  // on persisted previews (and on every non-FIJO type), so decoding never
+  // regresses for old payloads.
+  notifyDay: z.number().int().min(1).max(6).optional(),
 });
 
 export type PreviewPayload = z.infer<typeof previewPayloadSchema>;
@@ -460,6 +484,9 @@ export class TelegramService {
       case AWAITING_SHARED_PERCENT:
         await this.handleAwaitingSharedPercent(body, ownerId, reply);
         return;
+      case AWAITING_FIXED_AMOUNT:
+        await this.handleFixedAmountInput(body, ownerId, reply);
+        return;
       case AWAITING_SAVINGS_RULE:
         await this.handleAwaitingSavingsRule(body, ownerId, reply);
         return;
@@ -529,6 +556,12 @@ export class TelegramService {
       case "cp":
         await this.handleCategoryPickCallback(callback, ownerId, reply);
         return;
+      case "fd":
+        await this.handleFixedDayCallback(callback, ownerId, reply);
+        return;
+      case "rf":
+        await this.handleRecurringDecision(callback, ownerId, reply);
+        return;
       case "dc":
         await this.handleDeleteGateCallback(callback, ownerId, reply);
         return;
@@ -583,6 +616,11 @@ export class TelegramService {
     switch (sub) {
       case "home":
         await this.sendMenu(reply);
+        return;
+      case "fix":
+        // recurring-fixed-expense: same capture chain as the other types, plus
+        // the day step on the confirmation.
+        await this.startCapture("FIJO", ownerId, reply);
         return;
       case "new":
         await this.startCapture("REAL", ownerId, reply);
@@ -671,8 +709,12 @@ export class TelegramService {
       reply,
       menuReply(),
       [
-        // Savings entry point, first: it used to be hidden inside ❓ Ayuda.
-        [{ text: "💰 Ahorro", callback_data: buildCallbackData(["sa", "menu"]) }],
+        // Savings entry point and the monthly fixed expense, first: savings
+        // used to be hidden inside ❓ Ayuda.
+        [
+          { text: "💰 Ahorro", callback_data: buildCallbackData(["sa", "menu"]) },
+          { text: "🔁 Gasto fijo", callback_data: buildCallbackData(["m", "fix"]) },
+        ],
         // Expenses together: individual next to shared (they were at opposite
         // ends), then previsto, then ingreso. Consultar before administrar.
         [
@@ -864,6 +906,21 @@ export class TelegramService {
         { text: "Otro", callback_data: `sp:other:${payload.saveToken}` },
       ]);
     }
+    if (payload.type === "FIJO") {
+      // recurring-fixed-expense: the owner picks the day the bot asks, 1..6,
+      // in two rows. Guardar stays gated until one is chosen.
+      const days = [1, 2, 3, 4, 5, 6];
+      rows.push(
+        days.slice(0, 3).map((day) => ({
+          text: `Día ${day}`,
+          callback_data: buildCallbackData(["fd", String(day), payload.saveToken]),
+        })),
+        days.slice(3).map((day) => ({
+          text: `Día ${day}`,
+          callback_data: buildCallbackData(["fd", String(day), payload.saveToken]),
+        })),
+      );
+    }
     rows.push([
       { text: "✅ Guardar", callback_data: buildCallbackData(["pv", "save", payload.saveToken]) },
       { text: "✏️ Corregir", callback_data: buildCallbackData(["pv", "edit", payload.saveToken]) },
@@ -918,7 +975,7 @@ export class TelegramService {
     const keyboard = this.previewConfirmKeyboard(payload, hasPartner);
     return this.safeReply(
       reply,
-      previewConfirmReply(payload.amount, payload.note, payload.type, category, savingsChoice, payload.sharedPercent),
+      previewConfirmReply(payload.amount, payload.note, payload.type, category, savingsChoice, payload.sharedPercent, payload.notifyDay),
       keyboard,
       editMessageId,
     );
@@ -964,6 +1021,12 @@ export class TelegramService {
           payload.sharedPercent === undefined
         ) {
           await this.safeReply(reply, sharedPickFirstReply());
+          return;
+        }
+        // recurring-fixed-expense: the day is required, same discipline as the
+        // category and the shared percent — Guardar without it saves nothing.
+        if (payload.type === "FIJO" && payload.notifyDay === undefined) {
+          await this.safeReply(reply, fixedDayPickFirstReply());
           return;
         }
         await this.savePreview(payload, ownerId, reply);
@@ -1306,7 +1369,28 @@ export class TelegramService {
    */
   private async savePreview(payload: PreviewPayload, ownerId: string, reply?: ReplyPort): Promise<void> {
     await this.deps.botStateRepository.set({ ownerId, state: IDLE, pendingMovementId: null, pendingNote: null });
-    // D5 — absent savings field defaults to the neutral override: the rule decides.
+
+    // recurring-fixed-expense: FIJO does not create a movement, it creates the
+    // monthly template the bot will ask about every month.
+    if (payload.type === "FIJO") {
+      const created = await this.deps.recurring?.createRule({
+        ownerId,
+        amount: payload.amount,
+        note: payload.note,
+        category: payload.category as string,
+        notifyDay: payload.notifyDay ?? 1,
+      });
+      await this.safeReply(
+        reply,
+        created === undefined || created === null
+          ? recurringUnavailableReply()
+          : recurringCreatedReply(payload.amount, payload.note, payload.category as string, payload.notifyDay ?? 1),
+      );
+      await this.sendMenu(reply);
+      return;
+    }
+
+    // D5 - absent savings field defaults to the neutral override: the rule decides.
     await this.registerCapture(
       payload.amount,
       payload.note,
@@ -1368,7 +1452,7 @@ export class TelegramService {
       return;
     }
 
-    // cat:<id> — resolve the id → name at callback time; a deleted category
+    // cat:<id> - resolve the id → name at callback time; a deleted category
     // re-renders the preview without a selection (state stays open).
     const categoryId = value;
     const categories = await this.deps.categoryService.listCategories(ownerId);
@@ -1415,6 +1499,121 @@ export class TelegramService {
     }
 
     await this.safeReply(reply, callbackUnavailableReply());
+  }
+
+  /**
+   * `fd:<day>:<token>` — recurring-fixed-expense: persists the day the owner
+   * picked for the template and re-renders the confirmation in place. The
+   * state+token gate is the same one every preview callback uses.
+   */
+  private async handleFixedDayCallback(
+    callback: TelegramCallback,
+    ownerId: string,
+    reply?: ReplyPort,
+  ): Promise<void> {
+    const [, rawDay, token] = callback.data.split(":");
+    const day = Number(rawDay);
+    const state = await this.deps.botStateRepository.get(ownerId);
+    const payload = this.decodePreviewPayload(state?.pendingNote ?? null);
+
+    if (
+      state?.state !== AWAITING_PREVIEW ||
+      payload === null ||
+      payload.type !== "FIJO" ||
+      payload.saveToken !== token ||
+      !Number.isInteger(day) ||
+      day < 1 ||
+      day > 6
+    ) {
+      await this.safeReply(reply, alreadyProcessedReply());
+      return;
+    }
+
+    const updated: PreviewPayload = { ...payload, notifyDay: day };
+    await this.deps.botStateRepository.set({
+      ownerId,
+      state: AWAITING_PREVIEW,
+      pendingMovementId: null,
+      pendingNote: JSON.stringify(updated),
+    });
+    await this.renderPreviewConfirmation(
+      ownerId,
+      updated,
+      updated.category as string,
+      reply,
+      updated.confirmMessageId,
+    );
+  }
+
+  /**
+   * `rf:ok:<id>` / `rf:fix:<id>` — the two buttons of the monthly fixed-expense
+   * question. OK turns the confirmation into a PAID movement right away; fix
+   * opens the amount input and leaves the question open.
+   */
+  private async handleRecurringDecision(
+    callback: TelegramCallback,
+    ownerId: string,
+    reply?: ReplyPort,
+  ): Promise<void> {
+    const [, decision, confirmationId] = callback.data.split(":");
+    if (confirmationId === undefined || confirmationId === "") {
+      await this.safeReply(reply, callbackUnavailableReply());
+      return;
+    }
+    if (this.deps.recurring === undefined) {
+      await this.safeReply(reply, recurringUnavailableReply());
+      return;
+    }
+
+    if (decision === "ok") {
+      const done = await this.deps.recurring.confirm(confirmationId);
+      if (!done) {
+        await this.safeReply(reply, alreadyProcessedReply());
+      }
+      return;
+    }
+
+    if (decision === "fix") {
+      await this.deps.botStateRepository.set({
+        ownerId,
+        state: AWAITING_FIXED_AMOUNT,
+        pendingMovementId: confirmationId,
+        pendingNote: null,
+      });
+      await this.safeReply(reply, recurringFixedAmountPromptReply());
+      return;
+    }
+
+    await this.safeReply(reply, callbackUnavailableReply());
+  }
+
+  /**
+   * The corrected amount for a fixed expense: parsed with the same capture
+   * parser every other amount uses, then handed to the recurring service.
+   */
+  private async handleFixedAmountInput(
+    body: string,
+    ownerId: string,
+    reply?: ReplyPort,
+  ): Promise<void> {
+    const state = await this.deps.botStateRepository.get(ownerId);
+    const confirmationId = state?.pendingMovementId ?? null;
+    if (state?.state !== AWAITING_FIXED_AMOUNT || confirmationId === null) {
+      await this.deps.botStateRepository.set({ ownerId, state: IDLE, pendingMovementId: null, pendingNote: null });
+      await this.safeReply(reply, questionDroppedReply());
+      return;
+    }
+
+    const parsed = captureParse(body);
+    if (parsed === null) {
+      await this.safeReply(reply, recurringFixedAmountInvalidReply());
+      return;
+    }
+
+    await this.deps.botStateRepository.set({ ownerId, state: IDLE, pendingMovementId: null, pendingNote: null });
+    const done = await this.deps.recurring?.confirm(confirmationId, parsed.amount) ?? false;
+    await this.safeReply(reply, done ? recurringFixedAmountSavedReply(parsed.amount) : alreadyProcessedReply());
+    await this.sendMenu(reply);
   }
 
   /** Decodes a persisted `awaiting_savings_percent` payload; corrupt JSON yields null. */

@@ -162,3 +162,47 @@ model AccessGrant {
 
   @@index([requesterId, expiresAt])
 }
+
+// recurring-fixed-expense: a monthly template the bot asks about before it
+// loads the expense. `nextRunAt` is the ONE value the scheduler reads, so it
+// never polls for "is it day 1".
+model RecurringExpense {
+  id         String   @id @default(cuid())
+  ownerId    String
+  amount     Decimal  @db.Decimal(12, 2)
+  note       String?
+  category   String
+  /// 1..6, the days the owner may pick when creating the template.
+  notifyDay  Int
+  active     Boolean  @default(true)
+  nextRunAt  DateTime
+  createdAt  DateTime @default(now())
+
+  confirmations RecurringConfirmation[]
+
+  @@index([ownerId])
+  @@index([active, nextRunAt])
+}
+
+// One row per template per month: the unique key is what makes the scheduler
+// idempotent across restarts and double ticks.
+model RecurringConfirmation {
+  id          String    @id @default(cuid())
+  recurringId String
+  ownerId     String
+  /// "YYYY-MM" in Buenos Aires.
+  period      String
+  /// The moment this cycle was due (the rule's nextRunAt for this month).
+  scheduledAt DateTime
+  amount      Decimal   @db.Decimal(12, 2)
+  status      String    @default("PENDING")
+  messageId   Int?
+  createdAt   DateTime  @default(now())
+  decidedAt   DateTime?
+  remindedAt  DateTime?
+
+  recurring RecurringExpense @relation(fields: [recurringId], references: [id], onDelete: Cascade)
+
+  @@unique([recurringId, period])
+  @@index([status, createdAt])
+}

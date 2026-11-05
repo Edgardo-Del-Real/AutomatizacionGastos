@@ -271,14 +271,14 @@ describe("createTelegramBot (offline reply recording)", () => {
     // every label says "gasto" where it is one.
     expect(markup?.inline_keyboard).toHaveLength(5);
     expect(markup?.inline_keyboard.map((row) => row.map((button) => button.text))).toEqual([
-      ["💰 Ahorro"],
+      ["💰 Ahorro", "🔁 Gasto fijo"],
       ["➕ Gasto individual", "👥 Gasto compartido"],
       ["📅 Gasto previsto", "➕ Ingreso"],
       ["📊 Reportes", "❓ Ayuda"],
       ["🗂 Categorías", "🧾 Gastos"],
     ]);
     expect(markup?.inline_keyboard.map((row) => row.map((button) => button.callback_data))).toEqual([
-      ["sa:menu"],
+      ["sa:menu", "m:fix"],
       ["m:new", "m:shr"],
       ["m:prev", "m:inc"],
       ["m:rep", "m:help"],

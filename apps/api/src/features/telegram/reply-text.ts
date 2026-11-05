@@ -39,14 +39,16 @@ function formatPercent(percent: number): string {
  * Every expense type says "gasto": "real"/"compartido" alone never told the
  * owner that a shared capture is still an expense.
  */
-function captureTypeLabel(type: "REAL" | "PENDING" | "INGRESO" | "COMPARTIDO"): string {
+function captureTypeLabel(type: "REAL" | "PENDING" | "INGRESO" | "COMPARTIDO" | "FIJO"): string {
   return type === "PENDING"
     ? "gasto previsto"
     : type === "INGRESO"
       ? "ingreso"
       : type === "COMPARTIDO"
         ? "gasto compartido"
-        : "gasto individual";
+        : type === "FIJO"
+          ? "gasto fijo mensual"
+          : "gasto individual";
 }
 
 export function successReply(amount: number, note: string | null, category: string): string {
@@ -80,7 +82,7 @@ export function plannedReply(amount: number, note: string | null, category: stri
 export function previewReply(
   amount: number,
   note: string | null,
-  type: "REAL" | "PENDING" | "INGRESO" | "COMPARTIDO",
+  type: "REAL" | "PENDING" | "INGRESO" | "COMPARTIDO" | "FIJO",
 ): string {
   const noteLine = note === null ? "" : `\n${truncateNote(note)}`;
   return `¿A qué categoría va?\n\n${formatARS(amount)} · ${captureTypeLabel(type)}${noteLine}`;
@@ -99,10 +101,11 @@ export function previewReply(
 export function previewConfirmReply(
   amount: number,
   note: string | null,
-  type: "REAL" | "PENDING" | "INGRESO" | "COMPARTIDO",
+  type: "REAL" | "PENDING" | "INGRESO" | "COMPARTIDO" | "FIJO",
   category: string,
   savingsChoice?: SavingsChoice,
   sharedPercent?: number,
+  notifyDay?: number,
 ): string {
   const lines = [`${formatARS(amount)} · ${captureTypeLabel(type)}`];
   if (note !== null) {
@@ -114,6 +117,11 @@ export function previewConfirmReply(
   }
   if (sharedPercent !== undefined) {
     lines.push(sharedLineLabel(sharedPercent));
+  }
+  if (notifyDay !== undefined) {
+    // recurring-fixed-expense: without this the "Día N" tap gave no visible
+    // feedback, so the owner could not tell whether it registered.
+    lines.push(`Aviso: día ${notifyDay} de cada mes, 12:30`);
   }
   return `Confirmá el movimiento:\n\n${lines.join("\n")}`;
 }
@@ -483,6 +491,59 @@ export function cancelledReply(): string {
 /** Last-resort reply when a handler throws: silence is the worst outcome. */
 export function unexpectedErrorReply(): string {
   return "Uy, algo se me trabó y no pude terminar eso. Probá de nuevo en un ratito.";
+}
+
+// ------------------------------------------------- recurring-fixed-expense
+
+/** "Se está por autogenerar…": the question, before any expense exists. */
+export function recurringAskReply(amount: number, note: string | null): string {
+  const notePart = note === null || note.trim() === "" ? "" : ` (${truncateNote(note)})`;
+  return `Se está por autogenerar el gasto fijo de ${formatARS(amount)}${notePart}.\nConfirmá por favor si el valor es el correcto.`;
+}
+
+export function recurringReminderReply(amount: number, note: string | null): string {
+  const notePart = note === null || note.trim() === "" ? "" : ` (${truncateNote(note)})`;
+  return `Te recuerdo el gasto fijo de ${formatARS(amount)}${notePart}: todavía no me dijiste si el valor está bien.`;
+}
+
+export function recurringResolvedReply(amount: number, note: string | null): string {
+  const notePart = note === null || note.trim() === "" ? "" : ` (${truncateNote(note)})`;
+  return `Listo, cargué el gasto fijo de ${formatARS(amount)}${notePart}.`;
+}
+
+/** Asks for the corrected amount after "Corregir monto". */
+export function recurringFixedAmountPromptReply(): string {
+  return "Mandame el monto nuevo del gasto fijo, por ejemplo: 340000.";
+}
+
+export function recurringFixedAmountInvalidReply(): string {
+  return "No pude leer el monto. Mandame solo el número, por ejemplo: 340000. O escribí cancelar.";
+}
+
+/** The confirmation of a brand-new fixed-expense template. */
+export function recurringCreatedReply(
+  amount: number,
+  note: string | null,
+  category: string,
+  notifyDay: number,
+): string {
+  const notePart = note === null || note.trim() === "" ? "" : ` (${truncateNote(note)})`;
+  return `Listo, quedó el gasto fijo de ${formatARS(amount)}${notePart} en ${category}. Te voy a preguntar el día ${notifyDay} de cada mes a las 12:30.`;
+}
+
+/** Guardar tapped before a day was chosen. */
+export function fixedDayPickFirstReply(): string {
+  return "Elegí el día del mes en que querés que te avise (1 a 6) y después Guardar.";
+}
+
+/** The recurring port is not wired (tests, or a deploy without it). */
+export function recurringUnavailableReply(): string {
+  return "No pude guardar el gasto fijo ahora. Probá de nuevo en un ratito.";
+}
+
+/** Outcome of "Corregir monto" with the new value. */
+export function recurringFixedAmountSavedReply(amount: number): string {
+  return `Listo, cargué el gasto fijo por ${formatARS(amount)}.`;
 }
 
 export function categoriesQueryReply(categories: { name: string; keywords: string[] }[]): string {

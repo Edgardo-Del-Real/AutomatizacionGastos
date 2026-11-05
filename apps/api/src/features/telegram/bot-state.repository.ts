@@ -25,6 +25,8 @@ export const BOT_STATES = [
   "awaiting_manual_savings",
   // shared-expense-split (D1): the COMPARTIDO [Otro] percent input.
   "awaiting_shared_percent",
+  // recurring-fixed-expense: the "Corregir monto" amount input.
+  "awaiting_fixed_amount",
 ] as const;
 
 export type BotStateName = (typeof BOT_STATES)[number];

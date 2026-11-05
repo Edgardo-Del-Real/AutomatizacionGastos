@@ -51,7 +51,7 @@ describe("expenses route", () => {
       payload: {
         amount: 1200.5,
         currency: "ARS",
-        category: "food",
+        category: "FOOD",
         note: "Mercado",
         occurredAt: "2026-08-01T12:00:00.000Z",
       },
@@ -62,7 +62,7 @@ describe("expenses route", () => {
     expect(body.amount).toBe(1200.5);
     expect(body.ownerId).toBe("owner-1");
     expect(body.currency).toBe("ARS");
-    expect(body.category).toBe("food");
+    expect(body.category).toBe("FOOD");
     expect(body.note).toBe("Mercado");
     expect(body.id).toBeTruthy();
   });
@@ -89,7 +89,7 @@ describe("expenses route", () => {
 
     expect(response.statusCode).toBe(201);
     const body = response.json();
-    expect(body.category).toBe("ahorro");
+    expect(body.category).toBe("AHORRO");
 
     const movements = await app.inject({ method: "GET", url: "/movements?ownerId=owner-1" });
     const list = movements.json() as { type: string; savingsOrigin: string | null }[];

@@ -48,11 +48,11 @@ describe("categories service (integration)", () => {
     const created = await service.createCategory("owner-1", "Cafe");
 
     expect(created.ownerId).toBe("owner-1");
-    expect(created.name).toBe("Cafe");
+    expect(created.name).toBe("CAFE");
 
     const list = await service.listCategories("owner-1");
     expect(list).toHaveLength(1);
-    expect(list[0]).toMatchObject({ name: "Cafe", keywords: [] });
+    expect(list[0]).toMatchObject({ name: "CAFE", keywords: [] });
   });
 
   it("rejects a duplicate exact name with 422", async () => {
@@ -99,13 +99,13 @@ describe("categories service (integration)", () => {
 
     const renamed = await service.renameCategory("owner-1", "Cafe", "Cafeteria");
 
-    expect(renamed?.name).toBe("Cafeteria");
+    expect(renamed?.name).toBe("CAFETERIA");
     const movements = await prisma.expense.findMany({ where: { ownerId: "owner-1" } });
     expect(movements).toHaveLength(2);
-    expect(movements.every((m) => m.category === "Cafeteria")).toBe(true);
+    expect(movements.every((m) => m.category === "CAFETERIA")).toBe(true);
 
     const list = await service.listCategories("owner-1");
-    expect(list[0]).toMatchObject({ name: "Cafeteria", keywords: ["cafe"] });
+    expect(list[0]).toMatchObject({ name: "CAFETERIA", keywords: ["cafe"] });
     expect(cafe.id).toBe(renamed?.id);
   });
 
@@ -131,7 +131,7 @@ describe("categories service (integration)", () => {
     const primero = await service.ensureOtro("owner-1");
     const segundo = await service.ensureOtro("owner-1");
 
-    expect(primero.name).toBe("otro");
+    expect(primero.name).toBe("OTRO");
     expect(segundo.id).toBe(primero.id);
     const count = await prisma.category.count({ where: { ownerId: "owner-1" } });
     expect(count).toBe(1);
@@ -174,7 +174,7 @@ describe("categories service (integration)", () => {
     await service.associateKeyword("owner-1", "uber", "Transporte");
     await service.ensureOtro("owner-1");
 
-    expect(await service.matchNote("owner-1", "pague $1200 en uber viaje")).toBe("Transporte");
+    expect(await service.matchNote("owner-1", "pague $1200 en uber viaje")).toBe("TRANSPORTE");
     expect(await service.matchNote("owner-1", "pague $300 en la farmacia")).toBeNull();
   });
 
@@ -186,9 +186,9 @@ describe("categories service (integration)", () => {
 
       const deleted = await service.deleteCategory("owner-1", "Viajes");
 
-      expect(deleted?.name).toBe("Viajes");
+      expect(deleted?.name).toBe("VIAJES");
       const remaining = await prisma.category.findMany({ where: { ownerId: "owner-1" } });
-      expect(remaining.map((category) => category.name)).toEqual(["otro"]);
+      expect(remaining.map((category) => category.name)).toEqual(["OTRO"]);
       const keywords = await prisma.categoryKeyword.findMany({ where: { ownerId: "owner-1" } });
       expect(keywords).toHaveLength(0);
     });
@@ -228,7 +228,7 @@ describe("categories service (integration)", () => {
 
       const deleted = await service.deleteCategory("owner-1", "café");
 
-      expect(deleted?.name).toBe("Cafe");
+      expect(deleted?.name).toBe("CAFE");
       expect(await prisma.category.count({ where: { ownerId: "owner-1" } })).toBe(0);
     });
 
@@ -260,7 +260,7 @@ describe("categories service (integration)", () => {
     it("allows gastos fijos as an EXPENSE category for planned and paid movements", async () => {
       const created = await service.createCategory("owner-1", "gastos fijos", "EXPENSE");
 
-      expect(created.name).toBe("gastos fijos");
+      expect(created.name).toBe("GASTOS FIJOS");
       expect(created.type).toBe("EXPENSE");
     });
 
@@ -291,7 +291,7 @@ describe("categories service (integration)", () => {
         ReservedCategoryError,
       );
       const list = await service.listCategories("owner-1");
-      expect(list.map((category) => category.name)).toEqual(["Gastos varios"]);
+      expect(list.map((category) => category.name)).toEqual(["GASTOS VARIOS"]);
     });
 
     it("rejects a duplicate-variant create naming the existing category", async () => {
@@ -301,7 +301,7 @@ describe("categories service (integration)", () => {
         ValidationFailedError,
       );
       await expect(service.createCategory("owner-1", "transportes")).rejects.toMatchObject({
-        message: 'Category "transporte" already exists',
+        message: 'Category "TRANSPORTE" already exists',
       });
       expect(await prisma.category.count({ where: { ownerId: "owner-1" } })).toBe(1);
     });
@@ -314,7 +314,7 @@ describe("categories service (integration)", () => {
         ValidationFailedError,
       );
       const list = await service.listCategories("owner-1");
-      expect(list.map((category) => category.name).sort()).toEqual(["Farmacia", "cafe"]);
+      expect(list.map((category) => category.name).sort()).toEqual(["CAFE", "FARMACIA"]);
     });
 
     it("phantoms stay deletable: a pre-change reserved-name category can be deleted", async () => {
@@ -328,7 +328,7 @@ describe("categories service (integration)", () => {
 
       expect(deleted?.name).toBe("previsto");
       const remaining = await prisma.category.findMany({ where: { ownerId: "owner-1" } });
-      expect(remaining.map((category) => category.name)).toEqual(["Previsto viejo"]);
+      expect(remaining.map((category) => category.name)).toEqual(["PREVISTO VIEJO"]);
     });
   });
 });

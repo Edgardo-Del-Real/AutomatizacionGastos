@@ -40,18 +40,36 @@ export class PrismaCategoryRepository implements CategoryRepository {
 
   async rename(ownerId: string, fromName: string, toName: string): Promise<CategoryEntity | null> {
     return this.prisma.$transaction(async (tx) => {
-      const updated = await tx.category.updateMany({
-        where: { ownerId, name: fromName },
-        data: { name: toName },
-      });
-      if (updated.count === 0) {
+      // Resolve by NORMALIZED name: the caller may type "Cafe" while the row is
+      // stored as "CAFE", and the movement cascade must use the STORED spelling
+      // (updating by the typed one silently skipped every movement).
+      const rows = await tx.category.findMany({ where: { ownerId } });
+      const target = rows.find(
+        (row) => normalizeForMatch(row.name) === normalizeForMatch(fromName),
+      );
+      if (target === undefined) {
         return null;
       }
-      // Rename cascade (D1): every movement referencing the name follows in one UPDATE.
-      await tx.expense.updateMany({
-        where: { ownerId, category: fromName },
-        data: { category: toName },
+      await tx.category.update({ where: { id: target.id }, data: { name: toName } });
+      // Rename cascade (D1): every movement referencing the name follows in one
+      // pass. Matched by NORMALIZED name, because a row written before the
+      // canonical form existed may still carry "Cafe" while the category is
+      // stored as "CAFE".
+      const movements = await tx.expense.findMany({
+        where: { ownerId },
+        select: { id: true, category: true },
       });
+      const stale = movements.filter(
+        (movement) =>
+          movement.category !== null &&
+          normalizeForMatch(movement.category) === normalizeForMatch(target.name),
+      );
+      if (stale.length > 0) {
+        await tx.expense.updateMany({
+          where: { id: { in: stale.map((movement) => movement.id) } },
+          data: { category: toName },
+        });
+      }
       return tx.category.findUnique({
         where: { ownerId_name: { ownerId, name: toName } },
       });
@@ -74,17 +92,17 @@ export class PrismaCategoryRepository implements CategoryRepository {
 
   async ensureOtro(ownerId: string): Promise<CategoryEntity> {
     return this.prisma.category.upsert({
-      where: { ownerId_name: { ownerId, name: "otro" } },
+      where: { ownerId_name: { ownerId, name: "OTRO" } },
       update: {},
-      create: { ownerId, name: "otro", type: "MIXED" },
+      create: { ownerId, name: "OTRO", type: "MIXED" },
     });
   }
 
   async ensureAhorro(ownerId: string): Promise<CategoryEntity> {
     return this.prisma.category.upsert({
-      where: { ownerId_name: { ownerId, name: "ahorro" } },
+      where: { ownerId_name: { ownerId, name: "AHORRO" } },
       update: {},
-      create: { ownerId, name: "ahorro", type: "SAVINGS" },
+      create: { ownerId, name: "AHORRO", type: "SAVINGS" },
     });
   }
 

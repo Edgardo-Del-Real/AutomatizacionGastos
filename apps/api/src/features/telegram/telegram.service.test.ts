@@ -614,7 +614,7 @@ describe("TelegramService menu taps (v2 capture type memory)", () => {
     await h.service.handleCallback(callbackUpdate({ data: "m:home", messageId: 88 }), h.reply);
 
     expect(h.replies.at(-1)).toBe(menuReply());
-    expect((h.keyboards.at(-1) as InlineKeyboard)).toHaveLength(4);
+    expect((h.keyboards.at(-1) as InlineKeyboard)).toHaveLength(5);
   });
 
   it("opens the expense-admin sub-menu and supersedes any pending flow", async () => {
@@ -989,7 +989,7 @@ describe("TelegramService movement type mapping (v2)", () => {
       percent: 15,
     });
     expect(h.mockCreateIncomeWithSavings).toHaveBeenCalledWith(
-      expect.objectContaining({ netCategory: "Cafe", savingsCategory: "ahorro", percent: 15 }),
+      expect.objectContaining({ netCategory: "Cafe", savingsCategory: "AHORRO", percent: 15 }),
     );
   });
 
@@ -1409,6 +1409,7 @@ describe("TelegramService commands (v2 surface)", () => {
     expect(h.replies.at(-1)).toBe(menuReply());
     const kb = h.keyboards.at(-1) as InlineKeyboard;
     expect(kb.map((row) => row.map((button) => button.text))).toEqual([
+      ["💰 Ahorro"],
       ["➕ Gasto individual", "👥 Gasto compartido"],
       ["📅 Gasto previsto", "➕ Ingreso"],
       ["📊 Reportes", "❓ Ayuda"],
@@ -1420,7 +1421,7 @@ describe("TelegramService commands (v2 surface)", () => {
     await h.service.handleUpdate(textUpdate({ text: "/start", messageId: 1 }), h.reply);
 
     const kb = h.keyboards.at(-1) as InlineKeyboard;
-    expect(kb).toHaveLength(4);
+    expect(kb).toHaveLength(5);
   });
 
   it("ayuda replies with the static help", async () => {
@@ -2148,7 +2149,7 @@ describe("TelegramService command supersession (menu/start abandon ANY flow)", (
     expect(lastCall.pendingNote).toBeNull();
     expect(h.replies.at(-1)).toBe(menuReply());
     const kb = h.keyboards.at(-1) as InlineKeyboard;
-    expect(kb).toHaveLength(4);
+    expect(kb).toHaveLength(5);
   });
 
   it("the start command supersedes the delete gate without deleting anything", async () => {
@@ -2161,7 +2162,7 @@ describe("TelegramService command supersession (menu/start abandon ANY flow)", (
     const state = await h.botStateRepository.get(ownerId);
     expect(state?.state).toBe("idle");
     const kb = h.keyboards.at(-1) as InlineKeyboard;
-    expect(kb).toHaveLength(4);
+    expect(kb).toHaveLength(5);
   });
 });
 

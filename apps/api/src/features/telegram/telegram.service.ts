@@ -671,6 +671,8 @@ export class TelegramService {
       reply,
       menuReply(),
       [
+        // Savings entry point, first: it used to be hidden inside ❓ Ayuda.
+        [{ text: "💰 Ahorro", callback_data: buildCallbackData(["sa", "menu"]) }],
         // Expenses together: individual next to shared (they were at opposite
         // ends), then previsto, then ingreso. Consultar before administrar.
         [
@@ -2031,7 +2033,7 @@ export class TelegramService {
       note,
       occurredAt: new Date(),
       netCategory,
-      savingsCategory: "ahorro",
+      savingsCategory: "AHORRO",
       visibility: "INDIVIDUAL",
     });
     if (result.net === null && result.savings === null) {

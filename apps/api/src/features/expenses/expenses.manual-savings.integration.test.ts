@@ -73,7 +73,7 @@ describe("manual savings creation guard (D5/D8)", () => {
     const row = await rowById(body.id as string);
     expect(row?.type).toBe("SAVINGS");
     expect(row?.savingsOrigin).toBe("MANUAL");
-    expect(row?.category).toBe("ahorro");
+    expect(row?.category).toBe("AHORRO");
     expect(row?.status).toBe("PAID");
     expect(row?.visibility).toBe("INDIVIDUAL");
     expect(row?.currency).toBe("ARS");
@@ -128,9 +128,9 @@ describe("manual savings creation guard (D5/D8)", () => {
 
     expect(status).toBe(201);
     const row = await rowById(body.id as string);
-    expect(row?.category).toBe("ahorro");
+    expect(row?.category).toBe("AHORRO");
     const ahorro = await prisma.category.findUnique({
-      where: { ownerId_name: { ownerId: OWNER, name: "ahorro" } },
+      where: { ownerId_name: { ownerId: OWNER, name: "AHORRO" } },
     });
     expect(ahorro?.type).toBe("SAVINGS");
   });

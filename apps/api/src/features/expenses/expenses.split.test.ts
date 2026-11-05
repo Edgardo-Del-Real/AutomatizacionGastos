@@ -50,8 +50,8 @@ describe("createIncomeWithSavings atomicity", () => {
       percent: 10,
       note: "sueldo",
       occurredAt: new Date("2026-09-15T12:00:00.000Z"),
-      netCategory: "Sueldo",
-      savingsCategory: "ahorro",
+      netCategory: "SUELDO",
+      savingsCategory: "AHORRO",
       visibility: "INDIVIDUAL",
     });
 
@@ -59,9 +59,9 @@ describe("createIncomeWithSavings atomicity", () => {
     expect(tx.expense.create).toHaveBeenCalledTimes(2);
     expect(created.map((row) => row.type)).toEqual(["INCOME", "SAVINGS"]);
     expect(created[0]?.amount?.toString()).toBe("900");
-    expect(created[0]?.category).toBe("Sueldo");
+    expect(created[0]?.category).toBe("SUELDO");
     expect(created[1]?.amount?.toString()).toBe("100");
-    expect(created[1]?.category).toBe("ahorro");
+    expect(created[1]?.category).toBe("AHORRO");
     expect(result.net?.amount).toBe(900);
     expect(result.savings?.amount).toBe(100);
   });
@@ -77,8 +77,8 @@ describe("createIncomeWithSavings atomicity", () => {
         percent: 10,
         note: "sueldo",
         occurredAt: new Date("2026-09-15T12:00:00.000Z"),
-        netCategory: "Sueldo",
-        savingsCategory: "ahorro",
+        netCategory: "SUELDO",
+        savingsCategory: "AHORRO",
         visibility: "INDIVIDUAL",
       }),
     ).rejects.toThrow("simulated savings create failure");
@@ -94,13 +94,13 @@ describe("createIncomeWithSavings atomicity", () => {
       percent: 100,
       note: "todo a ahorro",
       occurredAt: new Date("2026-09-15T12:00:00.000Z"),
-      netCategory: "Sueldo",
-      savingsCategory: "ahorro",
+      netCategory: "SUELDO",
+      savingsCategory: "AHORRO",
       visibility: "INDIVIDUAL",
     });
 
     expect(created.map((row) => row.type)).toEqual(["SAVINGS"]);
-    expect(created[0]?.category).toBe("ahorro");
+    expect(created[0]?.category).toBe("AHORRO");
     expect(result.net).toBeNull();
     expect(result.savings?.amount).toBe(1000);
   });
@@ -115,13 +115,13 @@ describe("createIncomeWithSavings atomicity", () => {
       percent: 1,
       note: "minimo",
       occurredAt: new Date("2026-09-15T12:00:00.000Z"),
-      netCategory: "Sueldo",
-      savingsCategory: "ahorro",
+      netCategory: "SUELDO",
+      savingsCategory: "AHORRO",
       visibility: "INDIVIDUAL",
     });
 
     expect(created.map((row) => row.type)).toEqual(["INCOME"]);
-    expect(created[0]?.category).toBe("Sueldo");
+    expect(created[0]?.category).toBe("SUELDO");
     expect(result.net?.amount).toBe(0.01);
     expect(result.savings).toBeNull();
   });
@@ -202,7 +202,7 @@ describe("createSharedSplit two-row transaction", () => {
       expect(row.type).toBe("EXPENSE");
       expect(row.visibility).toBe("SHARED");
       expect(row.status).toBe("PAID");
-      expect(row.category).toBe("Super");
+      expect(row.category).toBe("SUPER");
       expect(row.note).toBe("super");
     }
     expect(created[0]?.ownerId).toBe("owner-1");

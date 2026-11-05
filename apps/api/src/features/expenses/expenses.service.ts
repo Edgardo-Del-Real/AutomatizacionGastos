@@ -1,6 +1,7 @@
 import { createMovementSchema, type ExpenseSummary, type MovementVisibility } from "@rita/contracts";
 import { NotFoundError, ValidationFailedError } from "../../infra/errors";
 import type { CategoryService } from "../categories/categories.service";
+import { normalizeCategoryName } from "../categories/matcher";
 import type { ExpenseRepository } from "./expenses.repository";
 import type { Expense } from "./expenses.types";
 
@@ -40,7 +41,11 @@ export class ExpenseService {
     }
     if (parsed.data.type === "SAVINGS") {
       await this.categoryService.ensureAhorro(ownerId);
-      if (parsed.data.category !== undefined && parsed.data.category !== "ahorro") {
+      if (
+        parsed.data.category !== undefined &&
+        (parsed.data.category === null ||
+          normalizeCategoryName(parsed.data.category) !== "AHORRO")
+      ) {
         throw new ValidationFailedError("SAVINGS movements require the ahorro category", [
           { message: "SAVINGS movements require the ahorro category", path: ["category"] },
         ]);
@@ -50,7 +55,7 @@ export class ExpenseService {
         ...parsed.data,
         // absent → defaulted to the reserved category (explicit ✓); an
         // explicit "ahorro" is preserved; anything else was rejected above.
-        category: "ahorro",
+        category: "AHORRO",
         // server stamp (input value ignored; the contract only allows MANUAL).
         savingsOrigin: "MANUAL",
         status: "PAID",
@@ -62,6 +67,11 @@ export class ExpenseService {
     return this.repository.create({
       ownerId,
       ...parsed.data,
+      // One canonical shape in storage, so a shared expense's partner row can
+      // never carry a spelling the owner's own category list does not have.
+      ...(typeof parsed.data.category === "string"
+        ? { category: normalizeCategoryName(parsed.data.category) }
+        : {}),
       visibility: options?.visibility ?? "INDIVIDUAL",
     });
   }
@@ -125,7 +135,7 @@ export class ExpenseService {
       note: data.note ?? null,
       occurredAt: data.occurredAt,
       type: "SAVINGS",
-      category: "ahorro",
+      category: "AHORRO",
       savingsOrigin: "MANUAL",
       status: "PAID",
       visibility: "INDIVIDUAL",
@@ -143,6 +153,11 @@ export class ExpenseService {
     occurredAt: Date;
     category: string;
   }): Promise<{ sender: number; partner: number } | null> {
-    return this.repository.createSharedSplit(data);
+    // Both rows carry the canonical name, which is also the shape every
+    // category list is stored in — so the partner's row always matches.
+    return this.repository.createSharedSplit({
+      ...data,
+      category: normalizeCategoryName(data.category),
+    });
   }
 }

@@ -1,5 +1,6 @@
 import { Prisma } from "@prisma/client";
 import type { PrismaClient } from "@prisma/client";
+import { normalizeCategoryName } from "../categories/matcher";
 import type { Expense, ExpenseMonthlySummary, NewExpense } from "./expenses.types";
 
 type ExpenseRow = {
@@ -81,7 +82,11 @@ export class PrismaExpenseRepository implements ExpenseRepository {
         ownerId: data.ownerId,
         amount: new Prisma.Decimal(data.amount),
         currency: data.currency,
-        category: data.category ?? null,
+        // Persistence also canonicalizes: no caller can slip a mixed-case
+        // category past the storage rule.
+        category: data.category === undefined || data.category === null
+          ? null
+          : normalizeCategoryName(data.category),
         note: data.note ?? null,
         occurredAt: data.occurredAt,
         type: data.type ?? "EXPENSE",
@@ -172,7 +177,7 @@ export class PrismaExpenseRepository implements ExpenseRepository {
               ownerId: data.ownerId,
               amount: netAmount,
               currency: "ARS",
-              category: data.netCategory,
+              category: normalizeCategoryName(data.netCategory),
               note: data.note,
               occurredAt: data.occurredAt,
               type: "INCOME",
@@ -188,7 +193,7 @@ export class PrismaExpenseRepository implements ExpenseRepository {
               ownerId: data.ownerId,
               amount: savingsAmount,
               currency: "ARS",
-              category: data.savingsCategory,
+              category: normalizeCategoryName(data.savingsCategory),
               note: data.note,
               occurredAt: data.occurredAt,
               type: "SAVINGS",
@@ -226,7 +231,7 @@ export class PrismaExpenseRepository implements ExpenseRepository {
           ownerId: data.ownerId,
           amount: senderAmount,
           currency: "ARS",
-          category: data.category,
+          category: normalizeCategoryName(data.category),
           note: data.note,
           occurredAt: data.occurredAt,
           type: "EXPENSE",
@@ -240,7 +245,7 @@ export class PrismaExpenseRepository implements ExpenseRepository {
           ownerId: data.partnerId,
           amount: partnerAmount,
           currency: "ARS",
-          category: data.category,
+          category: normalizeCategoryName(data.category),
           note: data.note,
           occurredAt: data.occurredAt,
           type: "EXPENSE",

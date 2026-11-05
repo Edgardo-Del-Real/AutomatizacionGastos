@@ -54,11 +54,11 @@ describe("ExpenseService", () => {
     const input = {
       amount: 250,
       currency: "USD",
-      category: "food",
+      category: "FOOD",
       note: "Lunch",
       occurredAt: new Date("2026-08-01T12:00:00.000Z"),
     };
-    const expense = makeExpense({ amount: 250, currency: "USD", category: "food", note: "Lunch" });
+    const expense = makeExpense({ amount: 250, currency: "USD", category: "FOOD", note: "Lunch" });
     mockCreate.mockResolvedValue(expense);
 
     const result = await service.createExpense(input, ownerId);
@@ -223,7 +223,7 @@ describe("ExpenseService manual-savings create guard (D5/D7)", () => {
       expect.objectContaining({
         ownerId,
         type: "SAVINGS",
-        category: "ahorro",
+        category: "AHORRO",
         savingsOrigin: "MANUAL",
         status: "PAID",
         visibility: "INDIVIDUAL",
@@ -240,7 +240,7 @@ describe("ExpenseService manual-savings create guard (D5/D7)", () => {
     );
 
     expect(mockCreate).toHaveBeenCalledWith(
-      expect.objectContaining({ type: "SAVINGS", category: "ahorro", savingsOrigin: "MANUAL" }),
+      expect.objectContaining({ type: "SAVINGS", category: "AHORRO", savingsOrigin: "MANUAL" }),
     );
   });
 
@@ -295,7 +295,7 @@ describe("ExpenseService manual-savings create guard (D5/D7)", () => {
         amount: 500,
         note: "fondo vacaciones",
         type: "SAVINGS",
-        category: "ahorro",
+        category: "AHORRO",
         savingsOrigin: "MANUAL",
         status: "PAID",
         visibility: "INDIVIDUAL",

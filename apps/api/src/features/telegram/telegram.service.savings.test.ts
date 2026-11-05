@@ -203,7 +203,7 @@ describe("TelegramService savings split on INGRESO (v2)", () => {
       percent: 10,
       note: "cobro sueldo de entrenuts",
       netCategory: "Cafe",
-      savingsCategory: "ahorro",
+      savingsCategory: "AHORRO",
       visibility: "INDIVIDUAL",
       occurredAt: expect.any(Date),
     });

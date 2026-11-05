@@ -152,7 +152,10 @@ describe("TelegramService (integration v2)", () => {
   /** Resolves the real Prisma category id by name (cat:<id> callbacks carry real ids). */
   async function categoryIdFor(name: string): Promise<string> {
     const categories = await categoryService.listCategories(ownerId);
-    const found = categories.find((category) => category.name === name);
+    // Names are stored canonically uppercase; callers keep writing them normally.
+    const normalize = (value: string) =>
+      value.normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim().toLowerCase();
+    const found = categories.find((category) => normalize(category.name) === normalize(name));
     if (found === undefined) {
       throw new Error(`category "${name}" not seeded`);
     }
@@ -187,8 +190,9 @@ describe("TelegramService (integration v2)", () => {
     await service.handleUpdate(textUpdate({ messageId: 2, text: "Cafe\nTransporte" }), reply);
 
     const categories = await categoryService.listCategories(ownerId);
-    // v2: no legacy "otro" row is auto-created for new owners.
-    expect(categories.map((category) => category.name).sort()).toEqual(["Cafe", "Transporte"]);
+    // v2: no legacy "otro" row is auto-created for new owners. Names are stored
+    // in the canonical uppercase form.
+    expect(categories.map((category) => category.name).sort()).toEqual(["CAFE", "TRANSPORTE"]);
     const after = await prisma.botState.findUnique({ where: { ownerId } });
     expect(after?.state).toBe("idle");
   });
@@ -214,13 +218,13 @@ describe("TelegramService (integration v2)", () => {
 
     // Two-step e2e: the category tap sent a confirmation message with the data.
     expect(replies[0]).toContain("Confirmá");
-    expect(replies[0]).toContain("Cafe");
+    expect(replies[0]).toContain("CAFE");
 
     const movements = await prisma.expense.findMany({ where: { ownerId } });
     expect(movements).toHaveLength(1);
     expect(movements[0]?.amount.toNumber()).toBe(14000);
     expect(movements[0]?.note).toBe("pasaje");
-    expect(movements[0]?.category).toBe("Cafe");
+    expect(movements[0]?.category).toBe("CAFE");
     expect(movements[0]?.type).toBe("EXPENSE");
     expect(movements[0]?.status).toBe("PAID");
     expect(movements[0]?.visibility).toBe("INDIVIDUAL");
@@ -268,7 +272,7 @@ describe("TelegramService (integration v2)", () => {
     const savings = movements.find((movement) => movement.type === "SAVINGS");
     expect(income?.amount.toNumber()).toBe(900);
     expect(savings?.amount.toNumber()).toBe(100);
-    expect(savings?.category).toBe("ahorro");
+    expect(savings?.category).toBe("AHORRO");
     // The fixed confirmation reports gross, net and saved; the menu follows.
     expect(replies.at(-1)).toBe(menuReply());
     expect(replies.at(-2)).toContain("900");
@@ -315,9 +319,9 @@ describe("TelegramService (integration v2)", () => {
     const income = movements.find((movement) => movement.type === "INCOME");
     const savings = movements.find((movement) => movement.type === "SAVINGS");
     expect(income?.amount.toNumber()).toBe(850);
-    expect(income?.category).toBe("Cafe");
+    expect(income?.category).toBe("CAFE");
     expect(savings?.amount.toNumber()).toBe(150);
-    expect(savings?.category).toBe("ahorro");
+    expect(savings?.category).toBe("AHORRO");
     expect(replies.at(-1)).toBe(menuReply());
   });
 
@@ -411,15 +415,15 @@ describe("TelegramService (integration v2)", () => {
     await service.handleUpdate(textUpdate({ messageId: 2, text: "Gimnasio" }), reply);
     const state = await prisma.botState.findUnique({ where: { ownerId } });
     const updated = previewPayloadSchema.parse(JSON.parse(state?.pendingNote ?? "{}"));
-    expect(updated.category).toBe("Gimnasio");
+    expect(updated.category).toBe("GIMNASIO");
     // The created category is selected and the step-2 confirmation is shown.
     expect(replies.at(-1)).toContain("Confirmá");
-    expect(replies.at(-1)).toContain("Gimnasio");
+    expect(replies.at(-1)).toContain("GIMNASIO");
 
     await service.handleCallback(callbackUpdate(`pv:save:${preview.saveToken}`), reply);
     const movements = await prisma.expense.findMany({ where: { ownerId } });
     expect(movements).toHaveLength(1);
-    expect(movements[0]?.category).toBe("Gimnasio");
+    expect(movements[0]?.category).toBe("GIMNASIO");
     expect(replies.at(-1)).toBe(menuReply());
   });
 
@@ -582,7 +586,7 @@ describe("TelegramService (integration v2)", () => {
     await service.handleCallback(callbackUpdate(`cc:${transporteId}`), reply);
 
     const after = await prisma.expense.findUnique({ where: { id: target.id } });
-    expect(after?.category).toBe("Transporte");
+    expect(after?.category).toBe("TRANSPORTE");
     expect(reply).toBeDefined();
   });
 
@@ -611,7 +615,7 @@ describe("TelegramService (integration v2)", () => {
     await service.handleCallback(callbackUpdate("ac:new"), reply);
     await service.handleUpdate(textUpdate({ messageId: 2, text: "Gimnasio" }), reply);
     const created = await categoryService.listCategories(ownerId);
-    const gym = created.find((category) => category.name === "Gimnasio");
+    const gym = created.find((category) => category.name === "GIMNASIO");
     expect(gym).toBeDefined();
 
     await service.handleCallback(callbackUpdate("ac:del"), reply);
@@ -619,7 +623,7 @@ describe("TelegramService (integration v2)", () => {
     await service.handleCallback(callbackUpdate(`ac:ok:${gym!.id}`), reply);
 
     const after = await categoryService.listCategories(ownerId);
-    expect(after.some((category) => category.name === "Gimnasio")).toBe(false);
+    expect(after.some((category) => category.name === "GIMNASIO")).toBe(false);
   });
 
   it("sub-menu e2e: rep:balance answers from real data and returns to the menu", async () => {
@@ -665,7 +669,7 @@ describe("TelegramService (integration v2)", () => {
       const rows = await prisma.expense.findMany({ where: { ownerId } });
       const savings = rows.find((row) => row.type === "SAVINGS");
       expect(savings?.savingsOrigin).toBe("MANUAL");
-      expect(savings?.category).toBe("ahorro");
+      expect(savings?.category).toBe("AHORRO");
       expect(savings?.status).toBe("PAID");
       expect(savings?.visibility).toBe("INDIVIDUAL");
       expect(savings?.currency).toBe("ARS");
@@ -693,7 +697,7 @@ describe("TelegramService (integration v2)", () => {
       expect(rows).toHaveLength(1);
       expect(rows[0]?.type).toBe("SAVINGS");
       expect(rows[0]?.savingsOrigin).toBe("MANUAL");
-      expect(rows[0]?.category).toBe("ahorro");
+      expect(rows[0]?.category).toBe("AHORRO");
       expect(rows[0]?.visibility).toBe("INDIVIDUAL");
       expect(replies.at(-2)).toBe(manualSavingsSavedReply(700, "reserva"));
       expect(replies.at(-1)).toBe(menuReply());

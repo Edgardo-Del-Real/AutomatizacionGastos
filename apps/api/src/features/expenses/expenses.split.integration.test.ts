@@ -49,15 +49,15 @@ describe("PrismaExpenseRepository.createIncomeWithSavings (integration)", () => 
       percent: 33,
       note: "sueldo",
       occurredAt: new Date("2026-09-15T12:00:00.000Z"),
-      netCategory: "Sueldo",
-      savingsCategory: "ahorro",
+      netCategory: "SUELDO",
+      savingsCategory: "AHORRO",
       visibility: "INDIVIDUAL",
     });
 
     expect(result.net?.amount).toBe(6.7);
-    expect(result.net?.category).toBe("Sueldo");
+    expect(result.net?.category).toBe("SUELDO");
     expect(result.savings?.amount).toBe(3.3);
-    expect(result.savings?.category).toBe("ahorro");
+    expect(result.savings?.category).toBe("AHORRO");
 
     const rows = await prisma.expense.findMany({ where: { ownerId: "owner-1" } });
     expect(rows).toHaveLength(2);
@@ -72,14 +72,14 @@ describe("PrismaExpenseRepository.createIncomeWithSavings (integration)", () => 
       percent: 100,
       note: "todo",
       occurredAt: new Date("2026-09-15T12:00:00.000Z"),
-      netCategory: "Sueldo",
-      savingsCategory: "ahorro",
+      netCategory: "SUELDO",
+      savingsCategory: "AHORRO",
       visibility: "INDIVIDUAL",
     });
 
     expect(result.net).toBeNull();
     expect(result.savings?.amount).toBe(1000);
-    expect(result.savings?.category).toBe("ahorro");
+    expect(result.savings?.category).toBe("AHORRO");
     const rows = await prisma.expense.findMany({ where: { ownerId: "owner-1" } });
     expect(rows).toHaveLength(1);
     expect(rows[0]?.type).toBe("SAVINGS");
@@ -92,13 +92,13 @@ describe("PrismaExpenseRepository.createIncomeWithSavings (integration)", () => 
       percent: 1,
       note: "minimo",
       occurredAt: new Date("2026-09-15T12:00:00.000Z"),
-      netCategory: "Sueldo",
-      savingsCategory: "ahorro",
+      netCategory: "SUELDO",
+      savingsCategory: "AHORRO",
       visibility: "INDIVIDUAL",
     });
 
     expect(result.net?.amount).toBe(0.01);
-    expect(result.net?.category).toBe("Sueldo");
+    expect(result.net?.category).toBe("SUELDO");
     expect(result.savings).toBeNull();
     const rows = await prisma.expense.findMany({ where: { ownerId: "owner-1" } });
     expect(rows).toHaveLength(1);
@@ -159,7 +159,7 @@ describe("PrismaExpenseRepository.createSharedSplit (integration)", () => {
       expect(row.visibility).toBe("SHARED");
       expect(row.status).toBe("PAID");
       expect(row.currency).toBe("ARS");
-      expect(row.category).toBe("Super");
+      expect(row.category).toBe("SUPER");
       expect(row.note).toBe("super");
       expect(row.occurredAt).toEqual(new Date("2026-10-01T12:00:00.000Z"));
       expect(row.sharedTotal?.toNumber()).toBe(10);

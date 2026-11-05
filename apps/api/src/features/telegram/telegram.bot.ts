@@ -61,18 +61,27 @@ export const BOT_COMMANDS = [
  */
 function buildReplyPort(ctx: Context): (text: string, keyboard?: InlineKeyboard, editMessageId?: number) => Promise<number | undefined> {
   return async (text, keyboard, editMessageId) => {
+    // RULE: everything the bot says is uppercase, including button labels. One
+    // choke point here means no message can slip through in another casing.
+    const body = text.toUpperCase();
     const replyMarkup =
-      keyboard === undefined ? undefined : { inline_keyboard: keyboard.map((row) => row.map((button) => ({ ...button }))) };
+      keyboard === undefined
+        ? undefined
+        : {
+            inline_keyboard: keyboard.map((row) =>
+              row.map((button) => ({ ...button, text: button.text.toUpperCase() })),
+            ),
+          };
     if (editMessageId !== undefined && ctx.chat !== undefined) {
       try {
-        await ctx.api.editMessageText(ctx.chat.id, editMessageId, text, { reply_markup: replyMarkup });
+        await ctx.api.editMessageText(ctx.chat.id, editMessageId, body, { reply_markup: replyMarkup });
         return undefined;
       } catch {
         // The original message is gone: fall back to a new message with the
         // same text and keyboard (the failure never propagates to the caller).
       }
     }
-    const sent = await ctx.reply(text, { reply_markup: replyMarkup });
+    const sent = await ctx.reply(body, { reply_markup: replyMarkup });
     return sent.message_id;
   };
 }

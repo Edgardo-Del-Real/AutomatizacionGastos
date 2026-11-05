@@ -224,7 +224,7 @@ describe("PATCH /movements/:id savings-category guard (D9)", () => {
 
     expect(response.statusCode).toBe(200);
     const row = await prisma.expense.findUnique({ where: { id } });
-    expect(row?.category).toBe("bolsillo");
+    expect(row?.category).toBe("BOLSILLO");
   });
 
   it("keeps category freedom on legacy NULL-origin savings movements", async () => {
@@ -241,6 +241,6 @@ describe("PATCH /movements/:id savings-category guard (D9)", () => {
 
     expect(response.statusCode).toBe(200);
     const row = await prisma.expense.findUnique({ where: { id } });
-    expect(row?.category).toBe("bolsillo");
+    expect(row?.category).toBe("BOLSILLO");
   });
 });

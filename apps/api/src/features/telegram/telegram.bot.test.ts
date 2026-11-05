@@ -233,7 +233,7 @@ describe("createTelegramBot (offline reply recording)", () => {
     expect(h.mockCreateExpense).not.toHaveBeenCalled();
     const sendMessage = h.recorded.find((call) => call.method === "sendMessage");
     expect(sendMessage).toBeDefined();
-    expect(String(sendMessage?.payload?.text)).toContain("➕ Gasto individual");
+    expect(String(sendMessage?.payload?.text)).toContain("➕ GASTO INDIVIDUAL");
   });
 
   it("attaches the two-column inline keyboard to /start (D2 message reply port)", async () => {
@@ -244,14 +244,16 @@ describe("createTelegramBot (offline reply recording)", () => {
     const markup = sendMessage?.payload?.reply_markup as { inline_keyboard: { text: string; callback_data: string }[][] };
     // Four rows of two: expenses sit together (individual next to shared) and
     // every label says "gasto" where it is one.
-    expect(markup?.inline_keyboard).toHaveLength(4);
+    expect(markup?.inline_keyboard).toHaveLength(5);
     expect(markup?.inline_keyboard.map((row) => row.map((button) => button.text))).toEqual([
-      ["➕ Gasto individual", "👥 Gasto compartido"],
-      ["📅 Gasto previsto", "➕ Ingreso"],
-      ["📊 Reportes", "❓ Ayuda"],
-      ["🗂 Categorías", "🧾 Gastos"],
+      ["💰 AHORRO"],
+      ["➕ GASTO INDIVIDUAL", "👥 GASTO COMPARTIDO"],
+      ["📅 GASTO PREVISTO", "➕ INGRESO"],
+      ["📊 REPORTES", "❓ AYUDA"],
+      ["🗂 CATEGORÍAS", "🧾 GASTOS"],
     ]);
     expect(markup?.inline_keyboard.map((row) => row.map((button) => button.callback_data))).toEqual([
+      ["sa:menu"],
       ["m:new", "m:shr"],
       ["m:prev", "m:inc"],
       ["m:rep", "m:help"],
@@ -349,7 +351,7 @@ describe("createTelegramBot callback wiring (D4)", () => {
     // The unknown action is answered honestly AND the callback is answered.
     const sendMessage = h.recorded.find((call) => call.method === "sendMessage");
     expect(sendMessage).toBeDefined();
-    expect(String(sendMessage?.payload?.text)).toContain("no está disponible");
+    expect(String(sendMessage?.payload?.text)).toContain("NO ESTÁ DISPONIBLE");
     expect(h.recorded.some((call) => call.method === "answerCallbackQuery")).toBe(true);
   });
 
@@ -377,9 +379,9 @@ describe("createTelegramBot callback wiring (D4)", () => {
 
     const sendMessage = recorded.find((call) => call.method === "sendMessage");
     expect(sendMessage).toBeDefined();
-    expect(String(sendMessage?.payload?.text)).toContain("Elegí una opción");
+    expect(String(sendMessage?.payload?.text)).toContain("ELEGÍ UNA OPCIÓN");
     const markup = sendMessage?.payload?.reply_markup as { inline_keyboard: { text: string; callback_data: string }[][] };
-    expect(markup?.inline_keyboard).toEqual([[{ text: "Nuevo", callback_data: "m:new" }]]);
+    expect(markup?.inline_keyboard).toEqual([[{ text: "NUEVO", callback_data: "m:new" }]]);
     expect(recorded.some((call) => call.method === "answerCallbackQuery")).toBe(true);
   });
 
@@ -410,7 +412,7 @@ describe("createTelegramBot callback wiring (D4)", () => {
     // The fallback sends a NEW message with the same text and keyboard.
     const sendMessage = recorded.find((call) => call.method === "sendMessage");
     expect(sendMessage).toBeDefined();
-    expect(String(sendMessage?.payload?.text)).toContain("Preview actualizado");
+    expect(String(sendMessage?.payload?.text)).toContain("PREVIEW ACTUALIZADO");
     const markup = sendMessage?.payload?.reply_markup as { inline_keyboard: unknown };
     expect(markup?.inline_keyboard).toBeDefined();
     expect(recorded.some((call) => call.method === "editMessageText")).toBe(false);

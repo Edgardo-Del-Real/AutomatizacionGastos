@@ -2,7 +2,7 @@ import { NotFoundError, SavingsForbiddenError, ValidationFailedError } from "../
 import { isUniqueConstraintViolation } from "../messages/message.repository";
 import type { CategoryRepository } from "./categories.repository";
 import type { CategoryEntity, CategoryType, CategoryWithKeywords } from "./categories.types";
-import { matchCategory, normalizeForMatch, normalizeForMatchTolerant, type KeywordRule } from "./matcher";
+import { matchCategory, normalizeCategoryName, normalizeForMatch, normalizeForMatchTolerant, type KeywordRule } from "./matcher";
 import { ReservedCategoryError, resolveReservedConcept } from "./reserved";
 
 const AHORRO = "ahorro";
@@ -23,7 +23,8 @@ export class CategoryService {
   constructor(private readonly repository: CategoryRepository) {}
 
   async createCategory(ownerId: string, name: string, requestedType: CategoryType = "MIXED"): Promise<CategoryEntity> {
-    const trimmed = name.trim();
+    // One canonical shape in storage: uppercase, no diacritics.
+    const trimmed = normalizeCategoryName(name);
     if (trimmed.length === 0) {
       throw new ValidationFailedError("Category name must not be empty");
     }
@@ -76,7 +77,7 @@ export class CategoryService {
     toName: string,
   ): Promise<CategoryEntity | null> {
     const from = fromName.trim();
-    const to = toName.trim();
+    const to = normalizeCategoryName(toName);
     if (from.length === 0 || to.length === 0) {
       throw new ValidationFailedError("Both category names are required");
     }

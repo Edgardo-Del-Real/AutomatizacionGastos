@@ -21,6 +21,28 @@ export function normalizeForMatch(value: string): string {
 const WORD_CHARS = "a-z0-9";
 
 /**
+ * Canonical STORAGE form for a category name: uppercase, no diacritics,
+ * single-spaced. This is the single shape written to the database, so
+ * "Carniceria", "carnicería" and "CARNICERÍA" can never coexist again and the
+ * partner's row of a shared expense always matches the owner's category.
+ *
+ * ñ keeps its tilde: it is a letter, not an accent ("AÑO" must not become
+ * "ANO"). Everything else folds.
+ */
+export function normalizeCategoryName(value: string): string {
+  const N_TILDE = "\u0000";
+  return value
+    .replace(/[ñÑ]/g, N_TILDE)
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replaceAll(N_TILDE, "Ñ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toUpperCase();
+}
+
+
+/**
  * Word-boundary regex for a keyword on normalized text (diacritic-folded,
  * lowercase). Exported so the savings slice reuses the same matching
  * semantics for savings-rule keywords (D4).

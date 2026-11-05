@@ -46,7 +46,7 @@ describe("categories savings guards (D9)", () => {
 
   it('creates "ahorro" as a SAVINGS category, never NORMAL', async () => {
     const created = await service.createCategory("owner-1", "ahorro");
-    expect(created.name).toBe("ahorro");
+    expect(created.name).toBe("AHORRO");
     const row = await prisma.category.findUnique({ where: { id: created.id } });
     expect(row?.type).toBe("SAVINGS");
   });
@@ -54,7 +54,7 @@ describe("categories savings guards (D9)", () => {
   it("routes a differently-cased ahorro through the same SAVINGS upsert (never NORMAL, never duplicate)", async () => {
     const first = await service.createCategory("owner-1", "Ahorro");
     const second = await service.createCategory("owner-1", "ahorro");
-    expect(first.name).toBe("ahorro");
+    expect(first.name).toBe("AHORRO");
     expect(second.id).toBe(first.id);
     const rows = await prisma.category.findMany({ where: { ownerId: "owner-1" } });
     expect(rows).toHaveLength(1);
@@ -99,7 +99,7 @@ describe("categories savings guards (D9)", () => {
 
   it("ensureAhorro creates the SAVINGS ahorro category and is idempotent", async () => {
     const created = await service.ensureAhorro("owner-1");
-    expect(created.name).toBe("ahorro");
+    expect(created.name).toBe("AHORRO");
     const row = await prisma.category.findUnique({ where: { id: created.id } });
     expect(row?.type).toBe("SAVINGS");
 
@@ -165,13 +165,13 @@ describe("categories savings guards (D9)", () => {
       ReservedCategoryError,
     );
     const list = await service.listCategories("owner-1");
-    expect(list.map((category) => category.name)).toEqual(["Guardado"]);
+    expect(list.map((category) => category.name)).toEqual(["GUARDADO"]);
   });
 
   it("keeps exact ahorro routed to the SAVINGS upsert alongside the ahorros rejection", async () => {
     await expect(service.createCategory("owner-1", "ahorros")).rejects.toBeInstanceOf(ReservedCategoryError);
     const savings = await service.createCategory("owner-1", "ahorro");
-    expect(savings.name).toBe("ahorro");
+    expect(savings.name).toBe("AHORRO");
     const rows = await prisma.category.findMany({ where: { ownerId: "owner-1" } });
     expect(rows).toHaveLength(1);
     expect(rows[0]?.type).toBe("SAVINGS");

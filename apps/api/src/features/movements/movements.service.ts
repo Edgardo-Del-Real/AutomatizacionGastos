@@ -1,6 +1,7 @@
 import { updateMovementSchema, type Movement, type MovementSummary } from "@rita/contracts";
 import { ConflictError, NotFoundError, ValidationFailedError } from "../../infra/errors";
 import type { CategoryService } from "../categories/categories.service";
+import { normalizeCategoryName } from "../categories/matcher";
 import { monthToPeriod } from "./ba-month";
 import type { MovementRepository } from "./movements.repository";
 import type { MovementListFilters, SummaryPeriod, ViewerScope } from "./movements.types";
@@ -48,7 +49,8 @@ export class MovementService {
       if (
         movement.type === "SAVINGS" &&
         movement.savingsOrigin === "MANUAL" &&
-        parsed.data.category !== "ahorro"
+        (parsed.data.category === null ||
+          normalizeCategoryName(parsed.data.category) !== "AHORRO")
       ) {
         throw new ValidationFailedError("Manual savings are pinned to the ahorro category");
       }
@@ -56,7 +58,12 @@ export class MovementService {
         await this.categoryService.assertOwnerCategory(ownerId, parsed.data.category, movement.type);
       }
     }
-    const updated = await this.repository.updateById(id, ownerId, parsed.data);
+    // Canonical storage shape: the patch is normalized before it is written.
+    const patchData =
+      typeof parsed.data.category === "string"
+        ? { ...parsed.data, category: normalizeCategoryName(parsed.data.category) }
+        : parsed.data;
+    const updated = await this.repository.updateById(id, ownerId, patchData);
     if (updated === null) {
       throw new NotFoundError(`Movement ${id} not found`);
     }

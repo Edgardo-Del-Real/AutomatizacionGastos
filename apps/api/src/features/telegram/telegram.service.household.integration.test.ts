@@ -205,7 +205,7 @@ describe("TelegramService household multi-chat (spec: Owner Filtering / Dedup / 
     const state = await prisma.botState.findUnique({ where: { ownerId: "rita" } });
     const preview = JSON.parse(state?.pendingNote ?? "{}") as { saveToken: string };
     const ritaCategories = await categoryService.listCategories("rita");
-    const cafe = ritaCategories.find((category) => category.name === "Cafe");
+    const cafe = ritaCategories.find((category) => category.name === "CAFE");
     expect(cafe).toBeDefined();
     await service.handleCallback(callbackUpdate(RITA_CHAT, `cat:${cafe!.id}`), async () => undefined);
     await service.handleCallback(callbackUpdate(RITA_CHAT, `pv:save:${preview.saveToken}`), async () => undefined);
@@ -239,7 +239,7 @@ describe("TelegramService household multi-chat (spec: Owner Filtering / Dedup / 
     const state = await prisma.botState.findUnique({ where: { ownerId: "rita" } });
     const preview = JSON.parse(state?.pendingNote ?? "{}") as { saveToken: string };
     const ritaCategories = await categoryService.listCategories("rita");
-    const cafe = ritaCategories.find((category) => category.name === "Cafe");
+    const cafe = ritaCategories.find((category) => category.name === "CAFE");
     expect(cafe).toBeDefined();
     await service.handleCallback(callbackUpdate(RITA_CHAT, `cat:${cafe!.id}`), async () => undefined);
     // A partner is resolved (2-member household): Guardar without a percent is
@@ -258,8 +258,8 @@ describe("TelegramService household multi-chat (spec: Owner Filtering / Dedup / 
     expect(partnerRows[0]?.visibility).toBe("SHARED");
     expect(partnerRows[0]?.sharedTotal?.toNumber()).toBe(2000);
     // Same facts on both halves (identical category, note, occurredAt).
-    expect(ritaRows[0]?.category).toBe("Cafe");
-    expect(partnerRows[0]?.category).toBe("Cafe");
+    expect(ritaRows[0]?.category).toBe("CAFE");
+    expect(partnerRows[0]?.category).toBe("CAFE");
     expect(ritaRows[0]?.note).toBe("super");
     expect(partnerRows[0]?.note).toBe("super");
   });
@@ -271,7 +271,7 @@ describe("TelegramService household multi-chat (spec: Owner Filtering / Dedup / 
     const state = await prisma.botState.findUnique({ where: { ownerId: "rita" } });
     const preview = JSON.parse(state?.pendingNote ?? "{}") as { saveToken: string };
     const ritaCategories = await categoryService.listCategories("rita");
-    const cafe = ritaCategories.find((category) => category.name === "Cafe");
+    const cafe = ritaCategories.find((category) => category.name === "CAFE");
     expect(cafe).toBeDefined();
     await service.handleCallback(callbackUpdate(RITA_CHAT, `cat:${cafe!.id}`), async () => undefined);
     const replies: string[] = [];

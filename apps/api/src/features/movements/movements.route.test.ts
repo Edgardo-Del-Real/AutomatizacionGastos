@@ -145,7 +145,7 @@ describe("movements route", () => {
         ownerId: "owner-1",
         amount: 500,
         currency: "ARS",
-        category: "food",
+        category: "FOOD",
         note: "mercado",
         occurredAt: "2026-08-12T12:00:00.000Z",
         type: "EXPENSE",
@@ -169,7 +169,7 @@ describe("movements route", () => {
         ownerId: "owner-1",
         amount: 100,
         currency: "ARS",
-        category: "food",
+        category: "FOOD",
         note: "mercado",
         occurredAt: "2026-08-10T12:00:00.000Z",
         type: "EXPENSE",
@@ -200,7 +200,7 @@ describe("movements route", () => {
       await seed({
         ownerId: "owner-1",
         amount: 300,
-        category: "food",
+        category: "FOOD",
         note: "mercado",
         occurredAt: "2026-08-10T12:00:00.000Z",
         type: "EXPENSE",
@@ -247,7 +247,7 @@ describe("movements route", () => {
         ownerId: "owner-1",
         amount: 500,
         currency: "USD",
-        category: "food",
+        category: "FOOD",
         occurredAt: "2026-08-10T12:00:00.000Z",
         type: "EXPENSE",
       });
@@ -269,7 +269,7 @@ describe("movements route", () => {
         ownerId: "owner-1",
         amount: 777,
         currency: "ARS",
-        category: "food",
+        category: "FOOD",
         occurredAt: "2026-08-01T02:59:00.000Z",
         type: "EXPENSE",
       });
@@ -329,7 +329,7 @@ describe("movements route", () => {
         ownerId: "owner-1",
         amount: 50,
         currency: "ARS",
-        category: "food",
+        category: "FOOD",
         occurredAt: "2026-07-15T12:00:00.000Z",
         type: "EXPENSE",
       });
@@ -377,7 +377,7 @@ describe("movements route", () => {
         ownerId: "owner-1",
         amount: 50,
         currency: "ARS",
-        category: "food",
+        category: "FOOD",
         occurredAt: "2026-07-15T12:00:00.000Z",
         type: "EXPENSE",
       });
@@ -418,7 +418,7 @@ describe("movements route", () => {
         ownerId: "owner-1",
         amount: 100,
         currency: "ARS",
-        category: "food",
+        category: "FOOD",
         occurredAt: thisMonthNoon,
         type: "EXPENSE",
       });
@@ -426,7 +426,7 @@ describe("movements route", () => {
         ownerId: "owner-1",
         amount: 200,
         currency: "ARS",
-        category: "food",
+        category: "FOOD",
         occurredAt: lastMonthNoon,
         type: "EXPENSE",
       });
@@ -449,7 +449,7 @@ describe("movements route", () => {
       const movement = await createMovement({
         ownerId: "owner-1",
         amount: 1000,
-        category: "food",
+        category: "FOOD",
         note: "mercado",
         type: "EXPENSE",
       });
@@ -465,14 +465,14 @@ describe("movements route", () => {
       const updated = response.json();
       expect(updated.note).toBe("cena");
       expect(updated.amount).toBe(1000);
-      expect(updated.category).toBe("food");
+      expect(updated.category).toBe("FOOD");
     });
 
     it("clears the category with category: null", async () => {
       const movement = await createMovement({
         ownerId: "owner-1",
         amount: 1000,
-        category: "food",
+        category: "FOOD",
         note: "mercado",
         type: "EXPENSE",
       });
@@ -489,7 +489,7 @@ describe("movements route", () => {
     });
 
     it("sets a category that belongs to the owner", async () => {
-      await prisma.category.create({ data: { ownerId: "owner-1", name: "Cafe" } });
+      await prisma.category.create({ data: { ownerId: "owner-1", name: "CAFE" } });
       const movement = await createMovement({
         ownerId: "owner-1",
         amount: 2500,
@@ -502,15 +502,15 @@ describe("movements route", () => {
         method: "PATCH",
         url: `/movements/${movement.id}`,
         headers: { "x-owner-id": "owner-1" },
-        payload: { category: "Cafe" },
+        payload: { category: "CAFE" },
       });
 
       expect(response.statusCode).toBe(200);
-      expect(response.json().category).toBe("Cafe");
+      expect(response.json().category).toBe("CAFE");
     });
 
     it("rejects a category that is not the owner's with 422", async () => {
-      await prisma.category.create({ data: { ownerId: "owner-1", name: "Cafe" } });
+      await prisma.category.create({ data: { ownerId: "owner-1", name: "CAFE" } });
       const movement = await createMovement({
         ownerId: "owner-1",
         amount: 2500,
@@ -674,7 +674,7 @@ describe("movements route", () => {
 
   describe("GET /movements/categories", () => {
     it("returns the owner's categories with their keyword rules", async () => {
-      const category = await prisma.category.create({ data: { ownerId: "owner-1", name: "Cafe" } });
+      const category = await prisma.category.create({ data: { ownerId: "owner-1", name: "CAFE" } });
       await prisma.categoryKeyword.create({
         data: { ownerId: "owner-1", categoryId: category.id, keyword: "cafe" },
       });
@@ -685,7 +685,7 @@ describe("movements route", () => {
       });
 
       expect(response.statusCode).toBe(200);
-      expect(response.json()).toEqual([{ name: "Cafe", keywords: ["cafe"], type: "MIXED" }]);
+      expect(response.json()).toEqual([{ name: "CAFE", keywords: ["cafe"], type: "MIXED" }]);
     });
 
     it("returns an empty list for an owner without categories", async () => {
@@ -704,7 +704,7 @@ describe("movements route", () => {
       const movement = await createMovement({
         ownerId: "owner-1",
         amount: 1000,
-        category: "food",
+        category: "FOOD",
         note: "mercado",
         type: "EXPENSE",
       });
@@ -910,7 +910,7 @@ describe("movements route", () => {
       await seed({
         ownerId: "owner-1",
         amount: 300,
-        category: "food",
+        category: "FOOD",
         note: "mercado",
         occurredAt: noon,
         type: "EXPENSE",
@@ -942,7 +942,7 @@ describe("movements route", () => {
       await seed({
         ownerId: "owner-1",
         amount: 300,
-        category: "food",
+        category: "FOOD",
         note: "mercado",
         occurredAt: noon,
         type: "EXPENSE",
@@ -976,7 +976,7 @@ describe("movements route", () => {
       await seed({
         ownerId: "owner-1",
         amount: 300,
-        category: "food",
+        category: "FOOD",
         note: "mercado",
         occurredAt: noon,
         type: "EXPENSE",
@@ -984,7 +984,7 @@ describe("movements route", () => {
       await seed({
         ownerId: "owner-1",
         amount: 2500,
-        category: "food",
+        category: "FOOD",
         note: "alquiler",
         occurredAt: noon,
         type: "EXPENSE",
@@ -995,7 +995,7 @@ describe("movements route", () => {
 
       expect(response.statusCode).toBe(200);
       const summary = response.json();
-      const food = summary.categories.find((c: { name: string }) => c.name === "food");
+      const food = summary.categories.find((c: { name: string }) => c.name === "FOOD");
       expect(food).toBeTruthy();
       expect(food.expenseAmount).toBe(300);
       expect(food.expensePercent).toBe(100);
@@ -1006,7 +1006,7 @@ describe("movements route", () => {
       await seed({
         ownerId: "owner-1",
         amount: 300,
-        category: "food",
+        category: "FOOD",
         note: "mercado",
         occurredAt: noon,
         type: "EXPENSE",
@@ -1176,7 +1176,7 @@ describe("movements route", () => {
       await seed({
         ownerId: "owner-1",
         amount: 300,
-        category: "food",
+        category: "FOOD",
         note: "mercado",
         occurredAt: "2026-08-10T12:00:00.000Z",
         type: "EXPENSE",

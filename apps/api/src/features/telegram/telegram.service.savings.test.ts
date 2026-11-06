@@ -363,7 +363,7 @@ describe("TelegramService savings row and sv:* choices on the INGRESO confirmati
       `sv:other:${payload.saveToken}`,
       `sv:off:${payload.saveToken}`,
     ]);
-    expect(kbAfter.at(-1)?.map((button) => button.callback_data)).toEqual([
+    expect(kbAfter.at(-2)?.map((button) => button.callback_data)).toEqual([
       `pv:save:${payload.saveToken}`,
       `pv:edit:${payload.saveToken}`,
     ]);

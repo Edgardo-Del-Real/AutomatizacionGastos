@@ -10,6 +10,10 @@ export default defineConfig({
     // seconds, exceeding vitest's 5000ms default. 15000ms makes the full suite
     // deterministic under DB contention (savings-config Phase 7, task 7.3).
     testTimeout: 15000,
+    // The integration files run `prisma migrate deploy` in beforeAll; on Windows
+    // the npx boot alone takes several seconds, so the 10s hook default was
+    // failing before the migration even started.
+    hookTimeout: 30000,
     env: {
       TELEGRAM_BOT_TOKEN: "123456:TEST_TOKEN",
       TELEGRAM_OWNER_CHAT_ID: "123456789",

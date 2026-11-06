@@ -925,6 +925,11 @@ export class TelegramService {
       { text: "✅ Guardar", callback_data: buildCallbackData(["pv", "save", payload.saveToken]) },
       { text: "✏️ Corregir", callback_data: buildCallbackData(["pv", "edit", payload.saveToken]) },
     ]);
+    // single-message UX: the confirmation replaced the preview, so the category
+    // buttons are gone; this is the way back to them without retyping the amount.
+    rows.push([
+      { text: "🗂 Cambiar categoría", callback_data: buildCallbackData(["pv", "cat", payload.saveToken]) },
+    ]);
     return rows;
   }
 
@@ -1055,6 +1060,18 @@ export class TelegramService {
           pendingNote: JSON.stringify(namePayload),
         });
         await this.safeReply(reply, categoryNamePromptReply("preview"));
+        return;
+      }
+      case "cat": {
+        // 🗂 Cambiar categoría: re-render the preview so the category buttons
+        // come back. In the single-message UX the confirmation overwrote them,
+        // and this is the only way back without retyping the amount.
+        await this.safeReply(
+          reply,
+          previewReply(payload.amount, payload.note, payload.type),
+          await this.previewKeyboard(ownerId, payload, 0),
+          undefined,
+        );
         return;
       }
       default:

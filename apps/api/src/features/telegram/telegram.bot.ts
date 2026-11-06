@@ -74,6 +74,26 @@ export function sentenceCase(text: string): string {
   );
 }
 
+/**
+ * The single evolving message per chat: the bot rewrites THIS instead of
+ * sending a new one for every step, so a capture leaves no trail of stale
+ * menus behind it. In memory on purpose — after a restart the next reply
+ * starts a fresh message, which is exactly what you want then.
+ */
+const surfaces = new Map<number, number>();
+
+/** Tests share the module: this keeps each case starting with a clean chat. */
+export function resetReplySurfaces(): void {
+  surfaces.clear();
+}
+
+/** Telegram throws when an edit would not change anything; that is success for us. */
+function isNotModified(error: unknown): boolean {
+  const description =
+    error instanceof Error ? error.message : typeof error === "string" ? error : "";
+  return description.toLowerCase().includes("message is not modified");
+}
+
 function buildReplyPort(ctx: Context): (text: string, keyboard?: InlineKeyboard, editMessageId?: number) => Promise<number | undefined> {
   return async (text, keyboard, editMessageId) => {
     // The bot speaks in sentence case, never in caps; button labels keep the
@@ -81,16 +101,29 @@ function buildReplyPort(ctx: Context): (text: string, keyboard?: InlineKeyboard,
     const body = sentenceCase(text);
     const replyMarkup =
       keyboard === undefined ? undefined : { inline_keyboard: keyboard.map((row) => row.map((button) => ({ ...button }))) };
-    if (editMessageId !== undefined && ctx.chat !== undefined) {
+
+    const chatId = ctx.chat?.id;
+    const target = editMessageId ?? (chatId === undefined ? undefined : surfaces.get(chatId));
+
+    if (chatId !== undefined && target !== undefined) {
       try {
-        await ctx.api.editMessageText(ctx.chat.id, editMessageId, body, { reply_markup: replyMarkup });
+        await ctx.api.editMessageText(chatId, target, body, { reply_markup: replyMarkup });
+        surfaces.set(chatId, target);
         return undefined;
-      } catch {
-        // The original message is gone: fall back to a new message with the
-        // same text and keyboard (the failure never propagates to the caller).
+      } catch (error) {
+        if (isNotModified(error)) {
+          surfaces.set(chatId, target);
+          return undefined;
+        }
+        // The message is gone or not editable: fall through and send a new one,
+        // which becomes the surface from now on.
       }
     }
+
     const sent = await ctx.reply(body, { reply_markup: replyMarkup });
+    if (chatId !== undefined) {
+      surfaces.set(chatId, sent.message_id);
+    }
     return sent.message_id;
   };
 }

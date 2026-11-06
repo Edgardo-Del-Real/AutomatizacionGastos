@@ -780,6 +780,7 @@ describe("TelegramService preview callbacks (v2)", () => {
         { text: "✅ Guardar", callback_data: expect.stringContaining("pv:save") },
         { text: "✏️ Corregir", callback_data: expect.stringContaining("pv:edit") },
       ],
+      [{ text: "🗂 Cambiar categoría", callback_data: expect.stringContaining("pv:cat") }],
     ]);
   });
 

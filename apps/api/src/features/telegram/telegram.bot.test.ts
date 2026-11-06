@@ -14,6 +14,7 @@ import {
   createTelegramBot,
   recordApiCalls,
   redactToken,
+  resetReplySurfaces,
   registerGracefulStop,
   sentenceCase,
   startTelegramBot,
@@ -238,6 +239,7 @@ describe("createTelegramBot (offline reply recording)", () => {
   let h: BotHarness;
 
   beforeEach(() => {
+    resetReplySurfaces();
     h = makeBotHarness();
   });
 
@@ -367,6 +369,7 @@ describe("createTelegramBot callback wiring (D4)", () => {
   let h: BotHarness;
 
   beforeEach(() => {
+    resetReplySurfaces();
     h = makeBotHarness();
   });
 

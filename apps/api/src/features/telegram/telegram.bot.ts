@@ -149,6 +149,14 @@ export function createTelegramBot(
         ),
       );
       await ctx.reply(unexpectedErrorReply()).catch(() => undefined);
+    } finally {
+      // single-message UX: the bot answers by editing its ONE message, so the
+      // owner's messages would pile up below it and the answer would be above
+      // them. Removing the incoming text keeps the surface at the bottom of the
+      // chat. A failure here is cosmetic and never surfaces.
+      if (typeof ctx.message?.text === "string") {
+        await ctx.deleteMessage().catch(() => undefined);
+      }
     }
   });
 

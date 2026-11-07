@@ -15,7 +15,7 @@ import { PrismaCategoryRepository } from "./features/categories/categories.repos
 import { CategoryService } from "./features/categories/categories.service";
 import { PrismaBotStateRepository } from "./features/telegram/bot-state.repository";
 import { GroqBotBrain } from "./features/telegram/bot-brain";
-import { TelegramService } from "./features/telegram/telegram.service";
+import { TelegramService, type PartnerNoticeInput } from "./features/telegram/telegram.service";
 import { RecurringRepository } from "./features/recurring/recurring.repository";
 import { RecurringService, type RecurringNotifier } from "./features/recurring/recurring.service";
 import { PrismaSavingsRuleRepository } from "./features/savings/savings.repository";
@@ -74,6 +74,9 @@ export function buildApp(options: AppOptions = {}): FastifyInstance {
       chatId: env.TELEGRAM_OWNER_CHAT_ID!,
     });
   const householdService = new HouseholdService(householdMembers);
+  // shared-expense-split: the partner's notice needs the bot, which is built
+  // later in the composition root — same late-binding as the access notifier.
+  let partnerNotifier: ((input: PartnerNoticeInput) => Promise<void>) | null = null;
   const telegramService = new TelegramService({
     messageRepository,
     expenseService,
@@ -87,6 +90,10 @@ export function buildApp(options: AppOptions = {}): FastifyInstance {
     recurring: {
       createRule: (input) => recurringService.create(input),
       confirm: (confirmationId, amount) => recurringService.confirm(confirmationId, amount),
+    },
+    notifyPartner: async (input) => {
+      if (partnerNotifier === null) return;
+      await partnerNotifier(input);
     },
     logger: (message: string) => console.log(message),
     // Deterministic-only when no key: no brain is constructed and
@@ -166,6 +173,11 @@ export function buildApp(options: AppOptions = {}): FastifyInstance {
   app.decorate("recurringService", recurringService);
   app.decorate("bindRecurringNotifier", (notifier: RecurringNotifier) => {
     recurringNotifier.current = notifier;
+  });
+
+  // shared-expense-split: the partner's notice is delivered through the bot.
+  app.decorate("bindPartnerNotifier", (fn: (input: PartnerNoticeInput) => Promise<void>) => {
+    partnerNotifier = fn;
   });
 
   return app;

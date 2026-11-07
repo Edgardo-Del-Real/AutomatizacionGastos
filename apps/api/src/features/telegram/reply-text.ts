@@ -546,6 +546,20 @@ export function recurringFixedAmountSavedReply(amount: number): string {
   return `Listo, cargué el gasto fijo por ${formatARS(amount)}.`;
 }
 
+/**
+ * shared-expense-split: the OTHER person's notification. It is a new message on
+ * purpose — it lands in their chat and has to stay in the history.
+ */
+export function sharedAssignedReply(
+  senderName: string,
+  total: number,
+  partnerShare: number,
+  note: string | null,
+): string {
+  const notePart = note === null || note.trim() === "" ? "" : ` (${truncateNote(note)})`;
+  return `${senderName} cargó un gasto compartido de ${formatARS(total)}${notePart}.\nTe corresponde ${formatARS(partnerShare)}.`;
+}
+
 export function categoriesQueryReply(categories: { name: string; keywords: string[] }[]): string {
   if (categories.length === 0) {
     return "No tenés categorías todavía.";

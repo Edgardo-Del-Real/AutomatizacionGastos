@@ -151,6 +151,21 @@ export type TelegramServiceDeps = {
     }): Promise<unknown>;
     confirm(confirmationId: string, amount?: number): Promise<boolean>;
   };
+  /**
+   * shared-expense-split: notifies the partner in THEIR chat. It receives the
+   * facts, not a rendered string, so the composition root resolves the sender's
+   * name and the partner's chat. Optional: absent means the split is silent.
+   */
+  notifyPartner?: (input: PartnerNoticeInput) => Promise<void>;
+};
+
+/** Facts of a shared split, for the partner's notice. */
+export type PartnerNoticeInput = {
+  partnerId: string;
+  senderId: string;
+  total: number;
+  partnerShare: number;
+  note: string | null;
 };
 
 const IDLE = "idle";
@@ -2205,6 +2220,21 @@ export class TelegramService {
         });
         if (result === null) {
           return false;
+        }
+        // The other person learns about the assignment in their own chat. The
+        // notice never blocks the registration: if it fails, the split stands.
+        if (this.deps.notifyPartner !== undefined) {
+          try {
+            await this.deps.notifyPartner({
+              partnerId,
+              senderId: ownerId,
+              total: amount,
+              partnerShare: result.partner,
+              note,
+            });
+          } catch (error) {
+            this.deps.logger?.(`Telegram: partner notice failed: ${String(error)}`);
+          }
         }
         await this.safeReply(reply, successSharedReply(result.sender, amount, note, category));
         await this.sendMenu(reply);

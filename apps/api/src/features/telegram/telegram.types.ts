@@ -1,4 +1,4 @@
-import type { TelegramService } from "./telegram.service";
+import type { PartnerNoticeInput, TelegramService } from "./telegram.service";
 import type { RecurringService } from "../recurring/recurring.service";
 import type { RecurringNotifier } from "../recurring/recurring.service";
 
@@ -16,5 +16,7 @@ declare module "fastify" {
     recurringService: RecurringService;
     /** Late-bound after the bot exists (the notifier needs its API client). */
     bindRecurringNotifier: (notifier: RecurringNotifier) => void;
+    /** shared-expense-split: same, for the partner's notice. */
+    bindPartnerNotifier: (fn: (input: PartnerNoticeInput) => Promise<void>) => void;
   }
 }

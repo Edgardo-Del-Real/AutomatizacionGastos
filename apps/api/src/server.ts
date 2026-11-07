@@ -11,6 +11,7 @@ import { PrismaAccessRepository } from "./features/access/access.repository";
 import { AccessService, type Notifier } from "./features/access/access.service";
 import { RecurringScheduler } from "./features/recurring/recurring.scheduler";
 import { createRecurringNotifier } from "./features/telegram/recurring.notifier";
+import { sharedAssignedReply } from "./features/telegram/reply-text";
 import {
   createTelegramBot,
   redactToken,
@@ -92,6 +93,19 @@ const recurringScheduler = new RecurringScheduler(app.recurringService, (message
 );
 app.recurringService.setCreatedHook(() => recurringScheduler.reschedule());
 recurringScheduler.start();
+
+// shared-expense-split: the partner's chat comes from the User table, never
+// from a guess. A failed notice never undoes the split.
+app.bindPartnerNotifier(async (input) => {
+  const partner = await userRepository.findById(input.partnerId);
+  if (partner === null) return;
+  const senderName =
+    members.find((member) => member.ownerId === input.senderId)?.name ?? input.senderId;
+  await bot.api.sendMessage(
+    partner.chatId,
+    sharedAssignedReply(senderName, input.total, input.partnerShare, input.note),
+  );
+});
 
 registerGracefulStop(app, bot);
 

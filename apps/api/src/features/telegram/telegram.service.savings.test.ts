@@ -56,6 +56,7 @@ type Harness = {
   mockCreateExpense: ReturnType<typeof vi.fn>;
   mockCreateIncomeWithSavings: ReturnType<typeof vi.fn>;
   mockCreateSharedSplit: ReturnType<typeof vi.fn>;
+  notifyPartner: ReturnType<typeof vi.fn>;
   mockResolveSplit: ReturnType<typeof vi.fn>;
   mockEnsureAhorro: ReturnType<typeof vi.fn>;
   mockMatchNote: ReturnType<typeof vi.fn>;
@@ -148,6 +149,7 @@ function makeHarness(options?: { partner?: string | null }): Harness {
     partnerOf: vi.fn(() => options?.partner ?? null),
   } as unknown as HouseholdService;
 
+  const notifyPartner = vi.fn(async () => undefined);
   const service = new TelegramService({
     messageRepository,
     expenseService,
@@ -157,10 +159,12 @@ function makeHarness(options?: { partner?: string | null }): Harness {
     botStateRepository,
     household,
     logger: () => undefined,
+    notifyPartner,
   });
 
   return {
     service,
+    notifyPartner,
     mockCreateExpense: vi.mocked(expenseService.createExpense),
     mockCreateIncomeWithSavings: vi.mocked(expenseService.createIncomeWithSavings),
     mockCreateSharedSplit: vi.mocked(expenseService.createSharedExpenseSplit),
@@ -605,6 +609,14 @@ describe("TelegramService shared row and sp:* choices on the COMPARTIDO confirma
     expect(h.mockResolveSplit).not.toHaveBeenCalled();
     expect(h.replies.at(-2)).toBe(successSharedReply(1000, 2000, "super", "Cafe"));
     expect(h.replies.at(-1)).toBe(menuReply());
+    // The other person gets told, with THEIR share (the partner half).
+    expect(h.notifyPartner).toHaveBeenCalledWith({
+      partnerId: "partner",
+      senderId: ownerId,
+      total: 2000,
+      partnerShare: 1000,
+      note: "super",
+    });
   });
 
   it("savePreview passes a persisted sharedPercent through to registerCapture (5.4)", async () => {
